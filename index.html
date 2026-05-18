@@ -78,6 +78,26 @@
   .case-picker:focus{outline:2px solid var(--primary);outline-offset:-1px}
   details{margin:8px 0}
   details summary{cursor:pointer;font-weight:500;padding:4px 0;font-size:12px}
+
+  /* Phase 3 — Verdict UI */
+  .verdict-card{background:#fff;border:1px solid var(--hairline);border-radius:10px;padding:14px;margin:12px 0}
+  .verdict-pill{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.04em}
+  .verdict-VIOLATION{background:#fbe4e0;color:#a8332a;border:1px solid #f0c0b8}
+  .verdict-NOT_RECOMMEND{background:#fcecd6;color:#8a5a13;border:1px solid #ecd2a3}
+  .verdict-NOT_FOR_FEED{background:#fff5d6;color:#7a5b0a;border:1px solid #efddaa}
+  .verdict-APPROVE{background:#e6f3df;color:#3d6b2a;border:1px solid #c8e0bd}
+  .verdict-NO_CLAIM_FIRED{background:#ece8e1;color:#6c6a64;border:1px solid #d8d2c4}
+  .verdict-meta{margin-left:10px;font-size:11px;color:var(--muted);font-family:var(--sans)}
+  .hit-row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;padding:7px 0;border-top:1px solid var(--hairline);font-size:12px}
+  .hit-row:first-child{border-top:none}
+  .hit-id{font-family:var(--mono);font-weight:500;color:var(--ink);padding-top:1px}
+  .hit-evidence{display:flex;flex-wrap:wrap;gap:3px}
+  .ev-pill{display:inline-block;padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--surface-soft);color:var(--ink)}
+  .lift-pill{display:inline-block;padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--success);color:#fff}
+  .outcome-tag{font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:3px;background:var(--surface-cream-strong);color:var(--ink)}
+  .routing-pill{display:inline-block;padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:11px;background:var(--surface-soft);color:var(--muted);margin-right:4px}
+  .suppressed-row{padding:5px 0;font-size:11px;color:var(--muted);border-top:1px dashed var(--hairline)}
+  .suppressed-row:first-child{border-top:none}
 </style>
 </head>
 <body>
@@ -114,13 +134,157 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.2.0-phase2";
+const PLUGIN_VERSION = "atom-mvp v0.3.0-phase3";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
   R: "Realism",       E: "Explicitness", M: "Modifier",
   X: "Exception",
 };
+</script>
+
+<script>
+// =============================================================================
+// engine.js (inlined) — Deterministic atom-rule engine. Phase 3.
+// Pure logic. Contract per docs/engine-spec.md
+//   AtomEngine.evaluate(caseAtoms, claims, opts?) -> EngineResult
+// =============================================================================
+(function (root) {
+  "use strict";
+  var SEVERITY = { VIOLATION: 4, NOT_RECOMMEND: 3, NOT_FOR_FEED: 2, APPROVE: 1 };
+  var GATE_DIMS = ["C", "S", "P", "R", "E"];
+
+  function intersects(a, b) {
+    if (!a || !b || !a.length || !b.length) return false;
+    var s = new Set(a);
+    for (var i = 0; i < b.length; i++) if (s.has(b[i])) return true;
+    return false;
+  }
+  function subset(group, set) {
+    if (!group || !group.length) return false;
+    for (var i = 0; i < group.length; i++) if (set.indexOf(group[i]) < 0) return false;
+    return true;
+  }
+  function dnfMatches(dnf, set) {
+    if (!dnf || !dnf.length) return false;
+    for (var i = 0; i < dnf.length; i++) if (subset(dnf[i], set)) return true;
+    return false;
+  }
+  function allCaseAtoms(caseAtoms) {
+    var out = []; var dims = ["C","S","P","R","E","M","X"];
+    for (var i = 0; i < dims.length; i++) {
+      var arr = caseAtoms[dims[i]] || [];
+      for (var j = 0; j < arr.length; j++) out.push(arr[j]);
+    }
+    return out;
+  }
+
+  function gateHit(claim, caseAtoms) {
+    var g = claim.gates || {};
+    for (var i = 0; i < GATE_DIMS.length; i++) {
+      var d = GATE_DIMS[i];
+      var need = g[d] || [];
+      if (!need.length) continue;
+      if (!intersects(need, caseAtoms[d] || [])) return false;
+    }
+    if (claim.requires_exception_context) {
+      if (!intersects(claim.exceptions_required || [], caseAtoms.X || [])) return false;
+    }
+    return true;
+  }
+
+  function applyLifts(claim, caseAtoms) {
+    var M = caseAtoms.M || [];
+    var X = caseAtoms.X || [];
+
+    if (intersects(claim.modifiers_excluded || [], M)) {
+      return { suppress: true, reason: "modifier_excluded" };
+    }
+    var req = claim.modifiers_required || [];
+    if (req.length && !subset(req, M)) {
+      return { suppress: true, reason: "modifier_required_not_met" };
+    }
+    if (dnfMatches(claim.modifiers_lift_dnf || [], M)) {
+      return { suppress: false, outcome: "APPROVE", lift: "modifier" };
+    }
+    if (claim.exceptions_lift_to_approve && (claim.exceptions_required || []).length) {
+      var allCase = allCaseAtoms(caseAtoms);
+      var exReq = claim.exceptions_required;
+      for (var i = 0; i < exReq.length; i++) {
+        var x = exReq[i];
+        if (X.indexOf(x) < 0) continue;
+        var qGroups  = (claim.exception_qualifiers && claim.exception_qualifiers[x]) || [];
+        var qModGrps = (claim.exception_qualifier_modifiers && claim.exception_qualifier_modifiers[x]) || [];
+        var qOk  = !qGroups.length  || dnfMatches(qGroups,  allCase);
+        var qmOk = !qModGrps.length || dnfMatches(qModGrps, M);
+        if (qOk && qmOk) return { suppress: false, outcome: "APPROVE", lift: "exception:" + x };
+      }
+    }
+    return { suppress: false, outcome: claim.outcome, lift: null };
+  }
+
+  function specificity(claim) {
+    var g = claim.gates || {};
+    return ((g.C||[]).length) + ((g.S||[]).length) + ((g.P||[]).length);
+  }
+  function evidenceFor(claim, caseAtoms) {
+    var ev = {};
+    for (var i = 0; i < GATE_DIMS.length; i++) {
+      var d = GATE_DIMS[i];
+      var need = (claim.gates || {})[d] || [];
+      var got  = caseAtoms[d] || [];
+      var hit  = need.filter(function (a) { return got.indexOf(a) >= 0; });
+      if (hit.length) ev[d] = hit;
+    }
+    return ev;
+  }
+
+  function evaluate(caseAtoms, claims, opts) {
+    opts = opts || {};
+    var hits = []; var suppressed = [];
+    for (var i = 0; i < claims.length; i++) {
+      var c = claims[i];
+      if (opts.policy_title) {
+        var pt = c.policy_titles || [];
+        if (pt.length && pt.indexOf(opts.policy_title) < 0) continue;
+      }
+      if (!gateHit(c, caseAtoms)) continue;
+      var lift = applyLifts(c, caseAtoms);
+      var entry = {
+        claim_id: c.claim_id,
+        outcome_base: c.outcome,
+        outcome_after_lifts: lift.outcome || c.outcome,
+        lift: lift.lift || null,
+        specificity: specificity(c),
+        evidence: evidenceFor(c, caseAtoms),
+        routing: c.routing || { non_realistic_routes_to: null, cross_title_redirect: null },
+      };
+      if (lift.suppress) {
+        suppressed.push(Object.assign({}, entry, { suppress_reason: lift.reason }));
+        continue;
+      }
+      hits.push(entry);
+    }
+    hits.sort(function (a, b) {
+      var sa = SEVERITY[a.outcome_after_lifts] || 0;
+      var sb = SEVERITY[b.outcome_after_lifts] || 0;
+      if (sb !== sa) return sb - sa;
+      if (b.specificity !== a.specificity) return b.specificity - a.specificity;
+      return (a.claim_id || "").localeCompare(b.claim_id || "");
+    });
+    var top = hits[0] || null;
+    return {
+      verdict: top ? top.outcome_after_lifts : "NO_CLAIM_FIRED",
+      applied_claim_chain: top ? [top.claim_id] : [],
+      lifts_applied: top && top.lift ? [{ claim_id: top.claim_id, lift: top.lift }] : [],
+      gate_hits: hits,
+      suppressed: suppressed,
+      routing: top ? top.routing : { non_realistic_routes_to: null, cross_title_redirect: null },
+    };
+  }
+
+  root.AtomEngine = { evaluate: evaluate, gateHit: gateHit, applyLifts: applyLifts, SEVERITY: SEVERITY };
+})(window);
 </script>
 
 <script>
@@ -376,6 +540,90 @@ function StatCard(props) {
     e("div", { className: "l" }, props.label));
 }
 
+// ---- VerdictPane: live engine output ---------------------------------------
+function evidencePills(ev) {
+  var pills = [];
+  ["C","S","P","R","E"].forEach(function (d) {
+    if (!ev[d] || !ev[d].length) return;
+    ev[d].forEach(function (k) {
+      pills.push(e("span", { key: d + ":" + k, className: "ev-pill" }, k));
+    });
+  });
+  return pills;
+}
+
+function VerdictPane(props) {
+  const { result } = props;
+  if (!result) return null;
+  const { verdict, gate_hits, suppressed, routing, applied_claim_chain, lifts_applied } = result;
+  const top = gate_hits[0] || null;
+  const rest = gate_hits.slice(1, 5);
+  const hasRouting = routing && (routing.non_realistic_routes_to || routing.cross_title_redirect);
+
+  return e("div", { className: "verdict-card" },
+    e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }},
+      e("span", { className: "verdict-pill verdict-" + verdict }, verdict),
+      e("span", { className: "verdict-meta" },
+        gate_hits.length, " hit", gate_hits.length===1?"":"s", " · ",
+        suppressed.length, " suppressed",
+        applied_claim_chain.length ? " · top: " + applied_claim_chain[0] : ""
+      )
+    ),
+    hasRouting && e("div", { style: { marginTop: 8 }},
+      routing.non_realistic_routes_to && e("span", { className: "routing-pill" },
+        "→ non-realistic routes to: ", routing.non_realistic_routes_to),
+      routing.cross_title_redirect && e("span", { className: "routing-pill" },
+        "→ cross-title redirect: ", routing.cross_title_redirect)
+    ),
+    lifts_applied.length > 0 && e("div", { style: { marginTop: 8, fontSize: 11 }},
+      e("span", { className: "muted" }, "Lift applied on top claim: "),
+      lifts_applied.map(function (l) {
+        return e("span", { key: l.claim_id, className: "lift-pill" }, l.lift);
+      })
+    ),
+
+    gate_hits.length > 0 && e("details", { open: true, style: { marginTop: 12 }},
+      e("summary", null, "Gate hits (top 5 by severity)"),
+      e("div", null,
+        ...[top].concat(rest).map(function (h) {
+          return e("div", { key: h.claim_id, className: "hit-row" },
+            e("span", { className: "hit-id" }, h.claim_id),
+            e("div", { className: "hit-evidence" },
+              ...evidencePills(h.evidence),
+              h.lift && e("span", { className: "lift-pill", style: { marginLeft: 4 }}, "lift:" + h.lift)
+            ),
+            e("span", { className: "outcome-tag" },
+              h.outcome_after_lifts !== h.outcome_base
+                ? h.outcome_base + " → " + h.outcome_after_lifts
+                : h.outcome_after_lifts)
+          );
+        })
+      )
+    ),
+
+    suppressed.length > 0 && e("details", null,
+      e("summary", null, "Suppressed (" + suppressed.length + ") — gate-hit but blocked by modifier rules"),
+      e("div", null,
+        ...suppressed.slice(0, 10).map(function (s) {
+          return e("div", { key: s.claim_id, className: "suppressed-row" },
+            e("span", { className: "hit-id" }, s.claim_id),
+            " · would have been ",
+            e("span", { className: "outcome-tag" }, s.outcome_base),
+            " · suppressed: ", s.suppress_reason
+          );
+        }),
+        suppressed.length > 10 && e("div", { className: "muted", style: { fontSize: 11, marginTop: 4 }},
+          "… and ", suppressed.length - 10, " more")
+      )
+    ),
+
+    gate_hits.length === 0 && verdict === "NO_CLAIM_FIRED" &&
+      e("div", { className: "muted", style: { marginTop: 8, fontSize: 12 }},
+        "No active claim's gate fires for the current atom set. ",
+        "Add atoms across more dimensions to trigger gates.")
+  );
+}
+
 // ---- DimRow: chip multi-select for one dimension ---------------------------
 function DimRow(props) {
   const { dim, atoms, selected, onChange } = props;
@@ -455,6 +703,14 @@ function AtomTagger(props) {
   const setDim = (dim) => (next) => setTags(prev => Object.assign({}, prev, { [dim]: next }));
   const totalSelected = DIMENSIONS.reduce((s,d) => s + (tags[d]||[]).length, 0);
 
+  // Phase 3: live engine evaluation. Memoized on (tags, policy_title, claims).
+  const engineResult = React.useMemo(() => {
+    if (!pendingCase || totalSelected === 0) return null;
+    return window.AtomEngine.evaluate(tags, corpus.claims, {
+      policy_title: pendingCase.policy_title || undefined
+    });
+  }, [tags, pendingCase, corpus.claims, totalSelected]);
+
   return e("div", null,
     e("div", { className: "tag-card" },
       e("div", { className: "row" },
@@ -503,15 +759,18 @@ function AtomTagger(props) {
       }))
     ),
 
-    pendingCase && e("details", { open: true },
-      e("summary", null, "Tagged atoms (engine input preview)"),
+    pendingCase && engineResult && e(VerdictPane, { result: engineResult }),
+
+    pendingCase && e("details", { open: false },
+      e("summary", null, "Engine I/O JSON (debug)"),
       e("pre", null, JSON.stringify({
         candidate: {
           id: pendingCase.record_id,
           source_video_id: pendingCase.source_video_id,
           policy_title: pendingCase.policy_title,
           atoms: tags
-        }
+        },
+        engine_result: engineResult
       }, null, 2))
     ),
 
@@ -587,8 +846,8 @@ function App() {
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
     e("div", { className: "sub", style: { marginTop: 24 }},
-      "Phase 2 of 7 — Tagger lands. Next: Phase 3 = DeterministicEngine, ",
-      "consuming the JSON shown in the preview block above.")
+      "Phase 3 of 7 — DeterministicEngine wired live. Verdict updates on every tag change. ",
+      "Next: Phase 4 = hybrid retriever (BM25 + atom-overlap) over precedents.")
   );
 }
 
