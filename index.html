@@ -134,7 +134,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.3.0-phase3";
+const PLUGIN_VERSION = "atom-mvp v0.3.1-phase3";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -631,6 +631,7 @@ function DimRow(props) {
   const f = filter.trim().toLowerCase();
   const visible = !f ? atoms : atoms.filter(a =>
     (a.atom_key||"").toLowerCase().includes(f) ||
+    (a.serial_code||"").toLowerCase().includes(f) ||
     (a.atom_name||"").toLowerCase().includes(f) ||
     (a.description||"").toLowerCase().includes(f)
   );
@@ -657,18 +658,19 @@ function DimRow(props) {
       e("div", { className: "selected-strip" },
         ...Array.from(sel).map(k => {
           const a = atoms.find(x => x.atom_key === k);
+          const label = (a && a.serial_code) ? a.serial_code : k;
           return e("span", {
             key: k, className: "chip selected",
-            title: a ? (a.atom_name + " — " + (a.description||"").slice(0,200)) : k,
+            title: a ? (a.atom_key + " · " + a.atom_name + " — " + (a.description||"").slice(0,200)) : k,
             onClick: () => toggle(k)
-          }, k, " ✕");
+          }, label, " ✕");
         })
       ),
       // Filter input
       e("input", {
         className: "filter",
         value: filter,
-        placeholder: "filter " + DIM_NAMES[dim].toLowerCase() + " atoms (key / name / description)…",
+        placeholder: "filter " + DIM_NAMES[dim].toLowerCase() + " atoms (code / key / name / description)…",
         onChange: ev => setFilter(ev.target.value)
       }),
       // Available chips (excludes selected)
@@ -677,9 +679,9 @@ function DimRow(props) {
           e("span", {
             key: a.atom_key,
             className: "chip",
-            title: (a.atom_name||"") + (a.description ? " — " + a.description.slice(0,200) : ""),
+            title: a.atom_key + (a.atom_name ? " · " + a.atom_name : "") + (a.description ? " — " + a.description.slice(0,200) : ""),
             onClick: () => toggle(a.atom_key)
-          }, a.atom_key, " ", e("span", { className: "chip-name" }, a.atom_name||""))
+          }, (a.serial_code || a.atom_key), " ", e("span", { className: "chip-name" }, a.atom_name||""))
         ),
         visible.length === 0 && e("span", { className: "muted", style: { padding: 4, fontSize: 11 }},
           "no atoms match filter")
@@ -693,8 +695,43 @@ function AtomTagger(props) {
   const { corpus } = props;
   const [pendingRid, setPendingRid] = React.useState("");
   const [tags, setTags] = React.useState({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
+  const [caseFilter, setCaseFilter] = React.useState("");
+  const [titleFilter, setTitleFilter] = React.useState("");
+
+  // Distinct policy_titles for the filter <select>, sorted
+  const titleOptions = React.useMemo(() => {
+    const s = new Set();
+    for (const p of corpus.pending) {
+      if (p.policy_title) s.add(p.policy_title);
+    }
+    return Array.from(s).sort();
+  }, [corpus.pending]);
+
+  // Filtered pending list — text search across video_id / visual_summary / policy_title,
+  // plus optional policy_title equality narrowing.
+  const filteredPending = React.useMemo(() => {
+    const q = caseFilter.trim().toLowerCase();
+    return corpus.pending.filter(p => {
+      if (titleFilter && (p.policy_title || "") !== titleFilter) return false;
+      if (!q) return true;
+      return (
+        (p.source_video_id || "").toLowerCase().includes(q) ||
+        (p.visual_summary || "").toLowerCase().includes(q) ||
+        (p.caption_text   || "").toLowerCase().includes(q) ||
+        (p.policy_title   || "").toLowerCase().includes(q) ||
+        (p.issue          || "").toLowerCase().includes(q)
+      );
+    });
+  }, [corpus.pending, caseFilter, titleFilter]);
 
   const pendingCase = corpus.pending.find(p => p.record_id === pendingRid) || null;
+
+  // If the currently selected case is filtered out, clear the selection.
+  React.useEffect(() => {
+    if (pendingRid && !filteredPending.find(p => p.record_id === pendingRid)) {
+      setPendingRid("");
+    }
+  }, [filteredPending, pendingRid]);
 
   React.useEffect(() => {
     setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
@@ -713,14 +750,41 @@ function AtomTagger(props) {
 
   return e("div", null,
     e("div", { className: "tag-card" },
+      // Filter row: text search + policy_title narrowing
+      e("div", { className: "row", style: { gap: 8, flexWrap: "wrap" }},
+        e("label", { style: { color: "var(--muted)", fontSize: 12, minWidth: 90 }}, "Filter cases"),
+        e("input", {
+          className: "filter",
+          style: { flex: "1 1 220px", minWidth: 180 },
+          value: caseFilter,
+          placeholder: "search video_id / visual_summary / caption / title…",
+          onChange: ev => setCaseFilter(ev.target.value)
+        }),
+        e("select", {
+          className: "case-picker",
+          style: { flex: "0 1 180px", minWidth: 140 },
+          value: titleFilter,
+          onChange: ev => setTitleFilter(ev.target.value)
+        },
+          e("option", { value: "" }, "all titles (" + titleOptions.length + ")"),
+          ...titleOptions.map(t => e("option", { key: t, value: t }, t))
+        ),
+        (caseFilter || titleFilter) && e("button", {
+          className: "ghost",
+          onClick: () => { setCaseFilter(""); setTitleFilter(""); },
+          style: { fontSize: 11 }
+        }, "clear")
+      ),
       e("div", { className: "row" },
         e("label", { style: { color: "var(--muted)", fontSize: 12, minWidth: 90 }}, "Pending case"),
         e("select", {
           className: "case-picker", value: pendingRid,
           onChange: ev => setPendingRid(ev.target.value)
         },
-          e("option", { value: "" }, "— pick a pending case (" + corpus.pending.length + " available) —"),
-          ...corpus.pending.map(p => e("option", { key: p.record_id, value: p.record_id },
+          e("option", { value: "" },
+            "— pick a pending case (" + filteredPending.length +
+            " of " + corpus.pending.length + ") —"),
+          ...filteredPending.map(p => e("option", { key: p.record_id, value: p.record_id },
             (p.policy_title || "?") + " · " + p.source_video_id +
             (p.visual_summary ? " · " + p.visual_summary.slice(0, 60).replace(/\s+/g," ") : "")
           ))
