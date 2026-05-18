@@ -71,6 +71,8 @@
   .chip:hover{background:var(--surface-cream-strong)}
   .chip.selected{background:var(--primary);color:#fff;border-color:var(--primary)}
   .chip.selected:hover{background:var(--primary-active)}
+  .chip.suggested{background:#fff7d6;border-color:#e0c97a}
+  .chip.suggested:hover{background:#ffeeb3}
   .chip-name{font-family:var(--sans);font-size:10px;color:inherit;opacity:.85;font-weight:400}
   .selected-strip{padding:6px;background:#fff;border:1px solid var(--hairline);border-radius:5px;min-height:30px;display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
   .selected-strip:empty:before{content:"(none selected)";color:var(--muted);font-size:11px;font-style:italic}
@@ -93,6 +95,26 @@
   .hit-id{font-family:var(--mono);font-weight:500;color:var(--ink);padding-top:1px}
   .hit-evidence{display:flex;flex-wrap:wrap;gap:3px}
   .ev-pill{display:inline-block;padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--surface-soft);color:var(--ink)}
+  .prec-card{display:grid;grid-template-columns:200px 1fr;gap:12px;padding:10px 0;border-top:1px solid var(--hairline);font-size:12px}
+  .prec-card:first-child{border-top:none}
+  .prec-meta{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:11px}
+  .prec-rank{font-weight:700;font-size:13px;color:var(--ink)}
+  .prec-id{color:var(--muted);overflow-wrap:anywhere;font-size:10px}
+  .prec-pills{display:flex;flex-wrap:wrap;gap:3px;margin-top:2px}
+  .prec-decision{display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:600;color:#fff;background:#666}
+  .prec-decision.flag{background:#c00}
+  .prec-decision.allow,.prec-decision.approve{background:#1a8a1a}
+  .prec-decision.dnr,.prec-decision.not_recommend{background:#d97706}
+  .prec-decision.nff,.prec-decision.not_for_feed{background:#a16207}
+  .prec-scores{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;font-size:10px}
+  .prec-score{padding:1px 6px;border-radius:3px;background:var(--surface-soft);font-family:var(--mono)}
+  .prec-score.primary{background:var(--primary);color:#fff}
+  .prec-body{display:flex;flex-direction:column;gap:6px;min-width:0}
+  .prec-summary{font-size:11px;line-height:1.45;color:var(--ink);max-height:88px;overflow:auto;padding:6px 8px;background:var(--surface-soft);border-radius:4px}
+  .prec-rationale{font-size:10px;line-height:1.4;color:var(--muted);font-style:italic}
+  .prec-dim-grid{display:flex;gap:3px;flex-wrap:wrap;font-family:var(--mono);font-size:10px}
+  .prec-dim-cell{padding:1px 5px;border-radius:3px;background:#fff;border:1px solid var(--hairline);color:var(--muted)}
+  .prec-dim-cell.hit{background:#dcfce7;border-color:#86efac;color:#166534}
   .lift-pill{display:inline-block;padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--success);color:#fff}
   .outcome-tag{font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:3px;background:var(--surface-cream-strong);color:var(--ink)}
   .routing-pill{display:inline-block;padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:11px;background:var(--surface-soft);color:var(--muted);margin-right:4px}
@@ -134,7 +156,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.4.0-phase4";
+const PLUGIN_VERSION = "atom-mvp v0.4.2-phase4";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -400,7 +422,7 @@ const DIM_NAMES = {
         issue: c.issue, decision: c.decision,
         visual_summary: c.visual_summary, asr_text: c.asr_text,
         ocr_text: c.ocr_text, caption_text: c.caption_text,
-        rationale: c.rationale, atoms: c.atoms,
+        rationale: c.rationale, atoms: c.atoms, images: c.images,
         _bm25: bm, _atom: aj.score, _atom_per_dim: aj.per_dim
       };
     });
@@ -458,6 +480,22 @@ function cellLinkRecordIds(v) {
     if (v.recordId) return [v.recordId];
   }
   return [];
+}
+// Bitable attachment field shape: array of { token, name, type, size, url?, tmp_url? }
+// Returns array of { token, name, type, size, url? } for image-typed entries.
+function cellAttachments(v) {
+  if (!v) return [];
+  if (!Array.isArray(v)) v = [v];
+  return v.map(function (a) {
+    if (!a || typeof a !== "object") return null;
+    return {
+      token: a.token || a.file_token || a.attachmentToken || "",
+      name:  a.name || "",
+      type:  a.type || a.mime_type || "",
+      size:  a.size || 0,
+      url:   a.url || a.tmp_url || ""
+    };
+  }).filter(function (a) { return a && a.token; });
 }
 
 // =============================================================================
@@ -620,6 +658,18 @@ async function loadAtomCorpus() {
     return !inactive.has(s);
   });
 
+  // Helper: read attachments from any of the candidate field names. First non-empty wins.
+  const IMAGE_FIELD_CANDIDATES = ["image","images","screenshots","attachments","cover","thumbnail","frames","frame_grid","frame_grids","preview","video_frames","video_thumbnails","keyframes"];
+  function getImages(f, idx) {
+    for (const nm of IMAGE_FIELD_CANDIDATES) {
+      const v = readCell(f, idx, nm);
+      if (v == null) continue;
+      const arr = cellAttachments(v);
+      if (arr.length) return arr;
+    }
+    return [];
+  }
+
   const cases = caseRecs.map(r => {
     const f = r.fields || {};
     return {
@@ -634,6 +684,7 @@ async function loadAtomCorpus() {
       ocr_text: get(f, casesIdx, "ocr_text"),
       caption_text: get(f, casesIdx, "caption_text"),
       rationale: get(f, casesIdx, "rationale"),
+      images: getImages(f, casesIdx),
       atoms: {
         C: ridsToKeys(getLnk(f, casesIdx, "content_atoms")),
         S: ridsToKeys(getLnk(f, casesIdx, "subject_atoms")),
@@ -657,6 +708,8 @@ async function loadAtomCorpus() {
       asr_text: get(f, pendingIdx, "asr_text"),
       ocr_text: get(f, pendingIdx, "ocr_text"),
       caption_text: get(f, pendingIdx, "caption_text"),
+      images: getImages(f, pendingIdx),
+      pending_table_id: pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null,
       atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
     };
   }).filter(p => p.source_video_id);
@@ -670,7 +723,34 @@ async function loadAtomCorpus() {
     atomsByDim[d].sort((a,b) => (a.atom_key||"").localeCompare(b.atom_key||""));
   }
 
-  return { atoms, atomsByDim, claims, cases, pending };
+  // Resolve attachment field ids (Bitable getAttachmentUrl needs fieldId+tableId+recordId+token).
+  function findFieldIdInIdx(idx, names) {
+    if (!idx || !idx.byName) return null;
+    for (const nm of names) {
+      if (idx.byName[nm]) return idx.byName[nm];
+    }
+    // Case-insensitive fallback
+    const lower = {};
+    for (const k of Object.keys(idx.byName)) lower[k.toLowerCase()] = idx.byName[k];
+    for (const nm of names) {
+      if (lower[nm.toLowerCase()]) return lower[nm.toLowerCase()];
+    }
+    return null;
+  }
+  const caseImgFieldId    = findFieldIdInIdx(casesIdx,   IMAGE_FIELD_CANDIDATES);
+  const pendingImgFieldId = findFieldIdInIdx(pendingIdx, IMAGE_FIELD_CANDIDATES);
+  const caseTableId    = casesTbl   ? (casesTbl.id   || casesTbl.tableId   || null) : null;
+  const pendingTableId = pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null;
+
+  return {
+    atoms, atomsByDim, claims, cases, pending,
+    image_meta: {
+      case_field_id:    caseImgFieldId,
+      pending_field_id: pendingImgFieldId,
+      case_table_id:    caseTableId,
+      pending_table_id: pendingTableId
+    }
+  };
 }
 
 window.__loadAtomCorpus = loadAtomCorpus;
@@ -774,7 +854,7 @@ function VerdictPane(props) {
 
 // ---- PrecedentsPane: hybrid retriever output --------------------------------
 function PrecedentsPane(props) {
-  const { result } = props;
+  const { result, imageMeta } = props;
   if (!result) return null;
   const { results, pool_size, total_scored, mix } = result;
 
@@ -785,65 +865,173 @@ function PrecedentsPane(props) {
         "No precedents in scope. Pool size: " + (pool_size || 0) + "."));
   }
 
-  const decisionPill = (d) => e("span", {
-    className: "outcome-tag",
-    style: { background: "#222", color: "#fff", padding: "1px 6px", borderRadius: 4, fontSize: 10 }
-  }, d || "—");
-
-  const fmt = (n) => (n == null ? "—" : (Math.round(n * 1000) / 1000).toFixed(3));
+  const fmt = (n) => (n == null ? "—" : (Math.round(n * 1000) / 1000).toFixed(2));
+  const decisionClass = (d) => {
+    const x = String(d || "").toLowerCase();
+    if (!x) return "";
+    if (x.indexOf("flag") >= 0 || x.indexOf("violat") >= 0) return "flag";
+    if (x.indexOf("allow") >= 0 || x.indexOf("approve") >= 0) return "allow";
+    if (x.indexOf("not_recommend") >= 0 || x.indexOf("dnr") >= 0) return "dnr";
+    if (x.indexOf("not_for_feed") >= 0 || x.indexOf("nff") >= 0) return "nff";
+    return "";
+  };
 
   return e("div", { className: "tag-card" },
-    e("div", { className: "row", style: { justifyContent: "space-between" }},
+    e("div", { className: "row", style: { justifyContent: "space-between", marginBottom: 4 }},
       e("strong", { style: { fontSize: 13 }}, "Top precedents (" + results.length + ")"),
       e("span", { className: "muted", style: { fontSize: 11 }},
         "pool=" + pool_size + " · scored=" + total_scored +
         " · mix " + Math.round(mix.text*100) + "/" + Math.round(mix.atom*100) + " (text/atom)")
     ),
     e("div", null,
-      ...results.map((r, i) => e("div", {
-        key: r.record_id || i,
-        className: "hit-row",
-        style: { padding: "8px 4px", borderBottom: "1px dashed var(--hairline)" }
-      },
-        e("div", { style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }},
-          e("span", { className: "hit-id", style: { fontWeight: 600 }},
-            "#" + (i+1) + " · " + (r.case_id || r.source_video_id || r.record_id || "—")),
-          decisionPill(r.decision),
-          r.policy_title && e("span", { className: "ev-pill" }, r.policy_title),
-          r.issue && e("span", { className: "ev-pill" }, r.issue)
+      ...results.map((r, i) => e("div", { key: r.record_id || i, className: "prec-card" },
+        // ── Left column: meta + scores ─────────────────────────────────
+        e("div", { className: "prec-meta" },
+          e("div", { className: "prec-rank" }, "#" + (i+1)),
+          e("div", { className: "prec-id" },
+            r.case_id || r.source_video_id || r.record_id || "—"),
+          e("div", { className: "prec-pills" },
+            r.decision && e("span", { className: "prec-decision " + decisionClass(r.decision) },
+              r.decision),
+            r.policy_title && e("span", { className: "ev-pill" }, r.policy_title),
+            r.issue && r.issue !== r.policy_title && e("span", { className: "ev-pill" }, r.issue)
+          ),
+          e("div", { className: "prec-scores" },
+            e("span", { className: "prec-score primary" }, "score " + fmt(r.score)),
+            e("span", { className: "prec-score" }, "txt " + fmt(r.bm25_norm)),
+            e("span", { className: "prec-score" }, "atm " + fmt(r._atom))
+          ),
+          r._atom_per_dim && e("div", { className: "prec-dim-grid", style: { marginTop: 4 }},
+            ...["C","S","P","R","E","M","X"].map(d => {
+              const v = r._atom_per_dim[d];
+              const isHit = v != null && v > 0;
+              return e("span", {
+                key: d,
+                className: "prec-dim-cell" + (isHit ? " hit" : ""),
+                title: "atom Jaccard for dim " + d + ": " + (v == null ? "—" : v.toFixed(2))
+              }, d + ":" + (v == null ? "—" : fmt(v)));
+            }))
         ),
-        e("div", { className: "muted", style: { fontSize: 11, marginBottom: 4 }},
-          "score=" + fmt(r.score) +
-          " · text=" + fmt(r.bm25_norm) +
-          " · atom=" + fmt(r._atom) +
-          (r._atom_per_dim ? " · dim[" +
-            ["C","S","P","R","E","M","X"]
-              .map(d => d + ":" + (r._atom_per_dim[d] == null ? "—" : fmt(r._atom_per_dim[d])))
-              .join(" ") + "]" : "")
-        ),
-        r.visual_summary && e("div", { className: "text-block",
-          style: { fontSize: 11, maxHeight: 60, overflow: "hidden", textOverflow: "ellipsis" }},
-          r.visual_summary.slice(0, 280) + (r.visual_summary.length > 280 ? "…" : "")),
-        r.rationale && e("div", { className: "muted",
-          style: { fontSize: 10, fontStyle: "italic", marginTop: 2 }},
-          "rationale: " + r.rationale.slice(0, 180) + (r.rationale.length > 180 ? "…" : ""))
+        // ── Right column: body (images + summary + rationale) ──────────
+        e("div", { className: "prec-body" },
+          r.images && r.images.length > 0 && e(ImagesPane, {
+            images: r.images,
+            recordId: r.record_id,
+            fieldId: imageMeta && imageMeta.case_field_id,
+            tableId: imageMeta && imageMeta.case_table_id,
+            label: "precedent images"
+          }),
+          r.visual_summary && e("div", { className: "prec-summary" },
+            r.visual_summary.length > 360
+              ? r.visual_summary.slice(0, 360) + "…"
+              : r.visual_summary),
+          r.rationale && e("div", { className: "prec-rationale" },
+            "rationale: " + (r.rationale.length > 240 ? r.rationale.slice(0, 240) + "…" : r.rationale))
+        )
       ))
     )
   );
 }
 
-// ---- DimRow: chip multi-select for one dimension ---------------------------
-function DimRow(props) {
-  const { dim, atoms, selected, onChange } = props;
-  const [filter, setFilter] = React.useState("");
-  const f = filter.trim().toLowerCase();
-  const visible = !f ? atoms : atoms.filter(a =>
-    (a.atom_key||"").toLowerCase().includes(f) ||
-    (a.serial_code||"").toLowerCase().includes(f) ||
-    (a.atom_name||"").toLowerCase().includes(f) ||
-    (a.description||"").toLowerCase().includes(f)
+// ---- ImagesPane: display attachments for a case -----------------------------
+// Bitable attachment urls embedded in field values are short-lived; for reliable
+// display we re-resolve via base.getAttachmentUrl(token, recordId, fieldId, tableId).
+// Falls back to the embedded url if available.
+function ImagesPane(props) {
+  const { images, recordId, fieldId, tableId, label } = props;
+  const [resolved, setResolved] = React.useState({}); // token -> url
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setError("");
+    setResolved({});
+    if (!images || !images.length) return;
+    (async () => {
+      const out = {};
+      for (const img of images) {
+        // Prefer fresh signed URL when we have all coords.
+        if (window.bitable && window.bitable.base && fieldId && tableId && recordId && img.token) {
+          try {
+            const u = await window.bitable.base.getAttachmentUrl(img.token, recordId, fieldId, tableId);
+            if (u) { out[img.token] = u; continue; }
+          } catch (e) {
+            // fall through to embedded url
+          }
+        }
+        if (img.url) out[img.token] = img.url;
+      }
+      if (!cancelled) setResolved(out);
+    })().catch(e => { if (!cancelled) setError(String(e && e.message || e)); });
+    return () => { cancelled = true; };
+  }, [images, recordId, fieldId, tableId]);
+
+  if (!images || !images.length) {
+    return e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
+      (label || "Images") + ": none attached on this record.");
+  }
+
+  return e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, padding: "4px 0" }},
+    ...images.map((img, i) => {
+      const url = resolved[img.token];
+      const isImg = !img.type || /^image\//i.test(img.type) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(img.name || "");
+      return e("div", {
+        key: img.token + "_" + i,
+        style: { width: 140, border: "1px solid var(--hairline)", borderRadius: 4, overflow: "hidden", background: "#0001" }
+      },
+        url && isImg
+          ? e("a", { href: url, target: "_blank", rel: "noreferrer" },
+              e("img", {
+                src: url,
+                alt: img.name || ("attachment " + (i+1)),
+                style: { width: "100%", height: 100, objectFit: "cover", display: "block" }
+              }))
+          : url
+            ? e("a", { href: url, target: "_blank", rel: "noreferrer",
+                style: { display: "block", padding: 6, fontSize: 10, textDecoration: "none" }},
+                "📎 " + (img.name || "attachment"))
+            : e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "loading…"),
+        e("div", { style: { padding: "2px 4px", fontSize: 9, color: "var(--muted)",
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }},
+          img.name || ("attachment " + (i+1)))
+      );
+    }),
+    error && e("div", { className: "muted", style: { fontSize: 10, color: "#c00" }}, "image error: " + error)
   );
+}
+
+// ---- DimRow: chip multi-select for one dimension ---------------------------
+// Suggestion-first UX:
+//   - Default view shows only `suggested` atoms (from top-5 precedents) + selected.
+//   - User can toggle "show all" or start typing to search the full atom set.
+//   - Chip label = serial_code only (atom_key + atom_name in tooltip).
+function DimRow(props) {
+  const { dim, atoms, selected, onChange, suggested } = props;
+  const [filter, setFilter] = React.useState("");
+  const [showAll, setShowAll] = React.useState(false);
+  const f = filter.trim().toLowerCase();
   const sel = new Set(selected || []);
+  const sugSet = new Set(suggested || []);
+  const hasSuggestions = sugSet.size > 0;
+
+  // Decide candidate pool:
+  // 1. If filter text typed -> search ALL atoms
+  // 2. Else if "show all" toggled or no suggestions -> show all
+  // 3. Else -> show suggestions only
+  let pool;
+  if (f) {
+    pool = atoms.filter(a =>
+      (a.atom_key||"").toLowerCase().includes(f) ||
+      (a.serial_code||"").toLowerCase().includes(f) ||
+      (a.atom_name||"").toLowerCase().includes(f) ||
+      (a.description||"").toLowerCase().includes(f)
+    );
+  } else if (showAll || !hasSuggestions) {
+    pool = atoms;
+  } else {
+    pool = atoms.filter(a => sugSet.has(a.atom_key));
+  }
+
   const toggle = (k) => {
     const next = new Set(sel);
     if (next.has(k)) next.delete(k); else next.add(k);
@@ -851,18 +1039,29 @@ function DimRow(props) {
   };
   const clear = () => onChange([]);
 
+  const modeLabel = f
+    ? "filter: " + pool.length + " match"
+    : (showAll || !hasSuggestions)
+      ? "all " + atoms.length + " atoms"
+      : "suggested " + pool.length + "/" + atoms.length;
+
   return e("div", { className: "dim-row dim-" + dim },
     e("div", { className: "dim-label" }, dim),
     e("div", { className: "dim-body" },
       e("div", { className: "dim-head" },
         e("span", { className: "dim-name" },
-          DIM_NAMES[dim], e("span", { className: "muted" }, " · " + atoms.length + " atoms")),
+          DIM_NAMES[dim], e("span", { className: "muted" }, " · " + modeLabel)),
         e("span", { className: "dim-count" },
           (sel.size ? sel.size : "0") + " selected ",
           sel.size > 0 && e("button", { className: "ghost", onClick: clear,
-            style: { padding: "2px 6px", fontSize: 10, marginLeft: 4 }}, "clear"))
+            style: { padding: "2px 6px", fontSize: 10, marginLeft: 4 }}, "clear"),
+          hasSuggestions && !f && e("button", {
+            className: "ghost",
+            onClick: () => setShowAll(!showAll),
+            style: { padding: "2px 6px", fontSize: 10, marginLeft: 4 }
+          }, showAll ? "show suggestions" : "show all"))
       ),
-      // Selected chips first
+      // Selected chips first (always visible regardless of suggestion filter)
       e("div", { className: "selected-strip" },
         ...Array.from(sel).map(k => {
           const a = atoms.find(x => x.atom_key === k);
@@ -874,25 +1073,28 @@ function DimRow(props) {
           }, label, " ✕");
         })
       ),
-      // Filter input
+      // Search input (typing here always searches the full set)
       e("input", {
         className: "filter",
         value: filter,
-        placeholder: "filter " + DIM_NAMES[dim].toLowerCase() + " atoms (code / key / name / description)…",
+        placeholder: "search all " + DIM_NAMES[dim].toLowerCase() + " atoms…",
         onChange: ev => setFilter(ev.target.value)
       }),
-      // Available chips (excludes selected)
+      // Available chips (excludes selected). Suggested atoms get a subtle highlight.
       e("div", { className: "chips" },
-        ...visible.filter(a => !sel.has(a.atom_key)).map(a =>
-          e("span", {
+        ...pool.filter(a => !sel.has(a.atom_key)).map(a => {
+          const isSug = sugSet.has(a.atom_key);
+          return e("span", {
             key: a.atom_key,
-            className: "chip",
+            className: "chip" + (isSug ? " suggested" : ""),
             title: a.atom_key + (a.atom_name ? " · " + a.atom_name : "") + (a.description ? " — " + a.description.slice(0,200) : ""),
             onClick: () => toggle(a.atom_key)
-          }, (a.serial_code || a.atom_key), " ", e("span", { className: "chip-name" }, a.atom_name||""))
-        ),
-        visible.length === 0 && e("span", { className: "muted", style: { padding: 4, fontSize: 11 }},
-          "no atoms match filter")
+          }, (a.serial_code || a.atom_key));
+        }),
+        pool.length === 0 && e("span", { className: "muted", style: { padding: 4, fontSize: 11 }},
+          f ? "no atoms match search"
+            : (hasSuggestions ? "no suggestions for this dim — type to search or click 'show all'"
+                              : "no atoms in this dim"))
       )
     )
   );
@@ -982,6 +1184,24 @@ function AtomTagger(props) {
     return window.AtomRetriever.retrieve(candidate, corpus.cases, { topK: 5 });
   }, [tags, pendingCase, corpus.cases]);
 
+  // Suggested atoms per dim = union of atoms from top-5 precedents.
+  // Drives DimRow's default candidate pool. Re-computes with the precedent set.
+  const suggestedByDim = React.useMemo(() => {
+    const out = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+    const seen = { C:new Set(), S:new Set(), P:new Set(), R:new Set(), E:new Set(), M:new Set(), X:new Set() };
+    if (!precedentsResult || !precedentsResult.results) return out;
+    for (const p of precedentsResult.results) {
+      const pa = p.atoms || {};
+      for (const d of DIMENSIONS) {
+        const arr = pa[d] || [];
+        for (const k of arr) {
+          if (!seen[d].has(k)) { seen[d].add(k); out[d].push(k); }
+        }
+      }
+    }
+    return out;
+  }, [precedentsResult]);
+
   return e("div", null,
     e("div", { className: "tag-card" },
       // Filter row: text search + policy_title narrowing
@@ -1036,6 +1256,16 @@ function AtomTagger(props) {
       pendingCase && e("dl", { className: "case-meta" },
         e("dt", null, "video_id"),       e("dd", null, pendingCase.source_video_id || "—"),
         e("dt", null, "issue / title"),  e("dd", null, (pendingCase.issue || "—") + " · " + (pendingCase.policy_title || "—")),
+        pendingCase.images && pendingCase.images.length > 0 && e("dt", null, "images"),
+        pendingCase.images && pendingCase.images.length > 0 && e("dd", null,
+          e(ImagesPane, {
+            images: pendingCase.images,
+            recordId: pendingCase.record_id,
+            fieldId: corpus.image_meta && corpus.image_meta.pending_field_id,
+            tableId: corpus.image_meta && corpus.image_meta.pending_table_id,
+            label: "Pending images"
+          })
+        ),
         pendingCase.visual_summary && e("dt", null, "visual_summary"),
         pendingCase.visual_summary && e("dd", null, e("div", { className: "text-block" }, pendingCase.visual_summary)),
         pendingCase.caption_text && e("dt", null, "caption"),
@@ -1062,13 +1292,17 @@ function AtomTagger(props) {
         dim: d,
         atoms: corpus.atomsByDim[d] || [],
         selected: tags[d] || [],
+        suggested: (suggestedByDim && suggestedByDim[d]) || [],
         onChange: setDim(d),
       }))
     ),
 
     pendingCase && engineResult && e(VerdictPane, { result: engineResult }),
 
-    pendingCase && precedentsResult && e(PrecedentsPane, { result: precedentsResult }),
+    pendingCase && precedentsResult && e(PrecedentsPane, {
+      result: precedentsResult,
+      imageMeta: corpus.image_meta
+    }),
 
     pendingCase && e("details", { open: false },
       e("summary", null, "Engine I/O JSON (debug)"),
