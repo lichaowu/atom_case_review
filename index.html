@@ -134,7 +134,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.3.1-phase3";
+const PLUGIN_VERSION = "atom-mvp v0.3.3-phase3";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -697,6 +697,7 @@ function AtomTagger(props) {
   const [tags, setTags] = React.useState({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
   const [caseFilter, setCaseFilter] = React.useState("");
   const [titleFilter, setTitleFilter] = React.useState("");
+  const [issueFilter, setIssueFilter] = React.useState("");
 
   // Distinct policy_titles for the filter <select>, sorted
   const titleOptions = React.useMemo(() => {
@@ -707,12 +708,22 @@ function AtomTagger(props) {
     return Array.from(s).sort();
   }, [corpus.pending]);
 
+  // Distinct issues for the filter <select>, sorted
+  const issueOptions = React.useMemo(() => {
+    const s = new Set();
+    for (const p of corpus.pending) {
+      if (p.issue) s.add(p.issue);
+    }
+    return Array.from(s).sort();
+  }, [corpus.pending]);
+
   // Filtered pending list — text search across video_id / visual_summary / policy_title,
-  // plus optional policy_title equality narrowing.
+  // plus optional policy_title and issue equality narrowing.
   const filteredPending = React.useMemo(() => {
     const q = caseFilter.trim().toLowerCase();
     return corpus.pending.filter(p => {
       if (titleFilter && (p.policy_title || "") !== titleFilter) return false;
+      if (issueFilter && (p.issue || "") !== issueFilter) return false;
       if (!q) return true;
       return (
         (p.source_video_id || "").toLowerCase().includes(q) ||
@@ -722,7 +733,7 @@ function AtomTagger(props) {
         (p.issue          || "").toLowerCase().includes(q)
       );
     });
-  }, [corpus.pending, caseFilter, titleFilter]);
+  }, [corpus.pending, caseFilter, titleFilter, issueFilter]);
 
   const pendingCase = corpus.pending.find(p => p.record_id === pendingRid) || null;
 
@@ -769,9 +780,18 @@ function AtomTagger(props) {
           e("option", { value: "" }, "all titles (" + titleOptions.length + ")"),
           ...titleOptions.map(t => e("option", { key: t, value: t }, t))
         ),
-        (caseFilter || titleFilter) && e("button", {
+        e("select", {
+          className: "case-picker",
+          style: { flex: "0 1 180px", minWidth: 140 },
+          value: issueFilter,
+          onChange: ev => setIssueFilter(ev.target.value)
+        },
+          e("option", { value: "" }, "all issues (" + issueOptions.length + ")"),
+          ...issueOptions.map(t => e("option", { key: t, value: t }, t))
+        ),
+        (caseFilter || titleFilter || issueFilter) && e("button", {
           className: "ghost",
-          onClick: () => { setCaseFilter(""); setTitleFilter(""); },
+          onClick: () => { setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); },
           style: { fontSize: 11 }
         }, "clear")
       ),
@@ -836,6 +856,43 @@ function AtomTagger(props) {
         },
         engine_result: engineResult
       }, null, 2))
+    ),
+
+    pendingCase && e("details", { open: false },
+      e("summary", null, "Claim gate diagnostics (why didn't a claim fire?)"),
+      e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
+        "Per-claim per-dim hit/miss against current selection. Useful when verdict is NO_CLAIM_FIRED."),
+      e("pre", null, (function(){
+        const out = corpus.claims.map(c => {
+          const dimReport = {};
+          let any = false;
+          ["C","S","P","R","E"].forEach(d => {
+            const need = (c.gates && c.gates[d]) || [];
+            const got  = tags[d] || [];
+            if (!need.length) { dimReport[d] = "wildcard"; return; }
+            const hit = need.filter(k => got.indexOf(k) >= 0);
+            const miss = need.filter(k => got.indexOf(k) < 0);
+            dimReport[d] = (hit.length ? "HIT[" + hit.join(",") + "]" : "MISS")
+                         + (miss.length ? " need=[" + miss.join(",") + "]" : "");
+            if (!hit.length) any = true;
+          });
+          return {
+            claim_id: c.claim_id,
+            policy_titles: c.policy_titles,
+            outcome: c.outcome,
+            gate_status: any ? "BLOCKED" : "WOULD_FIRE",
+            dims: dimReport
+          };
+        });
+        // Sort: WOULD_FIRE first, then partial hits, then full miss
+        out.sort((a,b) => (a.gate_status === "WOULD_FIRE" ? -1 : 1));
+        return JSON.stringify(out.slice(0, 25), null, 2);
+      })())
+    ),
+
+    pendingCase && e("details", { open: false },
+      e("summary", null, "Selected atom_keys (raw, what the engine sees)"),
+      e("pre", null, JSON.stringify(tags, null, 2))
     ),
 
     !pendingCase && e("div", { className: "muted", style: { padding: 20, textAlign: "center" }},
