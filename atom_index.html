@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Atom Console — case_review_atom_mvp</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+  :root {
+    --primary:#cc785c; --primary-active:#a9583e; --hairline:#e6dfd8;
+    --ink:#141413; --body:#3d3d3a; --muted:#6c6a64;
+    --canvas:#faf9f5; --surface-soft:#f5f0e8; --surface-card:#efe9de;
+    --success:#5db872; --warning:#d4a017; --error:#c64545;
+    --serif:"Cormorant Garamond",Garamond,serif;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--canvas);color:var(--body);font-family:var(--sans);font-size:13px;line-height:1.4}
+  .shell{max-width:780px;margin:0 auto;padding:18px}
+  h1{font-family:var(--serif);font-weight:500;font-size:22px;color:var(--ink);margin:0 0 6px}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:18px}
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+  .stat{background:var(--surface-card);border:1px solid var(--hairline);border-radius:8px;padding:12px}
+  .stat .n{font-family:var(--serif);font-size:26px;color:var(--ink);font-weight:500}
+  .stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px}
+  .row{display:flex;gap:8px;margin:14px 0}
+  button{font-family:var(--sans);font-size:12px;padding:7px 12px;border-radius:6px;border:1px solid var(--hairline);background:#fff;color:var(--ink);cursor:pointer}
+  button.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+  button.primary:hover{background:var(--primary-active);border-color:var(--primary-active)}
+  pre{background:#1f1d1a;color:#e8e0d2;font-family:var(--mono);font-size:11px;padding:10px;border-radius:6px;overflow:auto;max-height:280px}
+  .muted{color:var(--muted)}
+  .err{background:#fff3f0;border:1px solid #f0c0b8;color:var(--error);padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
+  .ok{background:#f0f7ed;border:1px solid #c8e0bd;color:#3d6b2a;padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
+  .pill{display:inline-block;padding:1px 6px;border-radius:3px;background:var(--surface-soft);font-size:10px;color:var(--muted);font-family:var(--mono);margin-right:4px}
+  details{margin:8px 0}
+  details summary{cursor:pointer;font-weight:500;padding:4px 0}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="module">
+  // Load the official @lark-base-open/js-sdk via public CDN.
+  const URLS = [
+    "https://cdn.jsdelivr.net/npm/@lark-base-open/js-sdk@1.0.2/dist/index.min.mjs",
+    "https://unpkg.com/@lark-base-open/js-sdk@1.0.2/dist/index.min.mjs",
+  ];
+  let mod = null, lastErr = null;
+  for (const u of URLS) {
+    try { mod = await import(u); break; } catch (e) { lastErr = e; }
+  }
+  if (!mod) {
+    window.__bitableSdkError = String(lastErr && lastErr.message || lastErr || "unknown");
+    console.error("[AtomConsole] SDK load failed:", lastErr);
+  } else {
+    const candidate = mod.bitable || mod.default || mod;
+    window.bitable = candidate;
+    window.__sdkModule = mod;
+    console.log("[AtomConsole] SDK module keys:", Object.keys(mod));
+  }
+  window.dispatchEvent(new Event("bitable-sdk-ready"));
+</script>
+
+<script>
+// =============================================================================
+// CONFIG — atom-only. Legacy V0.3 Rule Book is intentionally NOT loaded.
+// =============================================================================
+window.ATOM_CONSOLE_CONFIG = {
+  atomsTableNames:   ["ATLAS Atoms", "Atoms"],
+  claimsTableNames:  ["ATLAS Atom Rules", "Atom Rules"],
+  casesTableNames:   ["Case Notes", "Cases", "case_notes"],
+  pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
+  issue: "NSA",
+};
+const PLUGIN_VERSION = "atom-mvp v0.1.0-phase1";
+</script>
+
+<script>
+// =============================================================================
+// CELL UTILS
+// =============================================================================
+function cellText(v) {
+  if (v == null) return "";
+  if (typeof v === "string" || typeof v === "number") return String(v);
+  if (Array.isArray(v)) return v.map(cellText).join(" ");
+  if (typeof v === "object") {
+    if (v.text != null) return String(v.text);
+    if (v.name != null) return String(v.name);
+    if (v.value != null) return cellText(v.value);
+  }
+  return "";
+}
+function cellArr(v) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.map(x => (typeof x === "string" ? x : (x.text || x.name || ""))).filter(Boolean);
+  return [cellText(v)].filter(Boolean);
+}
+// DuplexLink fields read as { recordIds: [...], tableId, type } in the Bitable SDK.
+function cellLinkRecordIds(v) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.map(x => (typeof x === "string" ? x : (x.recordId || x.record_id || ""))).filter(Boolean);
+  if (typeof v === "object") {
+    if (Array.isArray(v.recordIds)) return v.recordIds;
+    if (Array.isArray(v.record_ids)) return v.record_ids;
+    if (v.recordId) return [v.recordId];
+  }
+  return [];
+}
+
+// =============================================================================
+// TABLE DISCOVERY
+// =============================================================================
+const CFG = window.ATOM_CONSOLE_CONFIG;
+
+async function findTableByNames(base, candidates) {
+  const list = await base.getTableList();
+  const named = await Promise.all(list.map(async t => ({ t, name: await t.getName() })));
+  for (const want of candidates) {
+    const hit = named.find(x => x.name === want)
+             || named.find(x => x.name && x.name.toLowerCase() === want.toLowerCase());
+    if (hit) return hit.t;
+  }
+  const got = named.map(x => x.name).join(", ");
+  throw new Error("No table matched any of [" + candidates.join(", ") + "]. Found: [" + got + "]");
+}
+async function findTableByNamesOptional(base, names) {
+  try { return await findTableByNames(base, names); } catch(e) { return null; }
+}
+async function loadAllRecords(table) {
+  const all = []; let pageToken = undefined;
+  for (let i = 0; i < 50; i++) {
+    const page = await table.getRecords({ pageSize: 5000, pageToken });
+    all.push(...(page.records || []));
+    if (!page.hasMore) break;
+    pageToken = page.pageToken;
+  }
+  return all;
+}
+async function buildFieldIndex(table) {
+  try {
+    const metas = await table.getFieldMetaList();
+    const byName = {}, byId = {}, types = {};
+    for (const m of metas) {
+      const id = m.id || m.field_id;
+      const nm = m.name || m.field_name;
+      if (id && nm) { byName[nm] = id; byId[id] = nm; types[id] = m.type; }
+    }
+    return { byName, byId, types };
+  } catch (e) {
+    console.warn("[AtomConsole] getFieldMetaList failed:", e);
+    return { byName: {}, byId: {}, types: {} };
+  }
+}
+function readCell(fieldsObj, fieldIndex, name) {
+  if (!fieldsObj) return undefined;
+  if (fieldsObj[name] !== undefined) return fieldsObj[name];
+  const id = fieldIndex && fieldIndex.byName ? fieldIndex.byName[name] : null;
+  if (id && fieldsObj[id] !== undefined) return fieldsObj[id];
+  return undefined;
+}
+async function waitForBitableSdk(timeoutMs) {
+  timeoutMs = timeoutMs || 5000;
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (window.bitable && window.bitable.base) return true;
+    if (window.__bitableSdkError) throw new Error("Failed to load Bitable SDK from CDN: " + window.__bitableSdkError);
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return false;
+}
+
+// =============================================================================
+// ATOM-ONLY LOADER — does NOT touch the legacy Rule Book table.
+// =============================================================================
+async function loadAtomCorpus() {
+  const ok = await waitForBitableSdk(5000);
+  if (!ok || !window.bitable || !window.bitable.base) {
+    throw new Error("Bitable SDK not available. Open this plugin from inside a Base.");
+  }
+  const base = window.bitable.base;
+
+  const atomsTbl   = await findTableByNames(base, CFG.atomsTableNames);
+  const claimsTbl  = await findTableByNames(base, CFG.claimsTableNames);
+  const casesTbl   = await findTableByNamesOptional(base, CFG.casesTableNames);
+  const pendingTbl = await findTableByNamesOptional(base, CFG.pendingTableNames);
+
+  const [atomsIdx, claimsIdx, casesIdx, pendingIdx] = await Promise.all([
+    buildFieldIndex(atomsTbl),
+    buildFieldIndex(claimsTbl),
+    casesTbl   ? buildFieldIndex(casesTbl)   : Promise.resolve(null),
+    pendingTbl ? buildFieldIndex(pendingTbl) : Promise.resolve(null),
+  ]);
+  const [atomRecs, claimRecs, caseRecs, pendingRecs] = await Promise.all([
+    loadAllRecords(atomsTbl),
+    loadAllRecords(claimsTbl),
+    casesTbl   ? loadAllRecords(casesTbl)   : Promise.resolve([]),
+    pendingTbl ? loadAllRecords(pendingTbl) : Promise.resolve([]),
+  ]);
+
+  const get    = (f, idx, name) => cellText(readCell(f, idx, name));
+  const getArr = (f, idx, name) => cellArr (readCell(f, idx, name));
+  const getLnk = (f, idx, name) => cellLinkRecordIds(readCell(f, idx, name));
+
+  // ---- Atoms: rid -> {atom_key, dim, name, ...}
+  const atoms = atomRecs.map(r => {
+    const f = r.fields || {};
+    return {
+      record_id: r.recordId || r.record_id,
+      atom_key: get(f, atomsIdx, "atom_key"),
+      atom_name: get(f, atomsIdx, "atom_name"),
+      dimension: get(f, atomsIdx, "dimension"),
+      description: get(f, atomsIdx, "description"),
+      audit_rule: get(f, atomsIdx, "audit_rule"),
+      serial_code: get(f, atomsIdx, "serial_code"),
+      tax_version: get(f, atomsIdx, "tax_version"),
+    };
+  }).filter(a => a.atom_key);
+  const atomByRid = {};
+  for (const a of atoms) atomByRid[a.record_id] = a.atom_key;
+  const ridsToKeys = (rids) => rids.map(r => atomByRid[r]).filter(Boolean);
+
+  // ---- Claims: resolve all 5 gate dims + M/X reference fields
+  const claims = claimRecs.map(r => {
+    const f = r.fields || {};
+    // Gate atoms by dimension. Field names per Bitable schema verified earlier.
+    const gates = {
+      C: ridsToKeys(getLnk(f, claimsIdx, "content_atoms")),
+      S: ridsToKeys(getLnk(f, claimsIdx, "subject_atoms")),
+      P: ridsToKeys(getLnk(f, claimsIdx, "portrayal_atoms")),
+      R: ridsToKeys(getLnk(f, claimsIdx, "realism_atoms")),
+      E: ridsToKeys(getLnk(f, claimsIdx, "explicitness_atoms")),
+    };
+    // Modifier / Exception atoms — required + excluded.
+    // The Bitable holds the DNF / qualifier lifts as JSON strings; parse defensively.
+    function safeJson(s) { try { return s ? JSON.parse(s) : null; } catch(e) { return null; } }
+    const modsLiftJson = safeJson(get(f, claimsIdx, "modifiers_lift_to_json"));
+    const exQualJson   = safeJson(get(f, claimsIdx, "exception_qualifiers_json"));
+    const exQualModJson= safeJson(get(f, claimsIdx, "exception_qualifier_modifiers_json"));
+    return {
+      record_id: r.recordId || r.record_id,
+      claim_id: get(f, claimsIdx, "claim_id"),
+      policy_titles: getArr(f, claimsIdx, "policy_title"),
+      issue: get(f, claimsIdx, "issue"),
+      outcome: get(f, claimsIdx, "outcome"),
+      status: get(f, claimsIdx, "status"),
+      tax_version: get(f, claimsIdx, "tax_version"),
+      gates: gates,
+      modifiers_required:  ridsToKeys(getLnk(f, claimsIdx, "modifiers_required")),
+      modifiers_excluded:  ridsToKeys(getLnk(f, claimsIdx, "modifiers_excluded")),
+      modifiers_lift_to_approve: ridsToKeys(getLnk(f, claimsIdx, "modifiers_lift_to_approve")),
+      modifiers_lift_dnf:  modsLiftJson || [],
+      exceptions_required:        ridsToKeys(getLnk(f, claimsIdx, "exceptions_required")),
+      exceptions_lift_to_approve: get(f, claimsIdx, "exceptions_lift_to_approve") === "true"
+                                  || readCell(f, claimsIdx, "exceptions_lift_to_approve") === true,
+      exception_qualifiers:           exQualJson    || {},
+      exception_qualifier_modifiers:  exQualModJson || {},
+      requires_exception_context: get(f, claimsIdx, "requires_exception_context") === "true"
+                                  || readCell(f, claimsIdx, "requires_exception_context") === true,
+      routing: {
+        non_realistic_routes_to: get(f, claimsIdx, "non_realistic_routes_to") || null,
+        cross_title_redirect:    get(f, claimsIdx, "cross_title_redirect")    || null,
+      },
+      molecule_ids: getArr(f, claimsIdx, "molecule_ids"),
+      sources: get(f, claimsIdx, "sources"),
+      notes: get(f, claimsIdx, "notes"),
+    };
+  })
+  .filter(c => c.claim_id)
+  .filter(c => !c.status || c.status === "active");
+
+  // ---- Cases (precedents): atom-tagged, all 7 dims
+  const cases = caseRecs.map(r => {
+    const f = r.fields || {};
+    return {
+      record_id: r.recordId || r.record_id,
+      case_id: get(f, casesIdx, "case_id"),
+      source_video_id: get(f, casesIdx, "source_video_id"),
+      issue: get(f, casesIdx, "issue") || get(f, casesIdx, "policy_area"),
+      policy_title: get(f, casesIdx, "policy_title"),
+      decision: get(f, casesIdx, "decision"),
+      visual_summary: get(f, casesIdx, "visual_summary"),
+      asr_text: get(f, casesIdx, "asr_text"),
+      ocr_text: get(f, casesIdx, "ocr_text"),
+      caption_text: get(f, casesIdx, "caption_text"),
+      rationale: get(f, casesIdx, "rationale"),
+      atoms: {
+        C: ridsToKeys(getLnk(f, casesIdx, "content_atoms")),
+        S: ridsToKeys(getLnk(f, casesIdx, "subject_atoms")),
+        P: ridsToKeys(getLnk(f, casesIdx, "portrayal_atoms")),
+        R: ridsToKeys(getLnk(f, casesIdx, "realism_atoms")),
+        E: ridsToKeys(getLnk(f, casesIdx, "explicitness_atoms")),
+        M: ridsToKeys(getLnk(f, casesIdx, "modifier_atoms")),
+        X: ridsToKeys(getLnk(f, casesIdx, "exception_atoms")),
+      },
+    };
+  });
+
+  // ---- Pending cases: text fields only at load time; reviewer tags atoms in UI.
+  const pending = pendingRecs.map(r => {
+    const f = r.fields || {};
+    return {
+      record_id: r.recordId || r.record_id,
+      source_video_id: get(f, pendingIdx, "source_video_id"),
+      issue: get(f, pendingIdx, "issue"),
+      policy_title: get(f, pendingIdx, "policy_title"),
+      visual_summary: get(f, pendingIdx, "visual_summary"),
+      asr_text: get(f, pendingIdx, "asr_text"),
+      ocr_text: get(f, pendingIdx, "ocr_text"),
+      caption_text: get(f, pendingIdx, "caption_text"),
+      // atoms intentionally empty here — to be tagged in AtomTagger UI (Phase 2)
+      atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
+    };
+  }).filter(p => p.source_video_id);
+
+  // Index atoms by dim for the tagger.
+  const atomsByDim = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+  for (const a of atoms) {
+    const d = (a.dimension || "").charAt(0).toUpperCase();
+    if (atomsByDim[d]) atomsByDim[d].push(a);
+  }
+  for (const d of Object.keys(atomsByDim)) {
+    atomsByDim[d].sort((a,b) => (a.atom_key||"").localeCompare(b.atom_key||""));
+  }
+
+  return { atoms, atomsByDim, claims, cases, pending };
+}
+
+window.__loadAtomCorpus = loadAtomCorpus;
+</script>
+
+<script>
+// =============================================================================
+// REACT UI — Phase 1 verification screen
+// =============================================================================
+const e = React.createElement;
+
+function StatCard(props) {
+  return e("div", { className: "stat" },
+    e("div", { className: "n" }, String(props.n)),
+    e("div", { className: "l" }, props.label));
+}
+
+function App() {
+  const [state, setState] = React.useState({ phase: "idle", err: null, corpus: null });
+
+  const load = React.useCallback(async () => {
+    setState({ phase: "loading", err: null, corpus: null });
+    try {
+      const corpus = await window.__loadAtomCorpus();
+      setState({ phase: "loaded", err: null, corpus });
+    } catch (err) {
+      console.error("[AtomConsole] load failed:", err);
+      setState({ phase: "error", err: String(err && err.message || err), corpus: null });
+    }
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const c = state.corpus;
+  const dimCounts = c ? Object.keys(c.atomsByDim).map(d => ({ d, n: c.atomsByDim[d].length })) : [];
+  const outcomeCounts = {};
+  if (c) for (const cl of c.claims) outcomeCounts[cl.outcome] = (outcomeCounts[cl.outcome]||0) + 1;
+
+  return e("div", { className: "shell" },
+    e("h1", null, "Atom Console"),
+    e("div", { className: "sub" },
+      e("span", { className: "pill" }, PLUGIN_VERSION),
+      e("span", null, "atom-rules-only — legacy Rule Book NOT loaded")
+    ),
+    e("div", { className: "row" },
+      e("button", { className: "primary", onClick: load, disabled: state.phase === "loading" },
+        state.phase === "loading" ? "Loading…" : "Reload corpus")
+    ),
+    state.phase === "error" && e("div", { className: "err" },
+      e("strong", null, "Load error: "), state.err),
+    state.phase === "loaded" && e("div", { className: "ok" },
+      "Loaded ", c.atoms.length, " atoms · ", c.claims.length, " active claims · ",
+      c.cases.length, " precedents · ", c.pending.length, " pending."),
+
+    c && e("div", { className: "stat-grid" },
+      e(StatCard, { n: c.atoms.length, label: "ATLAS atoms" }),
+      e(StatCard, { n: c.claims.length, label: "Active claims" }),
+      e(StatCard, { n: c.cases.length, label: "Precedents" }),
+      e(StatCard, { n: c.pending.length, label: "Pending cases" })
+    ),
+
+    c && e("details", { open: false },
+      e("summary", null, "Atom counts by dimension"),
+      e("div", { className: "stat-grid" },
+        ...dimCounts.map(({d, n}) => e(StatCard, { key: d, n: n, label: "dim " + d })))
+    ),
+    c && e("details", null,
+      e("summary", null, "Claim outcome distribution"),
+      e("div", { className: "stat-grid" },
+        ...Object.keys(outcomeCounts).map(o =>
+          e(StatCard, { key: o, n: outcomeCounts[o], label: o })))
+    ),
+    c && e("details", null,
+      e("summary", null, "First 5 claims (raw, for sanity-check)"),
+      e("pre", null, JSON.stringify(c.claims.slice(0, 5), null, 2))
+    ),
+    c && e("details", null,
+      e("summary", null, "First 5 atoms"),
+      e("pre", null, JSON.stringify(c.atoms.slice(0, 5), null, 2))
+    ),
+
+    e("div", { className: "sub", style: { marginTop: 24 } },
+      "Phase 1 of 7 — loader + skeleton only. Phases 2–6 will add: AtomTagger UI, ",
+      "DeterministicEngine, hybrid retriever, payload v0.1 emit, 4-way verdict UI, ",
+      "and the ", e("code", null, "nsa-atom-precedent-review"), " specialist call.")
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(e(App));
+</script>
+
+</body>
+</html>
