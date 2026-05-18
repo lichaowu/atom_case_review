@@ -134,7 +134,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.3.3-phase3";
+const PLUGIN_VERSION = "atom-mvp v0.3.4-phase3";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -470,7 +470,13 @@ async function loadAtomCorpus() {
     };
   })
   .filter(c => c.claim_id)
-  .filter(c => !c.status || c.status === "active");
+  .filter(c => {
+    if (!c.status) return true;                          // empty status = include
+    const s = String(c.status).trim().toLowerCase();
+    // Treat any of these as active. Reject only explicit inactive states.
+    const inactive = new Set(["inactive","disabled","off","draft","archived","deprecated","retired","false","0","no"]);
+    return !inactive.has(s);
+  });
 
   const cases = caseRecs.map(r => {
     const f = r.fields || {};
