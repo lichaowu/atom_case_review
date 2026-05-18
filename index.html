@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>Atom Console — case_review_atom_mvp</title>
+<title>Case Review Console</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
@@ -11,41 +11,558 @@
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <style>
   :root {
-    --primary:#cc785c; --primary-active:#a9583e; --hairline:#e6dfd8;
-    --ink:#141413; --body:#3d3d3a; --muted:#6c6a64;
-    --canvas:#faf9f5; --surface-soft:#f5f0e8; --surface-card:#efe9de;
-    --success:#5db872; --warning:#d4a017; --error:#c64545;
-    --serif:"Cormorant Garamond",Garamond,serif;
-    --sans:"Inter",-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
-    --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+    /* Anthropic / Claude warm-canvas tokens */
+    --primary:#cc785c;
+    --primary-active:#a9583e;
+    --primary-disabled:#e6dfd8;
+    --ink:#141413;
+    --body:#3d3d3a;
+    --body-strong:#252523;
+    --muted:#6c6a64;
+    --muted-soft:#8e8b82;
+    --hairline:#e6dfd8;
+    --hairline-soft:#ebe6df;
+    --canvas:#faf9f5;
+    --surface-soft:#f5f0e8;
+    --surface-card:#efe9de;
+    --surface-cream-strong:#e8e0d2;
+    --surface-dark:#181715;
+    --on-primary:#ffffff;
+    --accent-teal:#5db8a6;
+    --accent-amber:#e8a55a;
+    --success:#5db872;
+    --warning:#d4a017;
+    --error:#c64545;
+
+    --serif: "Cormorant Garamond", "Tiempos Headline", Garamond, "Times New Roman", serif;
+    --sans:  "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+    --mono:  "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    /* V2.7.0 density tokens */
+    --gutter: 8px;
+    --pad: 12px;
+    --fs-base: 13px;
+    --fs-meta: 12px;
+    --fs-mono: 11px;
+    --lh: 1.4;
+    --header-h: 40px;
+    --footer-h: 26px;
+    --actionbar-h: 56px;
   }
-  *{box-sizing:border-box}
-  html,body{margin:0;padding:0;background:var(--canvas);color:var(--body);font-family:var(--sans);font-size:13px;line-height:1.4}
-  .shell{max-width:780px;margin:0 auto;padding:18px}
-  h1{font-family:var(--serif);font-weight:500;font-size:22px;color:var(--ink);margin:0 0 6px}
-  .sub{color:var(--muted);font-size:12px;margin-bottom:18px}
-  .stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
-  .stat{background:var(--surface-card);border:1px solid var(--hairline);border-radius:8px;padding:12px}
-  .stat .n{font-family:var(--serif);font-size:26px;color:var(--ink);font-weight:500}
-  .stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px}
-  .row{display:flex;gap:8px;margin:14px 0}
-  button{font-family:var(--sans);font-size:12px;padding:7px 12px;border-radius:6px;border:1px solid var(--hairline);background:#fff;color:var(--ink);cursor:pointer}
-  button.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
-  button.primary:hover{background:var(--primary-active);border-color:var(--primary-active)}
-  pre{background:#1f1d1a;color:#e8e0d2;font-family:var(--mono);font-size:11px;padding:10px;border-radius:6px;overflow:auto;max-height:280px}
-  .muted{color:var(--muted)}
-  .err{background:#fff3f0;border:1px solid #f0c0b8;color:var(--error);padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
-  .ok{background:#f0f7ed;border:1px solid #c8e0bd;color:#3d6b2a;padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
-  .pill{display:inline-block;padding:1px 6px;border-radius:3px;background:var(--surface-soft);font-size:10px;color:var(--muted);font-family:var(--mono);margin-right:4px}
-  details{margin:8px 0}
-  details summary{cursor:pointer;font-weight:500;padding:4px 0}
+  * { box-sizing: border-box; }
+  html, body {
+    margin:0; padding:0; background:var(--canvas); color:var(--body);
+    font-family: var(--sans); font-size: var(--fs-base); line-height: var(--lh);
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    height: 100vh; overflow: hidden;
+  }
+  ::selection { background: rgba(204,120,92,0.25); }
+
+  /* ---- V2.7.0 Shell: stacked, narrow-panel-first ---- */
+  #root { height: 100vh; display: flex; flex-direction: column; }
+  .shell {
+    display: flex; flex-direction: column;
+    height: 100vh;
+    background: var(--canvas);
+  }
+  .shell-header {
+    flex: 0 0 var(--header-h);
+    height: var(--header-h);
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 var(--pad);
+    border-bottom: 1px solid var(--hairline);
+    background: var(--canvas);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .shell-header .title {
+    flex: 1 1 auto;
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 16px;
+    color: var(--ink);
+    letter-spacing: -0.2px;
+    line-height: 1.2;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .shell-header .nav-btn {
+    height: 28px; min-width: 28px;
+    padding: 0 8px;
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .shell-header .nav-btn:hover { background: var(--surface-soft); border-color: var(--hairline); }
+  .shell-body {
+    flex: 1 1 auto;
+    overflow-y: auto; overflow-x: hidden;
+    padding: var(--pad);
+    padding-bottom: calc(var(--pad) + var(--actionbar-h)); /* room for sticky action bar */
+  }
+  .shell-body.no-actionbar { padding-bottom: var(--pad); }
+  .shell-footer {
+    flex: 0 0 var(--footer-h);
+    height: var(--footer-h);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 var(--pad);
+    border-top: 1px solid var(--hairline);
+    background: var(--canvas);
+    font-size: var(--fs-mono);
+    color: var(--muted);
+    line-height: 1;
+    z-index: 9;
+  }
+  .shell-footer .stamp {
+    font-family: var(--mono);
+    color: var(--muted-soft);
+    cursor: pointer;
+  }
+  .shell-footer .stamp:hover { color: var(--primary); }
+
+  /* ---- Sticky action bar (Case view bottom) ---- */
+  .actionbar {
+    position: fixed;
+    left: 0; right: 0;
+    bottom: var(--footer-h);
+    height: var(--actionbar-h);
+    background: var(--canvas);
+    border-top: 1px solid var(--hairline);
+    padding: var(--gutter) var(--pad);
+    display: flex; gap: var(--gutter); align-items: center;
+    z-index: 8;
+    box-shadow: 0 -2px 8px rgba(20,20,19,0.04);
+  }
+  .actionbar > .grow { flex: 1 1 auto; min-width: 0; }
+  .actionbar .summary {
+    font-size: var(--fs-meta); color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .actionbar .summary b { color: var(--ink); font-weight: 500; }
+
+  /* ---- Form controls ---- */
+  label {
+    display: block;
+    margin: 10px 0 4px;
+    font-family: var(--sans);
+    font-weight: 500;
+    color: var(--body-strong);
+    font-size: var(--fs-meta);
+  }
+  input[type=text], textarea, select {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink);
+    font: 400 var(--fs-base)/var(--lh) var(--sans);
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  input[type=text]:focus, textarea:focus, select:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(204,120,92,0.15);
+  }
+  textarea { resize: vertical; min-height: 48px; font-family: var(--sans); }
+
+  .row { display: flex; gap: var(--gutter); align-items: stretch; }
+  .row > * { flex: 1; min-width: 0; }
+  .row.tight { gap: 6px; }
+
+  /* ---- Buttons ---- */
+  button {
+    background: var(--primary);
+    color: var(--on-primary);
+    border: 0;
+    border-radius: 6px;
+    padding: 8px 14px;
+    height: 34px;
+    font: 500 var(--fs-base)/1 var(--sans);
+    cursor: pointer;
+    transition: background .15s ease, transform .05s ease;
+    white-space: nowrap;
+  }
+  button:hover:not(:disabled) { background: var(--primary-active); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button.secondary {
+    background: var(--canvas);
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+  }
+  button.secondary:hover:not(:disabled) {
+    background: var(--surface-soft);
+    border-color: var(--muted-soft);
+  }
+  button.tiny {
+    height: 26px; padding: 0 8px;
+    font-size: var(--fs-mono);
+    border-radius: 4px;
+  }
+  button:disabled {
+    background: var(--primary-disabled);
+    color: var(--muted);
+    cursor: not-allowed;
+  }
+  button.full { width: 100%; }
+
+  .hint {
+    font-size: var(--fs-meta);
+    color: var(--muted);
+    margin-top: 4px;
+    line-height: 1.45;
+  }
+  .divider {
+    height: 1px;
+    background: var(--hairline-soft);
+    margin: 12px 0;
+    border: 0;
+  }
+
+  /* ---- Queue cards ---- */
+  .queue-list { display: flex; flex-direction: column; gap: 8px; }
+  .queue-card {
+    display: flex; gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    background: var(--canvas);
+    cursor: pointer;
+    transition: border-color .15s ease, transform .05s ease, background .15s ease;
+  }
+  .queue-card:hover { border-color: var(--primary); background: var(--surface-soft); }
+  .queue-card:active { transform: translateY(1px); }
+  .queue-card .qc-thumb {
+    flex: 0 0 56px;
+    width: 56px; height: 56px;
+    border-radius: 6px;
+    background: var(--surface-soft);
+    border: 1px solid var(--hairline-soft);
+    overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; color: var(--muted);
+  }
+  .queue-card .qc-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .queue-card .qc-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .queue-card .qc-id {
+    font-family: var(--mono); font-size: var(--fs-mono); color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .queue-card .qc-title {
+    font-size: var(--fs-meta); color: var(--body);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .queue-card .qc-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .queue-card .qc-age { font-size: var(--fs-mono); color: var(--muted); }
+
+  /* ---- Carousel (prev/next + dots) ---- */
+  .carousel { margin: 8px 0; }
+  .carousel .car-frame {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16/10;
+    background: var(--surface-soft);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .carousel .car-frame img {
+    width: 100%; height: 100%; object-fit: contain;
+    display: block;
+  }
+  .carousel .car-fallback {
+    font-size: var(--fs-meta); color: var(--muted);
+    padding: 16px; text-align: center;
+  }
+  .carousel .car-controls {
+    position: absolute; top: 50%; left: 0; right: 0;
+    transform: translateY(-50%);
+    display: flex; justify-content: space-between;
+    pointer-events: none;
+    padding: 0 6px;
+  }
+  .carousel .car-btn {
+    pointer-events: auto;
+    width: 28px; height: 28px; padding: 0;
+    border-radius: 9999px;
+    background: rgba(20,20,19,0.55);
+    color: #fff;
+    border: 0;
+    font-size: 14px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  .carousel .car-btn:hover { background: rgba(20,20,19,0.75); }
+  .carousel .car-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .carousel .car-counter {
+    position: absolute; top: 6px; right: 8px;
+    font-size: var(--fs-mono);
+    color: #fff;
+    background: rgba(20,20,19,0.55);
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-family: var(--mono);
+  }
+  .carousel .car-dots {
+    display: flex; gap: 4px; justify-content: center;
+    margin-top: 6px; flex-wrap: wrap;
+  }
+  .carousel .car-dot {
+    width: 6px; height: 6px; border-radius: 9999px;
+    background: var(--hairline);
+    border: 0; padding: 0;
+    cursor: pointer;
+    transition: background .15s ease, transform .15s ease;
+  }
+  .carousel .car-dot.active { background: var(--primary); transform: scale(1.3); }
+  .carousel .car-dot:hover { background: var(--muted-soft); }
+  .carousel .car-open {
+    display: block; text-align: center;
+    margin-top: 4px; font-size: var(--fs-mono);
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .carousel .car-open:hover { color: var(--primary); }
+
+  /* ---- Tags / Badges ---- */
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: var(--fs-mono);
+    font-weight: 500;
+    line-height: 1.4;
+    letter-spacing: 0.2px;
+    background: var(--surface-card);
+    color: var(--ink);
+    border: 1px solid transparent;
+  }
+  .tag.flag    { background:#fbe4de; color:#8a2c1a; }
+  .tag.pass    { background:#dff0d8; color:#2a6e35; }
+  .tag.routine { background: var(--surface-card); color: var(--ink); }
+  .tag.grey    { background:#f4e9c8; color:#6b5316; }
+  .tag.sim     { background: var(--surface-soft); color: var(--muted); }
+  .tag.linked  { background:#dbeee8; color:#1f5448; }
+  .tag.unlinked{ background:#f4e0c4; color:#7a4a0e; }
+  .tag.draft   { background:#ebe1d2; color:#5b4423; }
+  .tag.pending { background:#e8e0d2; color:#5b4423; }
+
+  /* ---- Cards & sections ---- */
+  .section {
+    margin-bottom: 12px;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    background: var(--canvas);
+    overflow: hidden;
+  }
+  .section .sec-head {
+    padding: 8px 12px;
+    background: var(--surface-soft);
+    border-bottom: 1px solid var(--hairline-soft);
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 14px;
+    color: var(--ink);
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+  }
+  .section .sec-head .chev {
+    color: var(--muted);
+    font-size: 11px;
+    transition: transform .15s ease;
+  }
+  .section.open .sec-head .chev { transform: rotate(90deg); }
+  .section .sec-body { padding: 10px 12px; }
+  .section.collapsed .sec-body { display: none; }
+
+  .card {
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    background: var(--canvas);
+  }
+  .card h4 {
+    margin: 0 0 6px;
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .card .kvp { font-size: var(--fs-meta); color: var(--body); margin-bottom: 4px; line-height: 1.45; }
+  .card .kvp b { color: var(--ink); font-weight: 500; }
+  .card pre {
+    margin: 6px 0 0;
+    background: var(--surface-soft);
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--hairline-soft);
+    font-family: var(--mono);
+    font-size: var(--fs-mono);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: var(--body-strong);
+  }
+
+  /* ---- Definition lists for stacked metadata ---- */
+  dl.dl-stack { margin: 0; display: grid; grid-template-columns: 36% 64%; gap: 4px 8px; font-size: var(--fs-meta); }
+  dl.dl-stack dt { color: var(--muted); font-size: var(--fs-mono); text-transform: uppercase; letter-spacing: 1px; }
+  dl.dl-stack dd { margin: 0; color: var(--body); word-break: break-word; }
+
+  /* ---- Banners ---- */
+  .banner {
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    font-weight: 500;
+    font-size: var(--fs-meta);
+    border: 1px solid transparent;
+    line-height: 1.45;
+  }
+  .banner.aligned   { background: #dff0d8; color: #2a6e35; border-color: #c8e2c0; }
+  .banner.mixed     { background: #f4e9c8; color: #6b5316; border-color: #e6d6a4; }
+  .banner.no-match  { background: var(--surface-soft); color: var(--muted); border-color: var(--hairline); }
+
+  .muted { color: var(--muted); }
+  .mono  { font-family: var(--mono); font-size: var(--fs-mono); }
+
+  /* ---- Decision box ---- */
+  .decision-box {
+    border: 1px solid var(--hairline);
+    background: var(--surface-card);
+    padding: 12px;
+    border-radius: 8px;
+  }
+  .decision-box h4 { margin: 0 0 8px; font-family: var(--serif); font-weight: 500; font-size: 14px; }
+  .decision-box .d-row {
+    display: flex; gap: 8px; margin: 4px 0;
+    font-size: var(--fs-meta); line-height: 1.45;
+    align-items: baseline; flex-wrap: wrap;
+  }
+  .decision-box .d-row b {
+    min-width: 90px;
+    color: var(--muted);
+    font-weight: 500;
+    font-size: var(--fs-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  details { margin: 6px 0; }
+  summary {
+    cursor: pointer;
+    font-size: var(--fs-meta);
+    color: var(--muted);
+    user-select: none;
+    padding: 2px 0;
+  }
+  summary:hover { color: var(--primary); }
+  .meta-row { font-size: var(--fs-meta); color: var(--muted); margin: 4px 0; line-height: 1.45; }
+
+  /* ---- Precedent list (compact) ---- */
+  .prec-list { display: flex; flex-direction: column; gap: 6px; }
+  .prec-item {
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--canvas);
+    overflow: hidden;
+  }
+  .prec-item.selected { border-color: var(--primary); }
+  .prec-item .prec-head {
+    display: flex; gap: 6px; align-items: center;
+    padding: 6px 8px;
+    cursor: pointer;
+    font-size: var(--fs-meta);
+  }
+  .prec-item .prec-head:hover { background: var(--surface-soft); }
+  .prec-item .prec-head .prec-id { font-family: var(--mono); font-size: var(--fs-mono); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prec-item .prec-body { padding: 8px 10px; border-top: 1px solid var(--hairline-soft); display: none; }
+  .prec-item.open .prec-body { display: block; }
+
+  /* ---- Diagnostics ---- */
+  .diag-table { width: 100%; border-collapse: collapse; font-size: var(--fs-meta); }
+  .diag-table td, .diag-table th {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--hairline-soft);
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+  }
+  .diag-table th {
+    color: var(--muted); font-size: var(--fs-mono);
+    text-transform: uppercase; letter-spacing: 1px;
+    font-weight: 500;
+  }
+  .log-list {
+    max-height: 240px; overflow-y: auto;
+    font-family: var(--mono); font-size: var(--fs-mono);
+    background: var(--surface-soft);
+    border: 1px solid var(--hairline-soft);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+  .log-list .log-row { padding: 2px 0; line-height: 1.45; word-break: break-word; }
+  .log-list .log-row.warn { color: #8a6515; }
+  .log-list .log-row.error { color: #8a2c1a; }
+  .log-list .log-ts { color: var(--muted-soft); margin-right: 6px; }
+
+  /* ---- Menu (header overflow) ---- */
+  .menu-wrap { position: relative; }
+  .menu-pop {
+    position: absolute; top: 32px; right: 0;
+    min-width: 160px;
+    background: var(--canvas);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(20,20,19,0.08);
+    z-index: 20;
+    overflow: hidden;
+  }
+  .menu-pop button {
+    width: 100%;
+    background: transparent; color: var(--ink);
+    border: 0; border-radius: 0;
+    text-align: left;
+    padding: 8px 12px;
+    height: auto;
+    font-size: var(--fs-base);
+  }
+  .menu-pop button:hover { background: var(--surface-soft); }
+
+  .copy-msg {
+    font-size: var(--fs-mono);
+    color: var(--primary);
+    margin-top: 6px;
+    font-weight: 500;
+  }
+
+  /* ---- Scrollbar polish ---- */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--hairline);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted-soft); }
+
+  /* ---- Wide-screen comfort (>=720px popped-out) ---- */
+  @media (min-width: 720px) {
+    .shell-body { padding: 16px 20px; padding-bottom: calc(20px + var(--actionbar-h)); }
+    .actionbar { padding: 10px 20px; }
+  }
 </style>
 </head>
 <body>
 <div id="root"></div>
-
 <script type="module">
   // Load the official @lark-base-open/js-sdk via public CDN.
+  // Try jsDelivr first; on failure, fall back to unpkg.
   const URLS = [
     "https://cdn.jsdelivr.net/npm/@lark-base-open/js-sdk@1.0.2/dist/index.min.mjs",
     "https://unpkg.com/@lark-base-open/js-sdk@1.0.2/dist/index.min.mjs",
@@ -56,34 +573,30 @@
   }
   if (!mod) {
     window.__bitableSdkError = String(lastErr && lastErr.message || lastErr || "unknown");
-    console.error("[AtomConsole] SDK load failed:", lastErr);
+    console.error("[CaseReview] SDK load failed:", lastErr);
   } else {
+    // Try common export shapes
     const candidate = mod.bitable || mod.default || mod;
     window.bitable = candidate;
-    window.__sdkModule = mod;
-    console.log("[AtomConsole] SDK module keys:", Object.keys(mod));
+    window.__sdkModule = mod;  // expose for debugging
+    console.log("[CaseReview] SDK module keys:", Object.keys(mod));
+    console.log("[CaseReview] window.bitable keys:", candidate ? Object.keys(candidate) : "(empty)");
+    console.log("[CaseReview] window.bitable.base:", candidate && candidate.base);
   }
   window.dispatchEvent(new Event("bitable-sdk-ready"));
 </script>
-
 <script>
-// =============================================================================
-// CONFIG — atom-only. Legacy V0.3 Rule Book is intentionally NOT loaded.
-// =============================================================================
-window.ATOM_CONSOLE_CONFIG = {
-  atomsTableNames:   ["ATLAS Atoms", "Atoms"],
-  claimsTableNames:  ["ATLAS Atom Rules", "Atom Rules"],
-  casesTableNames:   ["Case Notes", "Cases", "case_notes"],
-  pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
-  issue: "NSA",
+// config.js — committed runtime config. No secrets here.
+// Override values locally only if your Base uses different table names.
+window.CASE_REVIEW_CONFIG = {
+  // Table names to look up at runtime, in priority order:
+  casesTableNames: ["Cases", "case_notes", "Case Notes"],
+  rulesTableNames: ["Rules", "rule_book", "Rule Book"],
+  // Filter records by this `issue` field value:
+  issue: "NSA"
 };
-const PLUGIN_VERSION = "atom-mvp v0.1.0-phase1";
 </script>
-
 <script>
-// =============================================================================
-// CELL UTILS
-// =============================================================================
 function cellText(v) {
   if (v == null) return "";
   if (typeof v === "string" || typeof v === "number") return String(v);
@@ -100,24 +613,17 @@ function cellArr(v) {
   if (Array.isArray(v)) return v.map(x => (typeof x === "string" ? x : (x.text || x.name || ""))).filter(Boolean);
   return [cellText(v)].filter(Boolean);
 }
-// DuplexLink fields read as { recordIds: [...], tableId, type } in the Bitable SDK.
-function cellLinkRecordIds(v) {
-  if (v == null) return [];
-  if (Array.isArray(v)) return v.map(x => (typeof x === "string" ? x : (x.recordId || x.record_id || ""))).filter(Boolean);
-  if (typeof v === "object") {
-    if (Array.isArray(v.recordIds)) return v.recordIds;
-    if (Array.isArray(v.record_ids)) return v.record_ids;
-    if (v.recordId) return [v.recordId];
-  }
-  return [];
-}
 
-// =============================================================================
-// TABLE DISCOVERY
-// =============================================================================
-const CFG = window.ATOM_CONSOLE_CONFIG;
+// Optional config (committed in git, no secrets). Defaults match this plugin's
+// expected Base layout — override locally if your table names differ.
+const CFG = (typeof window !== "undefined" && window.CASE_REVIEW_CONFIG) || {};
+const CASES_NAMES = (CFG.casesTableNames && CFG.casesTableNames.length) ? CFG.casesTableNames : ["Cases", "case_notes", "Case Notes", "cases"];
+const RULES_NAMES = (CFG.rulesTableNames && CFG.rulesTableNames.length) ? CFG.rulesTableNames : ["Rules", "rule_book", "Rule Book", "rules"];
+const PENDING_NAMES = (CFG.pendingTableNames && CFG.pendingTableNames.length) ? CFG.pendingTableNames : ["Pending Cases", "pending_cases", "Pending", "pending"];
+const ISSUE_FALLBACK = ["NSA", "VBDA", "HRA", "HHB", "SGC", "EA"];
 
 async function findTableByNames(base, candidates) {
+  // SDK: getTableList returns ITable[]; each has getName() and id
   const list = await base.getTableList();
   const named = await Promise.all(list.map(async t => ({ t, name: await t.getName() })));
   for (const want of candidates) {
@@ -126,13 +632,12 @@ async function findTableByNames(base, candidates) {
     if (hit) return hit.t;
   }
   const got = named.map(x => x.name).join(", ");
-  throw new Error("No table matched any of [" + candidates.join(", ") + "]. Found: [" + got + "]");
+  throw new Error(`No table matched any of [${candidates.join(", ")}]. Found: [${got}]`);
 }
-async function findTableByNamesOptional(base, names) {
-  try { return await findTableByNames(base, names); } catch(e) { return null; }
-}
+
 async function loadAllRecords(table) {
-  const all = []; let pageToken = undefined;
+  const all = [];
+  let pageToken = undefined;
   for (let i = 0; i < 50; i++) {
     const page = await table.getRecords({ pageSize: 5000, pageToken });
     all.push(...(page.records || []));
@@ -141,28 +646,7 @@ async function loadAllRecords(table) {
   }
   return all;
 }
-async function buildFieldIndex(table) {
-  try {
-    const metas = await table.getFieldMetaList();
-    const byName = {}, byId = {}, types = {};
-    for (const m of metas) {
-      const id = m.id || m.field_id;
-      const nm = m.name || m.field_name;
-      if (id && nm) { byName[nm] = id; byId[id] = nm; types[id] = m.type; }
-    }
-    return { byName, byId, types };
-  } catch (e) {
-    console.warn("[AtomConsole] getFieldMetaList failed:", e);
-    return { byName: {}, byId: {}, types: {} };
-  }
-}
-function readCell(fieldsObj, fieldIndex, name) {
-  if (!fieldsObj) return undefined;
-  if (fieldsObj[name] !== undefined) return fieldsObj[name];
-  const id = fieldIndex && fieldIndex.byName ? fieldIndex.byName[name] : null;
-  if (id && fieldsObj[id] !== undefined) return fieldsObj[id];
-  return undefined;
-}
+
 async function waitForBitableSdk(timeoutMs) {
   timeoutMs = timeoutMs || 5000;
   const start = Date.now();
@@ -174,106 +658,73 @@ async function waitForBitableSdk(timeoutMs) {
   return false;
 }
 
-// =============================================================================
-// ATOM-ONLY LOADER — does NOT touch the legacy Rule Book table.
-// =============================================================================
-async function loadAtomCorpus() {
+async function findTableByNamesOptional(base, names) {
+  try { return await findTableByNames(base, names); } catch (e) { return null; }
+}
+
+async function buildFieldIndex(table) {
+  // Returns { byName: { name -> field_id }, byId: { id -> name }, types: { id -> type } }
+  try {
+    const metas = await table.getFieldMetaList();
+    const byName = {};
+    const byId = {};
+    const types = {};
+    for (const m of metas) {
+      const id = m.id || m.field_id;
+      const nm = m.name || m.field_name;
+      if (id && nm) {
+        byName[nm] = id;
+        byId[id] = nm;
+        types[id] = m.type;
+      }
+    }
+    return { byName, byId, types };
+  } catch (e) {
+    console.warn("[CaseReview] getFieldMetaList failed:", e);
+    return { byName: {}, byId: {}, types: {} };
+  }
+}
+
+function readCell(fieldsObj, fieldIndex, name) {
+  if (!fieldsObj) return undefined;
+  // Try by name first (some SDK versions key by name)
+  if (fieldsObj[name] !== undefined) return fieldsObj[name];
+  // Then by resolved id
+  const id = fieldIndex && fieldIndex.byName ? fieldIndex.byName[name] : null;
+  if (id && fieldsObj[id] !== undefined) return fieldsObj[id];
+  return undefined;
+}
+
+async function loadCorpusFromBitable() {
   const ok = await waitForBitableSdk(5000);
   if (!ok || !window.bitable || !window.bitable.base) {
-    throw new Error("Bitable SDK not available. Open this plugin from inside a Base.");
+    throw new Error("Bitable SDK not available — open this plugin from inside a Base (and ensure the CDN https://cdn.jsdelivr.net/npm/@lark-base-open/js-sdk is reachable).");
   }
   const base = window.bitable.base;
+  const [casesTbl, rulesTbl] = await Promise.all([
+    findTableByNames(base, CASES_NAMES),
+    findTableByNames(base, RULES_NAMES),
+  ]);
+  const pendingTbl = await findTableByNamesOptional(base, PENDING_NAMES);
+  if (!pendingTbl) {
+    console.warn("[CaseReview] Pending Cases table NOT FOUND — names tried:", PENDING_NAMES);
+  }
 
-  const atomsTbl   = await findTableByNames(base, CFG.atomsTableNames);
-  const claimsTbl  = await findTableByNames(base, CFG.claimsTableNames);
-  const casesTbl   = await findTableByNamesOptional(base, CFG.casesTableNames);
-  const pendingTbl = await findTableByNamesOptional(base, CFG.pendingTableNames);
-
-  const [atomsIdx, claimsIdx, casesIdx, pendingIdx] = await Promise.all([
-    buildFieldIndex(atomsTbl),
-    buildFieldIndex(claimsTbl),
-    casesTbl   ? buildFieldIndex(casesTbl)   : Promise.resolve(null),
+  const [casesIdx, rulesIdx, pendingIdx] = await Promise.all([
+    buildFieldIndex(casesTbl),
+    buildFieldIndex(rulesTbl),
     pendingTbl ? buildFieldIndex(pendingTbl) : Promise.resolve(null),
   ]);
-  const [atomRecs, claimRecs, caseRecs, pendingRecs] = await Promise.all([
-    loadAllRecords(atomsTbl),
-    loadAllRecords(claimsTbl),
-    casesTbl   ? loadAllRecords(casesTbl)   : Promise.resolve([]),
+
+  const [caseRecs, ruleRecs, pendingRecs] = await Promise.all([
+    loadAllRecords(casesTbl),
+    loadAllRecords(rulesTbl),
     pendingTbl ? loadAllRecords(pendingTbl) : Promise.resolve([]),
   ]);
 
-  const get    = (f, idx, name) => cellText(readCell(f, idx, name));
-  const getArr = (f, idx, name) => cellArr (readCell(f, idx, name));
-  const getLnk = (f, idx, name) => cellLinkRecordIds(readCell(f, idx, name));
+  const get = (f, idx, name) => cellText(readCell(f, idx, name));
+  const getArr = (f, idx, name) => cellArr(readCell(f, idx, name));
 
-  // ---- Atoms: rid -> {atom_key, dim, name, ...}
-  const atoms = atomRecs.map(r => {
-    const f = r.fields || {};
-    return {
-      record_id: r.recordId || r.record_id,
-      atom_key: get(f, atomsIdx, "atom_key"),
-      atom_name: get(f, atomsIdx, "atom_name"),
-      dimension: get(f, atomsIdx, "dimension"),
-      description: get(f, atomsIdx, "description"),
-      audit_rule: get(f, atomsIdx, "audit_rule"),
-      serial_code: get(f, atomsIdx, "serial_code"),
-      tax_version: get(f, atomsIdx, "tax_version"),
-    };
-  }).filter(a => a.atom_key);
-  const atomByRid = {};
-  for (const a of atoms) atomByRid[a.record_id] = a.atom_key;
-  const ridsToKeys = (rids) => rids.map(r => atomByRid[r]).filter(Boolean);
-
-  // ---- Claims: resolve all 5 gate dims + M/X reference fields
-  const claims = claimRecs.map(r => {
-    const f = r.fields || {};
-    // Gate atoms by dimension. Field names per Bitable schema verified earlier.
-    const gates = {
-      C: ridsToKeys(getLnk(f, claimsIdx, "content_atoms")),
-      S: ridsToKeys(getLnk(f, claimsIdx, "subject_atoms")),
-      P: ridsToKeys(getLnk(f, claimsIdx, "portrayal_atoms")),
-      R: ridsToKeys(getLnk(f, claimsIdx, "realism_atoms")),
-      E: ridsToKeys(getLnk(f, claimsIdx, "explicitness_atoms")),
-    };
-    // Modifier / Exception atoms — required + excluded.
-    // The Bitable holds the DNF / qualifier lifts as JSON strings; parse defensively.
-    function safeJson(s) { try { return s ? JSON.parse(s) : null; } catch(e) { return null; } }
-    const modsLiftJson = safeJson(get(f, claimsIdx, "modifiers_lift_to_json"));
-    const exQualJson   = safeJson(get(f, claimsIdx, "exception_qualifiers_json"));
-    const exQualModJson= safeJson(get(f, claimsIdx, "exception_qualifier_modifiers_json"));
-    return {
-      record_id: r.recordId || r.record_id,
-      claim_id: get(f, claimsIdx, "claim_id"),
-      policy_titles: getArr(f, claimsIdx, "policy_title"),
-      issue: get(f, claimsIdx, "issue"),
-      outcome: get(f, claimsIdx, "outcome"),
-      status: get(f, claimsIdx, "status"),
-      tax_version: get(f, claimsIdx, "tax_version"),
-      gates: gates,
-      modifiers_required:  ridsToKeys(getLnk(f, claimsIdx, "modifiers_required")),
-      modifiers_excluded:  ridsToKeys(getLnk(f, claimsIdx, "modifiers_excluded")),
-      modifiers_lift_to_approve: ridsToKeys(getLnk(f, claimsIdx, "modifiers_lift_to_approve")),
-      modifiers_lift_dnf:  modsLiftJson || [],
-      exceptions_required:        ridsToKeys(getLnk(f, claimsIdx, "exceptions_required")),
-      exceptions_lift_to_approve: get(f, claimsIdx, "exceptions_lift_to_approve") === "true"
-                                  || readCell(f, claimsIdx, "exceptions_lift_to_approve") === true,
-      exception_qualifiers:           exQualJson    || {},
-      exception_qualifier_modifiers:  exQualModJson || {},
-      requires_exception_context: get(f, claimsIdx, "requires_exception_context") === "true"
-                                  || readCell(f, claimsIdx, "requires_exception_context") === true,
-      routing: {
-        non_realistic_routes_to: get(f, claimsIdx, "non_realistic_routes_to") || null,
-        cross_title_redirect:    get(f, claimsIdx, "cross_title_redirect")    || null,
-      },
-      molecule_ids: getArr(f, claimsIdx, "molecule_ids"),
-      sources: get(f, claimsIdx, "sources"),
-      notes: get(f, claimsIdx, "notes"),
-    };
-  })
-  .filter(c => c.claim_id)
-  .filter(c => !c.status || c.status === "active");
-
-  // ---- Cases (precedents): atom-tagged, all 7 dims
   const cases = caseRecs.map(r => {
     const f = r.fields || {};
     return {
@@ -281,144 +732,1731 @@ async function loadAtomCorpus() {
       case_id: get(f, casesIdx, "case_id"),
       source_video_id: get(f, casesIdx, "source_video_id"),
       issue: get(f, casesIdx, "issue") || get(f, casesIdx, "policy_area"),
+      topic: get(f, casesIdx, "topic"),
+      policy_code: get(f, casesIdx, "policy_code"),
       policy_title: get(f, casesIdx, "policy_title"),
+      tier_version: get(f, casesIdx, "tier_version") || get(f, casesIdx, "rule_version") || "",
       decision: get(f, casesIdx, "decision"),
+      key_signals: getArr(f, casesIdx, "key_signals"),
+      reference_weight: get(f, casesIdx, "reference_weight"),
+      status: get(f, casesIdx, "status"),
+      rule_applied_name: get(f, casesIdx, "rule_applied"),
       visual_summary: get(f, casesIdx, "visual_summary"),
       asr_text: get(f, casesIdx, "asr_text"),
       ocr_text: get(f, casesIdx, "ocr_text"),
       caption_text: get(f, casesIdx, "caption_text"),
       rationale: get(f, casesIdx, "rationale"),
-      atoms: {
-        C: ridsToKeys(getLnk(f, casesIdx, "content_atoms")),
-        S: ridsToKeys(getLnk(f, casesIdx, "subject_atoms")),
-        P: ridsToKeys(getLnk(f, casesIdx, "portrayal_atoms")),
-        R: ridsToKeys(getLnk(f, casesIdx, "realism_atoms")),
-        E: ridsToKeys(getLnk(f, casesIdx, "explicitness_atoms")),
-        M: ridsToKeys(getLnk(f, casesIdx, "modifier_atoms")),
-        X: ridsToKeys(getLnk(f, casesIdx, "exception_atoms")),
-      },
+    };
+  }).filter(c => c.status !== "Retired");
+
+  const rules = ruleRecs.map(r => {
+    const f = r.fields || {};
+    // V3.0: policy_title widened to MultiSelect — preserve as array.
+    // L1 / L2 carry one tag (their owning policy); L3 carries owning + neighbor(s).
+    const ptArr = getArr(f, rulesIdx, "policy_title");
+    const ptScalar = ptArr.length ? ptArr[0] : (get(f, rulesIdx, "policy_title") || get(f, rulesIdx, "rule_name"));
+    return {
+      record_id: r.recordId || r.record_id,
+      rule_name: get(f, rulesIdx, "rule_name"),
+      // V3.0: rule_type SingleSelect — "L1 — Threshold" / "L2 — Exception" / "L3 — Disambiguation".
+      // Empty string for legacy rows without the field.
+      rule_type: get(f, rulesIdx, "rule_type"),
+      issue: get(f, rulesIdx, "issue") || get(f, rulesIdx, "policy_area"),
+      policy_title: ptScalar,            // legacy scalar — used by precedent filters
+      policy_titles: ptArr.length ? ptArr : (ptScalar ? [ptScalar] : []),  // V3.0 array
+      tier_version: get(f, rulesIdx, "tier_version") || "V0.3",
+      rule_description: get(f, rulesIdx, "plain_description"),
+      rule_text: get(f, rulesIdx, "plain_rule_text"),
+      examples: get(f, rulesIdx, "example_cases"),
+      status: get(f, rulesIdx, "status"),
     };
   });
 
-  // ---- Pending cases: text fields only at load time; reviewer tags atoms in UI.
+  try { console.log("[CaseReview] V2.6.0 pending parser active; pendingRecs.length=", pendingRecs.length); } catch(e) {}
   const pending = pendingRecs.map(r => {
     const f = r.fields || {};
     return {
       record_id: r.recordId || r.record_id,
       source_video_id: get(f, pendingIdx, "source_video_id"),
-      issue: get(f, pendingIdx, "issue"),
+      case_id: get(f, pendingIdx, "case_id"),
+      issue: get(f, pendingIdx, "issue") || get(f, pendingIdx, "policy_area"),
       policy_title: get(f, pendingIdx, "policy_title"),
       visual_summary: get(f, pendingIdx, "visual_summary"),
       asr_text: get(f, pendingIdx, "asr_text"),
       ocr_text: get(f, pendingIdx, "ocr_text"),
       caption_text: get(f, pendingIdx, "caption_text"),
-      // atoms intentionally empty here — to be tagged in AtomTagger UI (Phase 2)
-      atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
+      // V3.3.2: image_urls populated post-map by async getAttachmentUrls(). Empty here.
+      image_urls: [],
     };
   }).filter(p => p.source_video_id);
 
-  // Index atoms by dim for the tagger.
-  const atomsByDim = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
-  for (const a of atoms) {
-    const d = (a.dimension || "").charAt(0).toUpperCase();
-    if (atomsByDim[d]) atomsByDim[d].push(a);
+  // V3.3.2: Lazy keyframes resolver — only fetches signed *.feishu.cn temp URLs
+  // for the ONE case the user opens, not all 73 pending records. Cached per-record.
+  var keyframesFieldId = pendingIdx && pendingIdx.byName ? pendingIdx.byName["keyframes"] : null;
+  var _kfFieldPromise = null; // memoized field handle
+  var _kfCache = new Map();   // recordId -> string[]
+  var _kfInFlight = new Map();// recordId -> Promise<string[]>
+  if (pendingTbl && !keyframesFieldId) {
+    console.warn("[CaseReview] V3.3.2: 'keyframes' field NOT FOUND in Pending Cases table. Available:",
+      pendingIdx && pendingIdx.byName ? Object.keys(pendingIdx.byName) : "(no index)");
   }
-  for (const d of Object.keys(atomsByDim)) {
-    atomsByDim[d].sort((a,b) => (a.atom_key||"").localeCompare(b.atom_key||""));
+  async function resolveKeyframes(recordId) {
+    if (!recordId || !pendingTbl || !keyframesFieldId) return [];
+    if (_kfCache.has(recordId)) return _kfCache.get(recordId);
+    if (_kfInFlight.has(recordId)) return _kfInFlight.get(recordId);
+    var p = (async function(){
+      try {
+        if (!_kfFieldPromise) _kfFieldPromise = pendingTbl.getField(keyframesFieldId);
+        var kfField = await _kfFieldPromise;
+        var urls = await kfField.getAttachmentUrls(recordId);
+        var clean = Array.isArray(urls)
+          ? urls.filter(function(u){ return typeof u === "string" && /^https?:\/\//i.test(u); })
+          : [];
+        _kfCache.set(recordId, clean);
+        try { console.log("[CaseReview] V3.3.2 keyframes resolved for", recordId, ":", clean.length, "URLs"); } catch(_){}
+        return clean;
+      } catch (e) {
+        try { console.warn("[CaseReview] V3.3.2 getAttachmentUrls failed for", recordId, ":", e && e.message); } catch(_){}
+        _kfCache.set(recordId, []);
+        return [];
+      } finally {
+        _kfInFlight.delete(recordId);
+      }
+    })();
+    _kfInFlight.set(recordId, p);
+    return p;
   }
 
-  return { atoms, atomsByDim, claims, cases, pending };
-}
 
-window.__loadAtomCorpus = loadAtomCorpus;
-</script>
+  // Distinct facets for filter dropdowns
+  const issuesSet = new Set();
+  cases.forEach(c => c.issue && issuesSet.add(c.issue));
+  rules.forEach(r => r.issue && issuesSet.add(r.issue));
+  ISSUE_FALLBACK.forEach(x => issuesSet.add(x));
+  const issues = Array.from(issuesSet).sort();
 
-<script>
-// =============================================================================
-// REACT UI — Phase 1 verification screen
-// =============================================================================
-const e = React.createElement;
+  const titlesByIssue = {}; // issue -> Set
+  const allTitlesSet = new Set();
+  const addTitle = (issue, t) => {
+    if (t == null) return;
+    let v;
+    if (typeof t === "string") v = t.trim();
+    else if (Array.isArray(t)) v = t.map(seg => (seg && (seg.text || seg.name)) || "").join("").trim();
+    else if (typeof t === "object") v = String(t.text || t.name || "").trim();
+    else v = String(t).trim();
+    if (!v) return;
+    allTitlesSet.add(v);
+    const key = (issue || "").trim() || "__any__";
+    (titlesByIssue[key] = titlesByIssue[key] || new Set()).add(v);
+  };
+  cases.forEach(c => addTitle(c.issue, c.policy_title));
+  rules.forEach(r => addTitle(r.issue, r.policy_title));
+  const titles = Array.from(allTitlesSet).sort();
+  const titlesByIssueArr = {};
+  Object.keys(titlesByIssue).forEach(k => titlesByIssueArr[k] = Array.from(titlesByIssue[k]).sort());
 
-function StatCard(props) {
-  return e("div", { className: "stat" },
-    e("div", { className: "n" }, String(props.n)),
-    e("div", { className: "l" }, props.label));
-}
-
-function App() {
-  const [state, setState] = React.useState({ phase: "idle", err: null, corpus: null });
-
-  const load = React.useCallback(async () => {
-    setState({ phase: "loading", err: null, corpus: null });
-    try {
-      const corpus = await window.__loadAtomCorpus();
-      setState({ phase: "loaded", err: null, corpus });
-    } catch (err) {
-      console.error("[AtomConsole] load failed:", err);
-      setState({ phase: "error", err: String(err && err.message || err), corpus: null });
+  try {
+    console.log("[CaseReview] corpus loaded:",
+      "cases=" + cases.length, "rules=" + rules.length, "pending=" + pending.length,
+      "issues=" + issues.length, "titles=" + titles.length,
+      "titlesByIssue keys=" + Object.keys(titlesByIssueArr).join(","));
+    if (pending.length > 0) {
+      console.log("[CaseReview] pending sample:", pending.slice(0, 3).map(p => p.source_video_id));
     }
-  }, []);
+  } catch (e) {}
 
-  React.useEffect(() => { load(); }, [load]);
+  return { cases, rules, pending, facets: { issues, titles, titlesByIssue: titlesByIssueArr }, resolveKeyframes };
+}
 
-  const c = state.corpus;
-  const dimCounts = c ? Object.keys(c.atomsByDim).map(d => ({ d, n: c.atomsByDim[d].length })) : [];
-  const outcomeCounts = {};
-  if (c) for (const cl of c.claims) outcomeCounts[cl.outcome] = (outcomeCounts[cl.outcome]||0) + 1;
+window.__loadCorpus = loadCorpusFromBitable;
+</script>
+<script>
+const { useState, useMemo, useEffect, useCallback  } = React;
+const h = React.createElement;
 
-  return e("div", { className: "shell" },
-    e("h1", null, "Atom Console"),
-    e("div", { className: "sub" },
-      e("span", { className: "pill" }, PLUGIN_VERSION),
-      e("span", null, "atom-rules-only — legacy Rule Book NOT loaded")
-    ),
-    e("div", { className: "row" },
-      e("button", { className: "primary", onClick: load, disabled: state.phase === "loading" },
-        state.phase === "loading" ? "Loading…" : "Reload corpus")
-    ),
-    state.phase === "error" && e("div", { className: "err" },
-      e("strong", null, "Load error: "), state.err),
-    state.phase === "loaded" && e("div", { className: "ok" },
-      "Loaded ", c.atoms.length, " atoms · ", c.claims.length, " active claims · ",
-      c.cases.length, " precedents · ", c.pending.length, " pending."),
+// ---------- BM25-lite retrieval ----------
+const STOPWORDS = new Set(("a an the and or of in on to for with by from at is are was were be been it this that these those as if but").split(" "));
 
-    c && e("div", { className: "stat-grid" },
-      e(StatCard, { n: c.atoms.length, label: "ATLAS atoms" }),
-      e(StatCard, { n: c.claims.length, label: "Active claims" }),
-      e(StatCard, { n: c.cases.length, label: "Precedents" }),
-      e(StatCard, { n: c.pending.length, label: "Pending cases" })
-    ),
+function tokenize(s) {
+  if (!s) return [];
+  return (s + "").toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter(w => w && w.length > 1 && !STOPWORDS.has(w));
+}
 
-    c && e("details", { open: false },
-      e("summary", null, "Atom counts by dimension"),
-      e("div", { className: "stat-grid" },
-        ...dimCounts.map(({d, n}) => e(StatCard, { key: d, n: n, label: "dim " + d })))
-    ),
-    c && e("details", null,
-      e("summary", null, "Claim outcome distribution"),
-      e("div", { className: "stat-grid" },
-        ...Object.keys(outcomeCounts).map(o =>
-          e(StatCard, { key: o, n: outcomeCounts[o], label: o })))
-    ),
-    c && e("details", null,
-      e("summary", null, "First 5 claims (raw, for sanity-check)"),
-      e("pre", null, JSON.stringify(c.claims.slice(0, 5), null, 2))
-    ),
-    c && e("details", null,
-      e("summary", null, "First 5 atoms"),
-      e("pre", null, JSON.stringify(c.atoms.slice(0, 5), null, 2))
-    ),
+// Field weights — visual > topic/caption > asr/ocr > rationale
+const FIELD_WEIGHTS = {
+  visual_summary: 2.0,
+  topic: 1.5,
+  caption_text: 1.5,
+  asr_text: 1.0,
+  ocr_text: 1.0,
+  rationale: 0.7,
+};
 
-    e("div", { className: "sub", style: { marginTop: 24 } },
-      "Phase 1 of 7 — loader + skeleton only. Phases 2–6 will add: AtomTagger UI, ",
-      "DeterministicEngine, hybrid retriever, payload v0.1 emit, 4-way verdict UI, ",
-      "and the ", e("code", null, "nsa-atom-precedent-review"), " specialist call.")
+function buildIndex(cases) {
+  // Build doc frequencies
+  const df = new Map();
+  const docs = cases.map(c => {
+    const fields = {};
+    const allTokens = new Set();
+    for (const [f, w] of Object.entries(FIELD_WEIGHTS)) {
+      const toks = tokenize(c[f] || "");
+      fields[f] = toks;
+      toks.forEach(t => allTokens.add(t));
+    }
+    allTokens.forEach(t => df.set(t, (df.get(t) || 0) + 1));
+    const totalLen = Object.values(fields).reduce((s, a) => s + a.length, 0);
+    return { record_id: c.record_id, fields, len: totalLen, raw: c };
+  });
+  const N = docs.length;
+  const avgLen = docs.reduce((s, d) => s + d.len, 0) / Math.max(N, 1);
+  return { docs, df, N, avgLen };
+}
+
+function score(idx, queryTokens, { issue, title } = {}) {
+  const { docs, df, N, avgLen } = idx;
+  const k1 = 1.5, b = 0.75;
+  const results = [];
+  for (const d of docs) {
+    if (issue && d.raw.issue !== issue) continue;
+    if (title && d.raw.policy_title !== title && !(Array.isArray(d.raw.policy_titles) && d.raw.policy_titles.indexOf(title) !== -1)) continue;
+    let s = 0;
+    for (const q of queryTokens) {
+      const n_q = df.get(q) || 0;
+      if (!n_q) continue;
+      const idf = Math.log(1 + (N - n_q + 0.5) / (n_q + 0.5));
+      // sum across weighted fields
+      for (const [f, w] of Object.entries(FIELD_WEIGHTS)) {
+        const toks = d.fields[f];
+        if (!toks || !toks.length) continue;
+        const tf = toks.filter(t => t === q).length;
+        if (!tf) continue;
+        const denom = tf + k1 * (1 - b + b * (d.len / (avgLen || 1)));
+        s += w * idf * ((tf * (k1 + 1)) / denom);
+      }
+    }
+    if (s > 0) results.push({ record_id: d.record_id, raw: d.raw, score: s });
+  }
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
+
+// Normalize score to similarity-like 0..1 for display
+function normScores(arr) {
+  if (!arr.length) return arr;
+  const max = arr[0].score || 1;
+  return arr.map(r => ({ ...r, sim: Math.min(1, r.score / max) }));
+}
+
+// ---------- Rule ranking (V3.0 — L1 / L2 / L3 aware) ----------
+const RULE_TYPE_L1 = "L1 — Threshold";
+const RULE_TYPE_L2 = "L2 — Exception";
+const RULE_TYPE_L3 = "L3 — Disambiguation";
+
+function _ruleTypeOf(r) {
+  // tolerate dash variants and missing field on legacy rows
+  const t = (r && r.rule_type ? String(r.rule_type) : "").replace(/\s+/g, " ").trim();
+  if (/^L1\b/i.test(t)) return RULE_TYPE_L1;
+  if (/^L2\b/i.test(t)) return RULE_TYPE_L2;
+  if (/^L3\b/i.test(t)) return RULE_TYPE_L3;
+  return ""; // unknown / legacy
+}
+
+function _bm25LiteScore(r, queryTokens) {
+  const hay = tokenize(
+    (r.rule_name || "") + " " +
+    (r.rule_description || "") + " " +
+    (r.rule_text || "") + " " +
+    (r.examples || "")
+  );
+  const set = new Set(hay);
+  let s = 0;
+  for (const q of queryTokens) if (set.has(q)) s += 1;
+  return s;
+}
+
+// ---------- V3.3 — Field-weighted BM25 + trigger-signal gating + precedent boost ----------
+//
+// Patch A: replaces the plain token-presence scorer above with a real BM25 over
+//          weighted rule fields (rule_name × 3.0, plain_rule_text × 2.0,
+//          example_cases × 1.5, plain_description × 1.0). IDF prevents common
+//          words ("body", "visible", "depicted") from dominating.
+//
+// Patch B: every L1 rule has a derived `trigger_signals` set extracted from
+//          rule_name + the first imperative sentence of plain_rule_text. An L1
+//          must have ≥1 trigger_signal token present in the candidate query OR
+//          score ≥ HARD_FLOOR to remain a candidate. Otherwise it is disqualified
+//          (score = 0). This prevents "fully clothed meme → ASA.L1.A penetrative
+//          sex" type retriever mismatches.
+//
+// Patch G: after precedents are retrieved, the top-3 precedents' rule_applied
+//          strings produce a per-rule prior boost. Rules whose rule_name shares
+//          tokens with top precedent rules get a small additive boost.
+
+const RULE_FIELD_WEIGHTS = {
+  rule_name: 3.0,
+  rule_text: 2.0,         // plain_rule_text — defines trigger conditions
+  examples: 1.5,          // example_cases
+  rule_description: 1.0,  // plain_description
+};
+
+const NSA_TRIGGER_STOP = new Set((
+  "flag pass when content rule rules visible visibly depict depicts depicted depicting " +
+  "show shows shown showing exposed exposing exposure visual visually any all of in on " +
+  "with by from at the and or for to is are be been it this that these those as if but " +
+  "scope policy criteria condition conditions intent context contextual one two three"
+).split(/\s+/).filter(Boolean));
+
+function _filterTriggerTokens(tokens) {
+  return tokens.filter(t => t.length >= 3 && !NSA_TRIGGER_STOP.has(t) && !STOPWORDS.has(t));
+}
+
+// Extract a small trigger_signals set per rule.
+//   • rule_name beyond the rule code (e.g., "AN.L1.A — Genitalia of all genders, visual depiction")
+//     → tokens AFTER the em-dash / hyphen.
+//   • plain_rule_text → first sentence (FLAG/PASS condition body).
+function _extractTriggerSignals(r) {
+  const name = r.rule_name || "";
+  const namePart = (name.split(/\s[—\-]\s/)[1] || name);
+  const ruleText = (r.rule_text || "").slice(0, 220);
+  const firstSentence = (ruleText.split(/[.;\n]/)[0] || "").trim();
+  const combined = (namePart + " " + firstSentence).toLowerCase();
+  const toks = _filterTriggerTokens(tokenize(combined));
+  return new Set(toks);
+}
+
+// Build a BM25 index over a (scoped) rule set.
+function buildRuleIndex(rules) {
+  const docs = (rules || []).map(r => {
+    const fields = {};
+    let totalLen = 0;
+    for (const f of Object.keys(RULE_FIELD_WEIGHTS)) {
+      const toks = tokenize(r[f] || "");
+      fields[f] = toks;
+      totalLen += toks.length;
+    }
+    const triggers = _extractTriggerSignals(r);
+    return { rule: r, fields, len: totalLen, triggers };
+  });
+  const N = docs.length;
+  const df = new Map();
+  for (const d of docs) {
+    const seen = new Set();
+    for (const f of Object.keys(RULE_FIELD_WEIGHTS)) {
+      for (const t of d.fields[f]) {
+        if (seen.has(t)) continue;
+        seen.add(t);
+        df.set(t, (df.get(t) || 0) + 1);
+      }
+    }
+  }
+  const avgLen = docs.reduce((s, d) => s + d.len, 0) / Math.max(N, 1);
+  return { docs, df, N, avgLen };
+}
+
+function _bm25RuleScore(d, queryTokens, df, N, avgLen) {
+  const k1 = 1.5, b = 0.75;
+  let s = 0;
+  for (const q of queryTokens) {
+    const n_q = df.get(q) || 0;
+    if (!n_q) continue;
+    const idf = Math.log(1 + (N - n_q + 0.5) / (n_q + 0.5));
+    for (const [f, w] of Object.entries(RULE_FIELD_WEIGHTS)) {
+      const toks = d.fields[f];
+      if (!toks || !toks.length) continue;
+      let tf = 0;
+      for (const t of toks) if (t === q) tf++;
+      if (!tf) continue;
+      const denom = tf + k1 * (1 - b + b * (d.len / (avgLen || 1)));
+      s += w * idf * ((tf * (k1 + 1)) / denom);
+    }
+  }
+  return s;
+}
+
+function _triggerHitCount(triggers, queryTokenSet) {
+  let n = 0;
+  for (const t of triggers) if (queryTokenSet.has(t)) n++;
+  return n;
+}
+
+// Patch G — precedent-rule boost.
+const PRECEDENT_RULE_BOOST_WEIGHT = 1.5;
+function buildPrecedentRuleBoost(precedents, topN) {
+  const out = new Map(); // token → weight
+  if (!Array.isArray(precedents) || !precedents.length) return out;
+  const slice = precedents.slice(0, topN || 3);
+  for (let i = 0; i < slice.length; i++) {
+    const p = slice[i];
+    const ra = (p && p.raw && (p.raw.rule_applied || p.raw.rule_name)) || "";
+    if (!ra) continue;
+    const namePart = (String(ra).split(/\s[—\-]\s/)[1] || ra);
+    const toks = _filterTriggerTokens(tokenize(namePart));
+    const w = (slice.length - i) / slice.length;
+    for (const t of toks) out.set(t, (out.get(t) || 0) + w);
+  }
+  return out;
+}
+
+function _precedentBoost(rule, boostMap) {
+  if (!boostMap || !boostMap.size) return 0;
+  const namePart = ((rule.rule_name || "").split(/\s[—\-]\s/)[1] || rule.rule_name || "");
+  const toks = _filterTriggerTokens(tokenize(namePart));
+  let s = 0;
+  for (const t of toks) {
+    const w = boostMap.get(t);
+    if (w) s += w;
+  }
+  return s * PRECEDENT_RULE_BOOST_WEIGHT;
+}
+
+// Backwards-compatible: returns ALL rules scored, sorted by score desc.
+// V3.0 callers should prefer rankCandidateL1 / rankL3 / rankL2 below.
+function rankRules(rules, queryTokens) {
+  const scored = (rules || []).map(r => {
+    const score = _bm25LiteScore(r, queryTokens);
+    return Object.assign({}, r, { score });
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored;
+}
+
+// V3.0: candidate slot — top-1 over L1 — Threshold rules only.
+// Returns { top, all } where `all` is the full L1 ranking (used by the disambiguation trigger).
+//
+// V3.3 changes (Patches A + B + G):
+//   • Field-weighted BM25 with IDF (was: token-presence count).
+//   • Trigger-signal gate: an L1 with 0 trigger_signal hits in the query is
+//     disqualified (score → 0) UNLESS the BM25 score is ≥ HARD_FLOOR (rare —
+//     means the rule body itself overlaps strongly with the candidate).
+//   • Precedent-rule boost: rules whose rule_name shares tokens with the top
+//     precedents' rule_applied get an additive boost (precedents > rulebook).
+//
+// Legacy callers may invoke without the optional args; behaviour falls back
+// to BM25 without precedent boost.
+const L1_HARD_FLOOR = 4.0; // BM25 score above which an L1 may pass even with 0 trigger hits
+function rankCandidateL1(rules, queryTokens, opts) {
+  opts = opts || {};
+  const precedentBoostMap = opts.precedentBoostMap || null;
+  const l1 = (rules || []).filter(r => _ruleTypeOf(r) === RULE_TYPE_L1);
+  // Legacy rows without rule_type still need to be reachable — fall back to "everything" only when ZERO L1 rules exist in scope.
+  const pool = l1.length ? l1 : (rules || []);
+  const idx = buildRuleIndex(pool);
+  const qSet = new Set(queryTokens);
+  const scored = idx.docs.map(d => {
+    const bm25 = _bm25RuleScore(d, queryTokens, idx.df, idx.N, idx.avgLen);
+    const triggerHits = _triggerHitCount(d.triggers, qSet);
+    const boost = _precedentBoost(d.rule, precedentBoostMap);
+    // Patch B gate: zero trigger hits AND BM25 below hard floor → disqualified.
+    const gated = (triggerHits === 0 && bm25 < L1_HARD_FLOOR);
+    const score = gated ? 0 : bm25 + boost;
+    return Object.assign({}, d.rule, {
+      score,
+      _bm25: bm25,
+      _trigger_hits: triggerHits,
+      _precedent_boost: boost,
+      _gated: gated,
+      _trigger_signals: Array.from(d.triggers).slice(0, 12),
+    });
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const top = (scored[0] && scored[0].score > 0) ? scored[0] : null;
+  return { top, all: scored, isLegacyFallback: !l1.length };
+}
+
+// V3.0: disambiguation slot — fires when L1 candidates from ≥2 distinct policy_titles
+// score above the floor. Returns L3 rules whose policy_titles array intersects the
+// dominant + runner-up policies.
+const DISAMBIGUATION_SCORE_FLOOR = 1; // at least one query token must hit
+const DISAMBIGUATION_MIN_RUNNERUP_RATIO = 0.6; // runner-up must be ≥60% of leader
+
+function findDisambiguationCandidates(rules, l1Ranking) {
+  const out = [];
+  if (Array.isArray(l1Ranking) && l1Ranking.length >= 2) {
+    const leader = l1Ranking[0];
+    if (leader && leader.score >= DISAMBIGUATION_SCORE_FLOOR) {
+      // Walk the ranking and collect distinct policies above the floor with score≥ratio*leader.
+      const policiesHit = new Set();
+      if (leader.policy_title) policiesHit.add(leader.policy_title);
+      for (let i = 1; i < l1Ranking.length; i++) {
+        const r = l1Ranking[i];
+        if (!r || r.score < DISAMBIGUATION_SCORE_FLOOR) break;
+        if (r.score < leader.score * DISAMBIGUATION_MIN_RUNNERUP_RATIO) break;
+        if (r.policy_title) policiesHit.add(r.policy_title);
+      }
+      if (policiesHit.size >= 2) {
+        const policies = Array.from(policiesHit);
+        for (const r of rules || []) {
+          if (_ruleTypeOf(r) !== RULE_TYPE_L3) continue;
+          const titles = Array.isArray(r.policy_titles) ? r.policy_titles : (r.policy_title ? [r.policy_title] : []);
+          const hits = policies.filter(p => titles.indexOf(p) !== -1).length;
+          if (hits >= 2) {
+            out.push(Object.assign({}, r, {
+              trigger_reason:
+                "Retriever surfaced L1 candidates from ≥2 policies (" + policies.join(" + ") +
+                "); this L3 covers " + hits + " of them."
+            }));
+          }
+        }
+      }
+    }
+  }
+  // V0.4: ALWAYS inject the 4 NSA-family shared L3 rules. The skill needs them to
+  // route correctly even when the L1 ranking does not span ≥2 policies (e.g. a
+  // pure AN candidate must still see L3.SHARED.StaticNudityVsSexualActivity).
+  const issueIsNsa = (rules || []).some(r => r.issue === "NSA");
+  if (issueIsNsa) {
+    const seen = new Set(out.map(r => r.rule_name));
+    for (const r of (rules || [])) {
+      if (r.issue !== "NSA") continue;
+      if (_ruleTypeOf(r) !== RULE_TYPE_L3) continue;
+      if (!_matchesSharedKey(r.rule_name, NSA_SHARED_L3)) continue;
+      if (seen.has(r.rule_name)) continue;
+      out.push(Object.assign({}, r, {
+        trigger_reason: "Shared NSA L3 always injected for NSA candidates (V0.3 collapsed-tier rulebook)."
+      }));
+      seen.add(r.rule_name);
+    }
+  }
+  // Limit to top-7 to keep the prompt compact (4 NSA shared + up to 3 contextual).
+  return out.slice(0, 7);
+}
+
+// V3.0: exception slot — fires when the candidate query matches vertical-specific
+// exemption signal patterns. Returns L2 rules owned by the candidate's policy.
+const EXEMPTION_SIGNAL_PATTERNS = {
+  // generic patterns — apply across verticals
+  generic: [
+    { name: "educational",  re: /\b(educational|education|sex[-\s]?ed|pedagog|curriculum|lecture|psa|public service announcement|awareness)\b/i },
+    { name: "news",         re: /\b(news|journalism|reporter|reporting|broadcast|documentary|press)\b/i },
+    { name: "fictional",    re: /\b(fiction(al)?|scripted|film|movie|tv show|series|drama|set|production credit|cosplay)\b/i },
+    { name: "artistic",     re: /\b(art(istic|work)?|gallery|museum|painting|sculpture|fine art|theatre|performance art)\b/i },
+    { name: "animation",    re: /\b(animation|animated|cartoon|3d render|cgi|illustrated|drawn)\b/i },
+    { name: "fitness",      re: /\b(workout|gym|fitness|yoga|training|athletic|sport|exercise|cross[-\s]?fit)\b/i },
+    { name: "medical",      re: /\b(medical|clinical|hospital|clinic|doctor|nurse|surgeon|anatomic|health[-\s]?care)\b/i },
+    { name: "humor",        re: /\b(satir(e|ical)|parody|comedic|comedy|skit|slapstick|joke|meme)\b/i },
+    { name: "counter_speech", re: /\b(counter[-\s]?speech|denounce|condemn|anti[-\s]?bully|anti[-\s]?hate|allyship|stand against)\b/i },
+    { name: "recovery",     re: /\b(recovery|in recovery|sober|harm reduction|survivor|support group|mental health awareness|treatment)\b/i },
+  ],
+};
+
+function detectExemptionSignals(queryText) {
+  if (!queryText) return [];
+  const hits = [];
+  for (const p of EXEMPTION_SIGNAL_PATTERNS.generic) {
+    if (p.re.test(queryText)) hits.push(p.name);
+  }
+  return hits;
+}
+
+function findExceptionCandidates(rules, candidatePolicy, queryText) {
+  const signals = detectExemptionSignals(queryText);
+  const out = [];
+  if (signals.length) {
+    for (const r of rules || []) {
+      if (_ruleTypeOf(r) !== RULE_TYPE_L2) continue;
+      // L2 must be owned by the candidate's policy (or be the universal Public Value gate L2.01)
+      const titles = Array.isArray(r.policy_titles) ? r.policy_titles : (r.policy_title ? [r.policy_title] : []);
+      const isUniversal = /public value|p1|p2|p3|p4|^l2\.01\b/i.test(r.rule_name || "") || /public value/i.test(r.rule_text || "");
+      const ownsPolicy = candidatePolicy && titles.indexOf(candidatePolicy) !== -1;
+      if (!isUniversal && !ownsPolicy) continue;
+      // Score against the same query — keeps deterministic ordering.
+      const ruleHay = ((r.rule_name || "") + " " + (r.rule_text || "") + " " + (r.examples || "")).toLowerCase();
+      const matched = signals.filter(s => ruleHay.indexOf(s.replace(/_/g, " ")) !== -1 || ruleHay.indexOf(s) !== -1);
+      if (!matched.length && !isUniversal) continue;
+      out.push(Object.assign({}, r, {
+        trigger_reason:
+          "Candidate signals match exemption pattern(s): " +
+          (matched.length ? matched.join(", ") : "universal L2 gate (Public Value Parameters)") + "."
+      }));
+    }
+  }
+  // V0.4: ALWAYS inject NSA shared L0 gate + shared L2 exceptions for the NSA family.
+  // V0.3 collapses these into one record each; the skill needs them in companion_rules
+  // even if the signal-matcher missed and even if signals.length === 0.
+  const issueIsNsa = (rules || []).some(r => r.issue === "NSA");
+  if (issueIsNsa) {
+    const sharedKeys = NSA_SHARED_L0.concat(NSA_SHARED_L2);
+    const seen = new Set(out.map(r => r.rule_name));
+    for (const r of (rules || [])) {
+      if (r.issue !== "NSA") continue;
+      if (!_matchesSharedKey(r.rule_name, sharedKeys)) continue;
+      if (seen.has(r.rule_name)) continue;
+      out.push(Object.assign({}, r, {
+        trigger_reason: "Shared NSA " + (_ruleTypeOf(r) === "L0 — Shared" || /^L0/.test(r.rule_name) ? "L0 gate" : "L2 exception") +
+                        " always injected for NSA candidates (V0.3 collapsed-tier rulebook)."
+      }));
+      seen.add(r.rule_name);
+    }
+  }
+  return out.slice(0, 12);
+}
+
+// ---------- Mira payload builder (V0.4 — V0.3 rulebook aligned) ----------
+const PAYLOAD_VERSION = "v0.4";
+const ISSUE_DEFAULT = "";
+
+// V0.4: shared NSA rules that always accompany an NSA candidate, regardless of
+// the candidate's specific policy_title. The V0.3 rulebook collapse stores these
+// once across the whole NSA family — the retriever must inject them into
+// companion_rules so the skill can apply them without freelancing.
+const NSA_SHARED_L0 = ["L0.01"];
+const NSA_SHARED_L2 = [
+  "L2.EDUCATIONAL", "L2.SCIENTIFIC", "L2.DOCUMENTARY",
+  "L2.ARTISTIC",    "L2.FICTIONAL",  "L2.HUMOUR_GENERAL",
+  "L2.HUMOUR_STAND_UP_ONLY", "L2.COMPILATION_OVERRIDE"
+];
+const NSA_SHARED_L3 = [
+  "L3.SHARED.AdultVsYouth",
+  "L3.SHARED.AnimationVsLiveAction",
+  "L3.SHARED.StaticNudityVsSexualActivity",
+  "L3.SHARED.VisualVsVerbal"
+];
+
+function _matchesSharedKey(ruleName, keys) {
+  if (!ruleName) return false;
+  for (const k of keys) {
+    if (ruleName.indexOf(k) !== -1) return true;
+  }
+  return false;
+}
+
+function truncStr(t, n) {
+  t = (t || "").toString();
+  if (t.length <= n) return t;
+  return t.slice(0, n) + "…";
+}
+
+function _ruleToPayloadCompanion(r) {
+  if (!r) return null;
+  return {
+    rule_id: r.rule_id || r.record_id || "",
+    rule_name: r.rule_name || "",
+    rule_type: _ruleTypeOf(r) || (r.rule_type || ""),
+    policy_title: Array.isArray(r.policy_titles) && r.policy_titles.length
+      ? r.policy_titles
+      : (r.policy_title ? [r.policy_title] : []),
+    tier_version: r.tier_version || "V0.3",
+    plain_description: truncStr(r.rule_description || "", 1200),
+    plain_rule_text:   truncStr(r.rule_text || "", 1200),
+    rule_text: truncStr(r.rule_text, 1200),
+    trigger_reason: r.trigger_reason || ""
+  };
+}
+
+function buildPayload({ inputs, precedents, topRule, companionRules, issue }) {
+  const issueType = issue || inputs.issue || ISSUE_DEFAULT || "(any)";
+  const candidate = {
+    item_id: inputs.item_id || "",
+    topic: inputs.topic || "",
+    visual_summary: inputs.visual_summary || "",
+    asr_text: inputs.asr_text || "",
+    ocr_text: inputs.ocr_text || "",
+    caption_text: inputs.caption_text || "",
+  };
+  if (inputs.image_urls && inputs.image_urls.length) {
+    candidate.images_attached_count = inputs.image_urls.length;
+    candidate.images_note = inputs.image_urls.length + " keyframe(s) attached as image(s) in this chat message. Analyze them visually for first_pass/second_pass reasoning.";
+  }
+  const precs = (precedents || []).map((p, i) => {
+    const r = p.raw || {};
+    return {
+      rank: i + 1,
+      case_id: r.case_id || r.record_id || "",
+      policy_code: r.policy_code || "",
+      policy_title: r.policy_title || "",
+      tier_version: r.tier_version || r.rule_version || "",
+      topic: r.topic || "",
+      decision: r.decision || "",
+      status: r.status || "",
+      sim_score: Number((p.sim || 0).toFixed(3)),
+      visual_summary: truncStr(r.visual_summary, 600),
+      asr_text: truncStr(r.asr_text, 400),
+      ocr_text: truncStr(r.ocr_text, 200),
+      caption_text: truncStr(r.caption_text, 200),
+      rationale: truncStr(r.rationale, 500),
+      key_signals: Array.isArray(r.key_signals) ? r.key_signals : (r.key_signals ? [String(r.key_signals)] : []),
+      rule_applied: (r.rule_applied_id || "") + (r.rule_applied_name ? " " + r.rule_applied_name : ""),
+    };
+  });
+  // V3.0: candidate_rule is ALWAYS L1 (the picker enforces this); rule_type included.
+  const rule = topRule ? {
+    rule_id: topRule.rule_id || topRule.record_id || "",
+    rule_name: topRule.rule_name || "",
+    rule_type: _ruleTypeOf(topRule) || RULE_TYPE_L1,
+    issue: topRule.issue || "",
+    policy_area: topRule.issue || "",
+    // V0.4: emit as ARRAY to match V0.3 MultiSelect schema; companion rules already do this.
+    policy_title: Array.isArray(topRule.policy_titles) && topRule.policy_titles.length
+      ? topRule.policy_titles
+      : (topRule.policy_title ? [topRule.policy_title] : []),
+    tier_version: topRule.tier_version || "V0.3",
+    // V0.4: surface both V0.3 plain-text fields. The skill reads plain_rule_text for
+    // L1 conditions + [Gated by:] markers, and scans plain_description for the
+    // appended "— PASS examples (L1 criteria not met) —" block.
+    plain_description: truncStr(topRule.rule_description || "", 1500),
+    plain_rule_text:   truncStr(topRule.rule_text || "", 1500),
+    rule_text: truncStr(topRule.rule_text, 1500),
+    examples: truncStr(topRule.examples, 600),
+  } : null;
+  // V3.0: companion_rules — disambiguation (L3) and exception (L2). Empty arrays are
+  // semantically meaningful: skills will flip the corresponding policy_gap.* flag.
+  const cr = companionRules || {};
+  const companion = {
+    disambiguation: (cr.disambiguation || []).map(_ruleToPayloadCompanion).filter(Boolean),
+    exception:      (cr.exception      || []).map(_ruleToPayloadCompanion).filter(Boolean),
+  };
+  return {
+    schema: "case-review-payload",
+    version: PAYLOAD_VERSION,
+    issue: issueType,
+    policy_area: issueType,                    // V3.0 alias matching skill input contract
+    candidate,
+    precedents: precs,
+    candidate_rule: rule,
+    companion_rules: companion,
+  };
+}
+
+function tryParseReasonedJson(raw) {
+  if (!raw) return null;
+  let txt = raw.trim();
+  // Strip ```json / ``` fences if model added them anyway
+  txt = txt.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  // Find the outermost JSON object
+  const start = txt.indexOf("{");
+  const end = txt.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) return null;
+  const candidate = txt.slice(start, end + 1);
+  try {
+    return JSON.parse(candidate);
+  } catch (e) {
+    return null;
+  }
+}
+
+// ---------- V2.7.0: in-memory log ring buffer (for Diagnostics view) ----------
+const LOG_RING_CAP = 200;
+const LOG_RING = [];
+(function installLogTap(){
+  if (window.__caseReviewLogTapInstalled) return;
+  window.__caseReviewLogTapInstalled = true;
+  const wrap = (level, orig) => function(){
+    try {
+      const args = Array.from(arguments);
+      const text = args.map(a => {
+        if (a == null) return String(a);
+        if (typeof a === "string") return a;
+        try { return JSON.stringify(a); } catch(_) { return String(a); }
+      }).join(" ");
+      LOG_RING.push({ ts: Date.now(), level, text });
+      if (LOG_RING.length > LOG_RING_CAP) LOG_RING.splice(0, LOG_RING.length - LOG_RING_CAP);
+    } catch(_) {}
+    try { return orig.apply(console, arguments); } catch(_) {}
+  };
+  const o = { log: console.log, warn: console.warn, error: console.error, info: console.info };
+  console.log   = wrap("log",   o.log);
+  console.warn  = wrap("warn",  o.warn);
+  console.error = wrap("error", o.error);
+  console.info  = wrap("info",  o.info);
+})();
+window.__getLogRing = () => LOG_RING.slice();
+
+
+// V2.7.1: clipboard helper that survives Bitable's Permissions-Policy block.
+// Tries navigator.clipboard.writeText, then falls back to execCommand('copy')
+// on a hidden textarea. Returns a Promise<boolean>.
+async function safeCopy(text) {
+  text = String(text == null ? "" : text);
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {
+    // permissions-policy block or transient — fall through to legacy path
+    try { console.warn("[CaseReview] clipboard API blocked; using execCommand fallback:", e && e.message || e); } catch(_){}
+  }
+  try {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "0";
+    ta.style.left = "0";
+    ta.style.opacity = "0";
+    ta.style.pointerEvents = "none";
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch(_) { ok = false; }
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (e) {
+    try { console.error("[CaseReview] execCommand copy fallback failed:", e && e.message || e); } catch(_){}
+    return false;
+  }
+}
+window.__safeCopy = safeCopy;
+// ---------- V3.1.0: Copy keyframes as composite image to clipboard ----------
+async function copyKeyframesToClipboard(urls) {
+  if (!urls || !urls.length) return false;
+  try {
+    // Load all images
+    const imgs = await Promise.all(urls.slice(0, 12).map(url => new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.referrerPolicy = "no-referrer";
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    })));
+    const loaded = imgs.filter(Boolean);
+    if (!loaded.length) { console.warn("[CaseReview] No images loaded for composite"); return false; }
+
+    // Layout: 2-column grid
+    const cols = Math.min(2, loaded.length);
+    const rows = Math.ceil(loaded.length / cols);
+    const cellW = 400;
+    const cellH = 300;
+    const gap = 4;
+    const canvasW = cols * cellW + (cols - 1) * gap;
+    const canvasH = rows * cellH + (rows - 1) * gap;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#181715";
+    ctx.fillRect(0, 0, canvasW, canvasH);
+
+    loaded.forEach((img, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = col * (cellW + gap);
+      const y = row * (cellH + gap);
+      // Fit image within cell maintaining aspect ratio
+      const scale = Math.min(cellW / img.naturalWidth, cellH / img.naturalHeight);
+      const dw = img.naturalWidth * scale;
+      const dh = img.naturalHeight * scale;
+      const dx = x + (cellW - dw) / 2;
+      const dy = y + (cellH - dh) / 2;
+      ctx.drawImage(img, dx, dy, dw, dh);
+      // Frame number label
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(x, y, 28, 20);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 11px Inter, sans-serif";
+      ctx.fillText("#" + (i + 1), x + 4, y + 14);
+    });
+
+    // Try modern clipboard API
+    const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
+    if (!blob) return false;
+    try {
+      await navigator.clipboard.write([new ClipboardItem({"image/png": blob})]);
+      console.log("[CaseReview] Keyframes composite copied to clipboard (" + loaded.length + " frames)");
+      return true;
+    } catch (clipErr) {
+      // Clipboard API blocked — open in new tab as fallback
+      console.warn("[CaseReview] Clipboard image write blocked, opening in tab:", clipErr.message);
+      const dataUrl = canvas.toDataURL("image/png");
+      const w = window.open("");
+      if (w) {
+        w.document.write("<title>Keyframes — copy this image</title><body style=\"margin:0;background:#181715\"><img src=\"" + dataUrl + "\" style=\"max-width:100%\"><p style=\"color:#fff;font:13px sans-serif;padding:8px\">Right-click → Copy image, then paste into Mira chat.</p></body>");
+      }
+      return false;
+    }
+  } catch (e) {
+    console.error("[CaseReview] copyKeyframesToClipboard error:", e);
+    return false;
+  }
+}
+window.__copyKeyframes = copyKeyframesToClipboard;
+
+
+// ---------- Components ----------
+function Tag({ kind, children }) {
+  return h("span", { className: "tag " + (kind || "") }, children);
+}
+
+// ---------- Carousel (V2.7.0) ----------
+function Carousel({ urls }) {
+  const [i, setI] = useState(0);
+  const [err, setErr] = useState({});
+  const list = Array.isArray(urls) ? urls : [];
+  if (!list.length) return null;
+  const cur = list[Math.min(i, list.length - 1)];
+  const onPrev = () => setI(x => Math.max(0, x - 1));
+  const onNext = () => setI(x => Math.min(list.length - 1, x + 1));
+  const onErr = () => setErr(e => Object.assign({}, e, { [i]: true }));
+  return h("div", { className: "carousel" },
+    h("div", { className: "car-frame" },
+      err[i]
+        ? h("div", { className: "car-fallback" }, "Image blocked by CDN. ",
+            h("a", { href: cur, target: "_blank", rel: "noopener noreferrer", style: { color: "var(--primary)" } }, "Open in tab ↗"))
+        : h("img", {
+            src: cur,
+            alt: "keyframe " + (i + 1),
+            referrerPolicy: "no-referrer",
+            loading: i === 0 ? "eager" : "lazy",
+            onError: onErr,
+          }),
+      h("div", { className: "car-counter" }, (i + 1) + " / " + list.length),
+      list.length > 1 && h("div", { className: "car-controls" },
+        h("button", { className: "car-btn", onClick: onPrev, disabled: i === 0, "aria-label": "previous" }, "‹"),
+        h("button", { className: "car-btn", onClick: onNext, disabled: i === list.length - 1, "aria-label": "next" }, "›"),
+      ),
+    ),
+    list.length > 1 && h("div", { className: "car-dots" },
+      list.map((_, j) => h("button", {
+        key: j,
+        className: "car-dot " + (j === i ? "active" : ""),
+        onClick: () => setI(j),
+        "aria-label": "frame " + (j + 1),
+      })),
+    ),
+    h("a", { className: "car-open", href: cur, target: "_blank", rel: "noopener noreferrer" },
+      "Open frame " + (i + 1) + " in new tab ↗"),
   );
 }
 
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(e(App));
-</script>
+// ---------- Section (collapsible) ----------
+function Section({ title, defaultOpen, badge, children }) {
+  const [open, setOpen] = useState(defaultOpen !== false);
+  return h("div", { className: "section " + (open ? "open" : "collapsed") },
+    h("div", { className: "sec-head", onClick: () => setOpen(o => !o) },
+      h("span", null, title, badge != null && " ", badge != null && h("span", { className: "tag sim", style: { marginLeft: 4 } }, badge)),
+      h("span", { className: "chev" }, "▶"),
+    ),
+    h("div", { className: "sec-body" }, children),
+  );
+}
 
+// ---------- Banners / Draft decision (compact) ----------
+function ConsistencyBanner({ precedents }) {
+  if (!precedents.length) {
+    return h("div", { className: "banner no-match" }, "No matching precedent. Treat as candidate grey case.");
+  }
+  const flags = precedents.filter(p => p.raw.decision === "FLAG").length;
+  const passes = precedents.filter(p => p.raw.decision === "PASS").length;
+  const total = flags + passes;
+  if (total === 0) return h("div", { className: "banner no-match" }, "Precedents found but no decisions recorded.");
+  if (flags === 0 || passes === 0) {
+    return h("div", { className: "banner aligned" },
+      "✓ Aligned — " + total + " precedent" + (total > 1 ? "s" : "") + " all " + (flags > 0 ? "FLAG" : "PASS"));
+  }
+  return h("div", { className: "banner mixed" },
+    "⚠ Mixed — " + flags + " FLAG / " + passes + " PASS in top-" + precedents.length + ". Grey case.");
+}
+
+function DecisionBox({ precedents, topRule }) {
+  if (!precedents.length) {
+    return h("div", { className: "decision-box" },
+      h("h4", null, "Draft decision"),
+      h("div", { className: "d-row" }, h("b", null, "decision"), h("span", { className: "muted" }, "no precedent — author new rule")),
+      h("div", { className: "d-row" }, h("b", null, "case_type"), h(Tag, { kind: "grey" }, "grey (novel)")),
+    );
+  }
+  const flags = precedents.filter(p => p.raw.decision === "FLAG").length;
+  const passes = precedents.filter(p => p.raw.decision === "PASS").length;
+  const total = flags + passes;
+  const mixed = flags > 0 && passes > 0;
+  const decision = flags > passes ? "FLAG" : (passes > flags ? "PASS" : "—");
+  const caseType = mixed ? "grey" : "routine";
+  const topSim = precedents[0].sim;
+  const confidence = topSim > 0.7 && !mixed ? "high" : topSim > 0.4 || mixed ? "medium" : "low";
+  return h("div", { className: "decision-box" },
+    h("h4", null, "Draft decision"),
+    h("div", { className: "d-row" }, h("b", null, "decision"),
+      h(Tag, { kind: decision === "FLAG" ? "flag" : "pass" }, decision),
+      h("span", { className: "muted mono" }, "(" + Math.max(flags, passes) + "/" + total + ")")),
+    h("div", { className: "d-row" }, h("b", null, "type"),
+      h(Tag, { kind: caseType === "grey" ? "grey" : "routine" }, caseType)),
+    h("div", { className: "d-row" }, h("b", null, "rule"),
+      topRule ? h("span", { className: "mono" }, topRule.rule_name) : h("span", { className: "muted" }, "no rule")),
+    h("div", { className: "d-row" }, h("b", null, "conf."),
+      h("span", null, confidence, " ", h("span", { className: "muted mono" }, "(sim " + topSim.toFixed(2) + ")"))),
+  );
+}
+
+// ---------- Precedent (accordion item) ----------
+function PrecedentAccordion({ r, rank, defaultOpen }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  const d = r.raw;
+  const decKind = d.decision === "FLAG" ? "flag" : d.decision === "PASS" ? "pass" : "sim";
+  return h("div", { className: "prec-item " + (open ? "open" : "") },
+    h("div", { className: "prec-head", onClick: () => setOpen(o => !o) },
+      h("span", { className: "muted mono", style: { width: 18 } }, "#" + rank),
+      h(Tag, { kind: decKind }, d.decision || "—"),
+      h("span", { className: "prec-id" }, (d.case_id || d.record_id || "").slice(0, 18)),
+      h(Tag, { kind: "sim" }, "sim " + r.sim.toFixed(2)),
+      h("span", { className: "muted mono" }, open ? "▾" : "▸"),
+    ),
+    h("div", { className: "prec-body" },
+      h("dl", { className: "dl-stack" },
+        d.policy_title && h(React.Fragment, null, h("dt", null, "policy"), h("dd", null, d.policy_title)),
+        d.rule_applied_name && h(React.Fragment, null, h("dt", null, "rule"), h("dd", null, d.rule_applied_name)),
+        d.status && h(React.Fragment, null, h("dt", null, "status"), h("dd", null, d.status)),
+        d.reference_weight && h(React.Fragment, null, h("dt", null, "weight"), h("dd", null, String(d.reference_weight))),
+        d.key_signals && d.key_signals.length > 0 && h(React.Fragment, null,
+          h("dt", null, "signals"),
+          h("dd", null, d.key_signals.slice(0, 8).map((s, i) => h(Tag, { key: i, kind: "sim" }, s)).reduce((a, b) => [a, " ", b])),
+        ),
+      ),
+      d.visual_summary && h("details", { open: true }, h("summary", null, "visual_summary"), h("pre", null, d.visual_summary)),
+      d.asr_text && h("details", null, h("summary", null, "asr_text"), h("pre", null, d.asr_text)),
+      d.ocr_text && h("details", null, h("summary", null, "ocr_text"), h("pre", null, d.ocr_text)),
+      d.caption_text && h("details", null, h("summary", null, "caption_text"), h("pre", null, d.caption_text)),
+      d.rationale && h("details", { open: true }, h("summary", null, "rationale"), h("pre", null, d.rationale)),
+    ),
+  );
+}
+
+// ---------- Rule card (compact) ----------
+function RuleCard({ rule }) {
+  if (!rule) return null;
+  return h("div", { className: "card" },
+    h("h4", null, rule.rule_name || "(no rule_name)"),
+    h("div", { className: "kvp" },
+      h(Tag, { kind: "linked" }, rule.issue || "—"),
+      " · status: ", rule.status || "—"),
+    rule.rule_description && h("div", { className: "kvp" }, rule.rule_description),
+    rule.rule_text && h("details", null, h("summary", null, "rule_text"), h("pre", null, rule.rule_text)),
+    rule.examples && h("details", null, h("summary", null, "examples"), h("pre", null, rule.examples)),
+  );
+}
+
+// ---------- Reasoned verdict (compact) ----------
+function _chainRoleKind(role) {
+  const r = (role || "").toLowerCase();
+  if (r === "triggering")    return "flag";
+  if (r === "exempting")     return "pass";
+  if (r === "disambiguating") return "sim";
+  return "muted";
+}
+function _gapDots(gap) {
+  if (!gap || typeof gap !== "object") return null;
+  const items = [
+    ["precedent",      gap.precedent_gap],
+    ["disambiguation", gap.disambiguation_gap],
+    ["exception",      gap.exception_gap],
+  ];
+  return h("div", { className: "kvp", style: { display: "flex", gap: 6, alignItems: "center" } },
+    h("span", { className: "muted mono" }, "policy gap:"),
+    items.map(([label, on], i) => h("span", {
+      key: i,
+      title: label + (on ? " gap" : " ok"),
+      style: {
+        display: "inline-flex", alignItems: "center", gap: 4,
+        padding: "1px 6px", borderRadius: 10,
+        background: on ? "rgba(198,69,69,0.12)" : "rgba(93,184,114,0.12)",
+        color: on ? "var(--error)" : "var(--success)",
+        fontSize: "var(--fs-mono)", fontFamily: "var(--mono)"
+      }
+    }, (on ? "● " : "○ ") + label))
+  );
+}
+
+function ReasonedVerdict({ v }) {
+  if (!v) return null;
+  const dec = (v.draft_decision || "").toUpperCase();
+  const decKind = dec === "FLAG" ? "flag" : dec === "PASS" ? "pass" : "sim";
+  const sevKind = (v.severity === "SEVERE") ? "flag" : (v.severity === "LIGHT") ? "sim" : "muted";
+  // V3.0: derive legacy boolean if not provided
+  const gap = v.policy_gap && typeof v.policy_gap === "object" ? v.policy_gap : null;
+  const gapAny = gap ? !!(gap.precedent_gap || gap.disambiguation_gap || gap.exception_gap)
+                     : !!v.policy_gap_flag;
+  return h("div", { className: "section open", style: { borderColor: "var(--primary)" } },
+    h("div", { className: "sec-head", style: { background: "var(--surface-card)" } },
+      h("span", null, "🧠 Reasoned verdict"),
+      h("span", { className: "chev" }, ""),
+    ),
+    h("div", { className: "sec-body" },
+      h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 } },
+        h(Tag, { kind: decKind }, dec || "?"),
+        v.policy_title && h(Tag, { kind: "sim" }, v.policy_title),
+        v.severity && h(Tag, { kind: sevKind }, "sev: " + v.severity),
+        (typeof v.confidence === "number") && h(Tag, { kind: v.confidence >= 7 ? "pass" : v.confidence <= 4 ? "flag" : "sim" },
+          "conf " + v.confidence + "/10"),
+        v.grey && h(Tag, { kind: "flag" }, "GREY"),
+        gapAny && h(Tag, { kind: "flag" }, "POLICY GAP"),
+      ),
+
+      // V3.0: applied_rule_chain — render L1 → L3 → L2 with role badges. Falls back to legacy applied_rule.
+      Array.isArray(v.applied_rule_chain) && v.applied_rule_chain.length > 0
+        ? h("div", { style: { marginTop: 4, marginBottom: 8 } },
+            h("div", { className: "muted mono", style: { marginBottom: 4 } }, "APPLIED RULE CHAIN"),
+            h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } },
+              v.applied_rule_chain.map((node, i) => h(React.Fragment, { key: i },
+                i > 0 && h("span", { className: "muted mono", style: { fontSize: "var(--fs-mono)" } }, "→"),
+                h("span", { style: { display: "inline-flex", flexDirection: "column", gap: 2 } },
+                  h(Tag, { kind: _chainRoleKind(node.role) },
+                    (node.rule_type || "").replace(" — ", " ") + " · " + (node.role || "")),
+                  h("span", { className: "mono", style: { fontSize: "var(--fs-mono)" } },
+                    node.rule_name || node.rule_id || "—"),
+                  node.note && h("span", { className: "muted", style: { fontSize: "var(--fs-mono)", maxWidth: 280 } },
+                    node.note)
+                )
+              )))
+          )
+        : (v.applied_rule && (typeof v.applied_rule === "object"
+            // V3.2: nsa-precedent-review v3.2+ emits applied_rule as object with trigger_status.
+            ? (function() {
+                const ar = v.applied_rule;
+                const ts = (ar.trigger_status || "").toLowerCase();
+                const tsMap = {
+                  "met": { kind: "flag", label: "TRIGGERED" },
+                  "partially_met": { kind: "sim", label: "PARTIALLY MET" },
+                  "not_met": { kind: "pass", label: "NOT TRIGGERED" },
+                  "matched_pass_example": { kind: "pass", label: "PASS EXAMPLE MATCHED" },
+                  "gated_out": { kind: "pass", label: "GATED OUT" },
+                  "not_evaluated": { kind: "sim", label: "NOT EVALUATED" }
+                };
+                const tsBadge = tsMap[ts];
+                return h("div", { style: { marginTop: 4, marginBottom: 8 } },
+                  h("div", { className: "muted mono", style: { marginBottom: 4 } }, "APPLIED RULE"),
+                  h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } },
+                    ar.rule_type && h(Tag, { kind: "sim" },
+                      String(ar.rule_type).replace(" — ", " ")),
+                    tsBadge && h(Tag, { kind: tsBadge.kind }, tsBadge.label),
+                    ar.tier_version && h("span", { className: "muted mono", style: { fontSize: "var(--fs-mono)" } },
+                      ar.tier_version)
+                  ),
+                  h("div", { className: "mono", style: { marginTop: 4, fontSize: "var(--fs-mono)" } },
+                    ar.rule_name || ar.rule_id || "—")
+                );
+              })()
+            : h("dl", { className: "dl-stack" },
+                h("dt", null, "applied rule"), h("dd", null, v.applied_rule),
+                v.rule_rationale && h("dt", null, "rationale"),
+                v.rule_rationale && h("dd", null, v.rule_rationale),
+              ))),
+
+      // V3.0: structured policy_gap dots
+      gap && _gapDots(gap),
+
+      v.rule_rationale && Array.isArray(v.applied_rule_chain) && v.applied_rule_chain.length > 0 &&
+        h("div", { className: "kvp", style: { marginTop: 6 } },
+          h("span", { className: "muted mono" }, "rationale: "),
+          h("span", null, v.rule_rationale)),
+
+      Array.isArray(v.precedent_analysis) && v.precedent_analysis.length > 0 && h("div", { style: { marginTop: 10 } },
+        h("div", { className: "muted mono", style: { marginBottom: 4 } }, "PRECEDENT ANALYSIS"),
+        v.precedent_analysis.map((pa, i) => {
+          const ap = (pa.applicability || "").toUpperCase();
+          const apKind = ap === "APPLICABLE" ? "pass" : ap === "PARTIAL" ? "sim" : "flag";
+          return h("div", { key: i, className: "card", style: { padding: 8, marginBottom: 6 } },
+            h("div", { className: "kvp" },
+              h(Tag, { kind: apKind }, ap || "?"), " ",
+              h("span", { className: "mono" }, pa.case_id || "?"), " · ",
+              h("span", null, pa.decision_alignment || "—")),
+            (Array.isArray(pa.shared_signals) && pa.shared_signals.length > 0) && h("div", { className: "kvp" },
+              h("span", { className: "muted" }, "shared: "), pa.shared_signals.join(", ")),
+            (Array.isArray(pa.conflicting_signals) && pa.conflicting_signals.length > 0) && h("div", { className: "kvp" },
+              h("span", { className: "muted" }, "conflict: "), pa.conflicting_signals.join(", ")),
+          );
+        }),
+      ),
+
+      v.reasoning && h("div", { style: { marginTop: 10 } },
+        v.reasoning.visual_analysis && h("details", { open: true },
+          h("summary", null, "[VISUAL]"), h("pre", null, v.reasoning.visual_analysis)),
+        v.reasoning.text_analysis && h("details", null,
+          h("summary", null, "[TEXT]"), h("pre", null, v.reasoning.text_analysis)),
+        v.reasoning.disambiguation && h("details", { open: true },
+          h("summary", null, "[DISAMBIGUATION]"), h("pre", null, v.reasoning.disambiguation)),
+        v.reasoning.first_pass && h("details", { open: true },
+          h("summary", null, "[FIRST PASS]"), h("pre", null, v.reasoning.first_pass)),
+        (v.reasoning.prosecutor_case && !v.reasoning.first_pass) && h("details", { open: true },
+          h("summary", null, "[PROSECUTOR]"), h("pre", null, v.reasoning.prosecutor_case)),
+        v.reasoning.second_pass && h("details", { open: true },
+          h("summary", null, "[SECOND PASS]"), h("pre", null, v.reasoning.second_pass)),
+        (v.reasoning.defense_review && !v.reasoning.second_pass) && h("details", { open: true },
+          h("summary", null, "[DEFENSE]"), h("pre", null, v.reasoning.defense_review)),
+        v.reasoning.verdict && h("details", { open: true },
+          h("summary", null, "[VERDICT]"), h("pre", null, v.reasoning.verdict)),
+      ),
+
+      Array.isArray(v.watch_outs) && v.watch_outs.length > 0 && h("div", { style: { marginTop: 8 } },
+        h("div", { className: "muted mono" }, "WATCH-OUTS"),
+        h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 } },
+          v.watch_outs.map((w, i) => h(Tag, { key: i, kind: "sim" }, w)))),
+
+      v.next_step && h("div", { className: "kvp", style: { marginTop: 8 } },
+        h("span", { className: "muted" }, "next: "), h("b", null, v.next_step)),
+    ),
+  );
+}
+
+// ---------- App shell ----------
+function App() {
+  const [corpus, setCorpus] = useState(null);
+  const [corpusError, setCorpusError] = useState("");
+  const [corpusLoading, setCorpusLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+  const reload = useCallback(() => { setCorpus(null); setCorpusError(""); setCorpusLoading(true); setReloadKey(k => k + 1); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const c = await window.__loadCorpus();
+        if (!cancelled) { setCorpus(c); setCorpusLoading(false); }
+      } catch (e) {
+        if (!cancelled) { setCorpusError(String(e && e.message || e)); setCorpusLoading(false); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [reloadKey]);
+  if (corpusLoading) {
+    return h("div", { className: "shell" },
+      h("div", { className: "shell-header" }, h("div", { className: "title" }, "Case Review")),
+      h("div", { className: "shell-body" }, h("div", { className: "muted", style: { padding: 8 } }, "Loading corpus from Base…")),
+      h("div", { className: "shell-footer" }, h("span", null, "loading…"), h("span", { className: "stamp" }, "build V3.3.2")),
+    );
+  }
+  if (corpusError) {
+    return h("div", { className: "shell" },
+      h("div", { className: "shell-header" }, h("div", { className: "title" }, "Case Review")),
+      h("div", { className: "shell-body" },
+        h("div", { className: "banner no-match" }, "Failed to load corpus: ", corpusError),
+        h("div", { className: "hint" }, "Open this plugin from inside a Base whose tables match the configured names."),
+        h("button", { className: "secondary", onClick: reload, style: { marginTop: 12 } }, "Retry"),
+      ),
+      h("div", { className: "shell-footer" }, h("span", null, "error"), h("span", { className: "stamp" }, "build V3.3.2")),
+    );
+  }
+  if (!corpus) return null;
+  return h(MainApp, { corpus, onReloadCorpus: reload });
+}
+
+function MainApp({ corpus, onReloadCorpus }) {
+  // ---- Navigation state ----
+  const [view, setView] = useState("queue"); // 'queue' | 'case' | 'diagnostics'
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // ---- Case form state (inputs) ----
+  const [inputs, setInputs] = useState({
+    item_id: "",
+    visual_summary: "",
+    asr_text: "",
+    ocr_text: "",
+    caption_text: "",
+    image_urls: [],
+    issue: "",
+    title: "",
+    k: 5,
+  });
+  const [pendingHit, setPendingHit] = useState("");
+
+  // ---- Review result + verdict state ----
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [payloadJson, setPayloadJson] = useState("");
+  const [reasoningCopied, setReasoningCopied] = useState(false);
+  const [keyframesCopied, setKeyframesCopied] = useState(false);
+  const [reasonedRaw, setReasonedRaw] = useState("");
+  const [reasonedVerdict, setReasonedVerdict] = useState(null);
+  const [reasonedError, setReasonedError] = useState("");
+  const [showHandoff, setShowHandoff] = useState(false);
+
+  // ---- Verbose logging toggle (session-only) ----
+  const [verbose, setVerbose] = useState(false);
+
+  // ---- BM25 index ----
+  const index = useMemo(() => buildIndex(corpus.cases), [corpus]);
+  const pendingMap = useMemo(() => {
+    const m = new Map();
+    (corpus.pending || []).forEach(p => { if (p.source_video_id) m.set(p.source_video_id, p); });
+    return m;
+  }, [corpus]);
+  const stats = { cases: corpus.cases.length, rules: corpus.rules.length, pending: pendingMap.size };
+  const facets = corpus.facets || { issues: [], titles: [], titlesByIssue: {} };
+  const titleOptions = useMemo(() => {
+    const all = (facets.titles || []).slice();
+    if (inputs.issue && facets.titlesByIssue && Array.isArray(facets.titlesByIssue[inputs.issue])
+        && facets.titlesByIssue[inputs.issue].length > 0) {
+      return facets.titlesByIssue[inputs.issue];
+    }
+    return all;
+  }, [inputs.issue, facets]);
+
+  // ---- Pre-fill from a Pending Cases row ----
+  const applyPending = useCallback((p) => {
+    if (!p) return;
+    setInputs({
+      item_id: p.source_video_id || "",
+      visual_summary: p.visual_summary || "",
+      asr_text: p.asr_text || "",
+      ocr_text: p.ocr_text || "",
+      caption_text: p.caption_text || "",
+      image_urls: (p.image_urls && p.image_urls.length) ? p.image_urls : [],
+      issue: p.issue || "",
+      title: p.policy_title || "",
+      k: 5,
+    });
+    setPendingHit(p.source_video_id || "");
+    setResult(null);
+    setReasonedRaw(""); setReasonedVerdict(null); setReasonedError("");
+    setPayloadJson(""); setReasoningCopied(false);
+    setShowHandoff(false);
+    setView("case");
+
+    // V3.3.2: Lazy keyframes fetch — only when this case is selected, not at corpus load.
+    if (p.record_id && (!p.image_urls || !p.image_urls.length) && typeof corpus.resolveKeyframes === "function") {
+      const targetRecId = p.record_id;
+      const targetSvid = p.source_video_id || "";
+      corpus.resolveKeyframes(targetRecId).then((urls) => {
+        if (Array.isArray(urls) && urls.length) {
+          // Cache on the pending object so re-select is instant.
+          p.image_urls = urls;
+          // Only update inputs if user is still on this case.
+          setInputs(prev => (prev && prev.item_id === targetSvid)
+            ? Object.assign({}, prev, { image_urls: urls })
+            : prev);
+        }
+      }).catch(() => {});
+    }
+  }, [corpus]);
+
+  const onPickQueueItem = useCallback((sourceVideoId) => {
+    const p = pendingMap.get(sourceVideoId);
+    if (p) applyPending(p);
+  }, [pendingMap, applyPending]);
+
+  const onRun = useCallback(() => {
+    setLoading(true);
+    const queryText = [
+      inputs.visual_summary, inputs.asr_text, inputs.ocr_text, inputs.caption_text,
+    ].filter(Boolean).join(" ");
+    const qtok = tokenize(queryText);
+    setTimeout(() => {
+      let ranked = score(index, qtok, { issue: inputs.issue || null, title: inputs.title || null });
+      if (inputs.item_id) {
+        ranked = ranked.filter(r => r.raw.case_id !== inputs.item_id && r.raw.record_id !== inputs.item_id);
+      }
+      ranked = normScores(ranked.slice(0, inputs.k));
+
+      // V3.0: scope rules to current vertical, then split into L1 candidate / L3 disambiguation / L2 exception.
+      const scopedRules = corpus.rules.filter(r =>
+        (!inputs.issue || r.issue === inputs.issue) &&
+        // policy_title filter only applies when set on input AND the rule carries a matching tag.
+        // For L3 rules, the tag is in policy_titles[] (multi); for L1/L2, in policy_title (scalar).
+        (!inputs.title || r.policy_title === inputs.title || (Array.isArray(r.policy_titles) && r.policy_titles.indexOf(inputs.title) !== -1))
+      );
+      const { top: topL1, all: l1Ranking, isLegacyFallback } = rankCandidateL1(scopedRules, qtok, {
+        precedentBoostMap: buildPrecedentRuleBoost(ranked, 3),
+      });
+      const candidatePolicy = topL1 ? topL1.policy_title : null;
+      const disambiguation = findDisambiguationCandidates(scopedRules, l1Ranking);
+      const exceptionRules = findExceptionCandidates(scopedRules, candidatePolicy, queryText);
+
+      try {
+        console.log("[CaseReview] V3.3 retrieval:",
+          "L1=" + (topL1 ? (topL1.rule_name + " score=" + topL1.score.toFixed(2) + " bm25=" + (topL1._bm25||0).toFixed(2) + " hits=" + (topL1._trigger_hits||0) + " boost=" + (topL1._precedent_boost||0).toFixed(2)) : "—") + (isLegacyFallback ? " (legacy fallback)" : ""),
+          "L3=" + disambiguation.length,
+          "L2=" + exceptionRules.length);
+      } catch(_) {}
+
+      setResult({
+        precedents: ranked,
+        topRule: topL1,
+        companionRules: { disambiguation, exception: exceptionRules },
+        l1Ranking,
+        query: queryText
+      });
+      setLoading(false);
+    }, 20);
+  }, [inputs, index, corpus]);
+
+  const onBuildPayload = useCallback(() => {
+    if (!result) return;
+    const payload = buildPayload({
+      inputs,
+      precedents: result.precedents,
+      topRule: result.topRule,
+      companionRules: result.companionRules,
+      issue: inputs.issue,
+    });
+    const txt = JSON.stringify(payload, null, 2);
+    setPayloadJson(txt);
+    setReasoningCopied(false);
+    safeCopy(txt).then(ok => setReasoningCopied(!!ok));
+  }, [result, inputs]);
+
+  const onCopyKeyframes = useCallback(() => {
+    const imgUrls = Array.isArray(inputs.image_urls) ? inputs.image_urls : [];
+    if (!imgUrls.length) return;
+    setKeyframesCopied(false);
+    copyKeyframesToClipboard(imgUrls).then(ok => setKeyframesCopied(!!ok));
+  }, [inputs.image_urls]);
+
+  const onParseReply = useCallback(() => {
+    setReasonedError("");
+    const parsed = tryParseReasonedJson(reasonedRaw);
+    if (!parsed) { setReasonedError("Could not parse JSON. Make sure the reply contains a single {…} object."); setReasonedVerdict(null); return; }
+    setReasonedVerdict(parsed);
+  }, [reasonedRaw]);
+
+  // ---- Header ----
+  const headerTitle = view === "queue" ? "Pending queue"
+                    : view === "case" ? (inputs.item_id || "New case")
+                    : "Diagnostics";
+  const showBack = view !== "queue";
+  const onBack = () => {
+    if (view === "case") setView("queue");
+    else if (view === "diagnostics") setView("queue");
+  };
+
+  const headerEl = h("div", { className: "shell-header" },
+    showBack && h("button", { className: "nav-btn", onClick: onBack, "aria-label": "back", title: "Back" }, "‹"),
+    h("div", { className: "title" }, headerTitle),
+    h("div", { className: "menu-wrap" },
+      h("button", { className: "nav-btn", onClick: () => setMenuOpen(o => !o), "aria-label": "menu" }, "⋯"),
+      menuOpen && h("div", { className: "menu-pop", onMouseLeave: () => setMenuOpen(false) },
+        h("button", { onClick: () => { setMenuOpen(false); setView("queue"); } }, "Queue"),
+        h("button", { onClick: () => { setMenuOpen(false); setView("diagnostics"); } }, "Diagnostics"),
+        h("button", { onClick: () => { setMenuOpen(false); onReloadCorpus(); } }, "Refresh corpus"),
+      ),
+    ),
+  );
+
+  const footerEl = h("div", { className: "shell-footer" },
+    h("span", null,
+      "cases ", stats.cases, " · rules ", stats.rules,
+      stats.pending != null ? " · pending " + stats.pending : ""),
+    h("span", { className: "stamp", onClick: () => setView("diagnostics"), title: "Open diagnostics" },
+      "build V3.3.2"),
+  );
+
+  // ---- Views ----
+  if (view === "queue") {
+    return h("div", { className: "shell" },
+      headerEl,
+      h("div", { className: "shell-body no-actionbar" },
+        h(QueueView, { pending: corpus.pending || [], onPick: onPickQueueItem, onNewCase: () => { applyPending({ source_video_id: "" }); } }),
+      ),
+      footerEl,
+    );
+  }
+  if (view === "diagnostics") {
+    return h("div", { className: "shell" },
+      headerEl,
+      h("div", { className: "shell-body no-actionbar" },
+        h(DiagnosticsView, {
+          stats, corpus, verbose, setVerbose,
+          onReloadCorpus,
+        }),
+      ),
+      footerEl,
+    );
+  }
+  // Case view
+  return h("div", { className: "shell" },
+    headerEl,
+    h("div", { className: "shell-body" },
+      h(CaseView, {
+        inputs, setInputs, pendingHit,
+        result, loading, onRun,
+        facets, titleOptions,
+        onBuildPayload, payloadJson, reasoningCopied,
+        keyframesCopied, onCopyKeyframes,
+        reasonedRaw, setReasonedRaw, reasonedVerdict, reasonedError, onParseReply,
+        showHandoff, setShowHandoff,
+      }),
+    ),
+    h(CaseActionBar, { result, loading, onRun, hasInputs: !!(inputs.visual_summary || inputs.asr_text || inputs.ocr_text || inputs.caption_text) }),
+    footerEl,
+  );
+}
+
+// ---------- QueueView ----------
+function QueueView({ pending, onPick, onNewCase }) {
+  const [q, setQ] = useState("");
+  const list = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const arr = (pending || []).slice();
+    if (!s) return arr;
+    return arr.filter(p =>
+      (p.source_video_id || "").toLowerCase().includes(s)
+      || (p.policy_title || "").toLowerCase().includes(s)
+      || (p.issue || "").toLowerCase().includes(s)
+    );
+  }, [pending, q]);
+  return h(React.Fragment, null,
+    h("div", { className: "row tight", style: { marginBottom: 10 } },
+      h("input", {
+        type: "text", value: q,
+        placeholder: "Filter by ID, issue, or policy…",
+        onChange: e => setQ(e.target.value),
+      }),
+      h("button", { className: "secondary", style: { flex: "0 0 auto" }, onClick: onNewCase, title: "Start a blank case" }, "+ New"),
+    ),
+    list.length === 0
+      ? h("div", { className: "muted", style: { padding: "24px 8px", textAlign: "center" } },
+          (pending && pending.length) ? "No matches." : "No pending cases.")
+      : h("div", { className: "queue-list" },
+          list.map(p => h(QueueCard, { key: p.record_id || p.source_video_id, p, onPick: () => onPick(p.source_video_id) })),
+        ),
+  );
+}
+
+function QueueCard({ p, onPick }) {
+  const thumb = (p.image_urls && p.image_urls[0]) || "";
+  const [err, setErr] = useState(false);
+  return h("div", { className: "queue-card", onClick: onPick, role: "button", tabIndex: 0,
+      onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick(); } } },
+    h("div", { className: "qc-thumb" },
+      thumb && !err
+        ? h("img", { src: thumb, alt: "", referrerPolicy: "no-referrer", loading: "lazy", onError: () => setErr(true) })
+        : h("span", null, (p.image_urls && p.image_urls.length) ? "🖼" : "—"),
+    ),
+    h("div", { className: "qc-meta" },
+      h("div", { className: "qc-id" }, p.source_video_id || "(no id)"),
+      p.policy_title && h("div", { className: "qc-title" }, p.policy_title),
+      h("div", { className: "qc-row" },
+        p.issue && h(Tag, { kind: "linked" }, p.issue),
+        h(Tag, { kind: "pending" }, "pending"),
+        p.image_urls && p.image_urls.length > 0 && h("span", { className: "qc-age" }, p.image_urls.length + " img"),
+      ),
+    ),
+  );
+}
+
+// ---------- CaseView ----------
+function CaseView({
+  inputs, setInputs, pendingHit,
+  result, loading, onRun,
+  facets, titleOptions,
+  onBuildPayload, payloadJson, reasoningCopied,
+  keyframesCopied, onCopyKeyframes,
+  reasonedRaw, setReasonedRaw, reasonedVerdict, reasonedError, onParseReply,
+  showHandoff, setShowHandoff,
+}) {
+  const setF = (k, v) => setInputs(Object.assign({}, inputs, { [k]: v }));
+  const urls = Array.isArray(inputs.image_urls) ? inputs.image_urls : [];
+
+  return h(React.Fragment, null,
+    // Candidate inputs section
+    h(Section, { title: "Candidate", defaultOpen: true },
+      pendingHit && h("div", { className: "hint", style: { color: "var(--primary)", fontWeight: 500, marginBottom: 6 } },
+        "↳ Loaded from Pending · " + pendingHit),
+      h("label", null, "Source video ID"),
+      h("input", { type: "text", value: inputs.item_id, placeholder: "source_video_id…",
+        onChange: e => setF("item_id", e.target.value) }),
+      h("label", null, "Visual summary"),
+      h("textarea", { rows: 4, value: inputs.visual_summary, onChange: e => setF("visual_summary", e.target.value),
+        placeholder: "What the frames show" }),
+      h("label", null, "ASR (speech)"),
+      h("textarea", { rows: 2, value: inputs.asr_text, onChange: e => setF("asr_text", e.target.value) }),
+      h("label", null, "OCR (on-screen text)"),
+      h("textarea", { rows: 2, value: inputs.ocr_text, onChange: e => setF("ocr_text", e.target.value) }),
+      h("label", null, "Caption"),
+      h("textarea", { rows: 2, value: inputs.caption_text, onChange: e => setF("caption_text", e.target.value) }),
+      h("div", { className: "row tight", style: { marginTop: 8 } },
+        h("div", null,
+          h("label", null, "Issue"),
+          h("select", { value: inputs.issue || "", onChange: e => setF("issue", e.target.value) },
+            h("option", { value: "" }, "(any)"),
+            (facets.issues || []).map(x => h("option", { key: x, value: x }, x)),
+          ),
+        ),
+        h("div", null,
+          h("label", null, "Top-k"),
+          h("select", { value: inputs.k, onChange: e => setF("k", parseInt(e.target.value, 10)) },
+            [3, 5, 8, 10].map(k => h("option", { key: k, value: k }, k)),
+          ),
+        ),
+      ),
+      h("label", null, "Policy title"),
+      h("select", { value: inputs.title || "", onChange: e => setF("title", e.target.value) },
+        h("option", { value: "" }, "(any)"),
+        titleOptions.map(x => h("option", { key: x, value: x }, x)),
+      ),
+    ),
+
+    // Carousel section
+    urls.length > 0 && h(Section, { title: "Keyframes", defaultOpen: true, badge: urls.length },
+      h(Carousel, { urls }),
+    ),
+
+    // Result sections — only after Run
+    result && h(React.Fragment, null,
+      h(ConsistencyBanner, { precedents: result.precedents }),
+
+      h(Section, { title: "Top precedents", defaultOpen: false, badge: result.precedents.length },
+        result.precedents.length === 0
+          ? h("div", { className: "muted" }, "No candidates scored > 0.")
+          : h("div", { className: "prec-list" },
+              result.precedents.map((r, i) =>
+                h(PrecedentAccordion, { key: r.record_id, r, rank: i + 1, defaultOpen: i === 0 })),
+            ),
+      ),
+
+      h(Section, { title: "Top rule", defaultOpen: false },
+        result.topRule
+          ? h(React.Fragment, null,
+              // V3.3 Patch D — low-confidence banner. The retriever's score is shown
+              // alongside a quality verdict so reviewers know when to manually re-pick.
+              (function(){
+                const tr = result.topRule || {};
+                const score = typeof tr.score === "number" ? tr.score : 0;
+                const hits = tr._trigger_hits || 0;
+                let kind, label, msg;
+                if (score >= 8 && hits >= 1) {
+                  kind = "pass"; label = "STRONG MATCH"; msg = "Retriever confidence high — proceed.";
+                } else if (score >= 4 && hits >= 1) {
+                  kind = "sim"; label = "MODERATE MATCH"; msg = "Retriever confidence moderate — verify the rule before sending.";
+                } else if (score > 0) {
+                  kind = "flag"; label = "WEAK MATCH"; msg = "Retriever score is low (" + score.toFixed(2) + ", " + hits + " trigger hit" + (hits===1?"":"s") + "). Consider manually picking the candidate rule, or expect the reviewer to escalate.";
+                } else {
+                  kind = "flag"; label = "NO MATCH"; msg = "No L1 rule cleared the trigger gate. The skill will fall back to its embedded rulebook with confidence capped at 6.";
+                }
+                return h("div", { className: "card", style: { padding: 8, marginBottom: 8, display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" } },
+                  h(Tag, { kind }, label),
+                  h("span", { style: { flex: 1, minWidth: 200 } }, msg),
+                  h("span", { className: "muted mono", style: { fontSize: "var(--fs-mono)" } },
+                    "score " + score.toFixed(2) + " · bm25 " + ((tr._bm25||0).toFixed(2)) + " · trig " + hits + " · prec+" + ((tr._precedent_boost||0).toFixed(2))
+                  )
+                );
+              })(),
+              h(RuleCard, { rule: result.topRule })
+            )
+          : h("div", { className: "muted" }, "No rule matched — possible policy gap."),
+      ),
+
+      // Mira hand-off (collapsed by default)
+      h(Section, { title: "Send to Mira reviewer", defaultOpen: showHandoff },
+        h("div", { className: "hint", style: { marginBottom: 8 } },
+          "Copy payload JSON + keyframe images into Mira chat (two pastes), then paste the reply below."),
+        h("div", { className: "row tight", style: { marginBottom: 8, flexWrap: "wrap", gap: "6px" } },
+          h("button", { className: "secondary", onClick: onBuildPayload },
+            reasoningCopied ? "✓ JSON copied" : "1. Copy JSON"),
+          h("button", { className: "secondary", onClick: onCopyKeyframes, disabled: !urls.length },
+            keyframesCopied ? ("✓ " + urls.length + " frames copied") : ("2. Copy keyframes (" + urls.length + ")")),
+          payloadJson && h("button", { className: "secondary tiny", onClick: () => { safeCopy(payloadJson); } }, "Re-copy JSON"),
+        ),
+        payloadJson && h("div", { className: "muted mono", style: { marginBottom: 8 } },
+          payloadJson.length.toLocaleString() + " chars · " + PAYLOAD_VERSION + (urls.length ? " · paste JSON first, then paste keyframes" : "")),
+        h("label", null, "Paste Mira's JSON reply"),
+        h("textarea", {
+          rows: 6, value: reasonedRaw,
+          placeholder: '{"draft_decision":"...", "confidence":7, ...}',
+          onChange: e => setReasonedRaw(e.target.value),
+          style: { fontFamily: "var(--mono)", fontSize: "var(--fs-mono)" },
+        }),
+        h("div", { className: "row tight", style: { marginTop: 6 } },
+          h("button", { onClick: onParseReply, disabled: !reasonedRaw.trim(), className: "secondary" }, "Render verdict"),
+          reasonedRaw && h("button", { className: "secondary tiny",
+            onClick: () => { setReasonedRaw(""); } }, "Clear"),
+        ),
+        reasonedError && h("div", { style: { color: "var(--error)", fontSize: "var(--fs-meta)", marginTop: 6 } }, reasonedError),
+      ),
+
+      reasonedVerdict && h(ReasonedVerdict, { v: reasonedVerdict }),
+    ),
+
+    !result && h("div", { className: "hint", style: { padding: "10px 4px" } },
+      "Tap “Run review” below to retrieve precedents and draft a decision."),
+  );
+}
+
+// ---------- Sticky action bar for Case view ----------
+function CaseActionBar({ result, loading, onRun, hasInputs }) {
+  return h("div", { className: "actionbar" },
+    h("div", { className: "grow" },
+      h("div", { className: "summary" },
+        result
+          ? h(React.Fragment, null,
+              h("b", null, result.precedents.length + " precedents"),
+              result.topRule ? " · top rule: " + (result.topRule.rule_name || "—") : " · no rule")
+          : h("span", null, hasInputs ? "Ready to run" : "Fill candidate inputs to enable")),
+    ),
+    h("button", { onClick: onRun, disabled: loading || !hasInputs, style: { flex: "0 0 auto" } },
+      loading ? "Running…" : (result ? "Re-run" : "Run review")),
+  );
+}
+
+// ---------- DiagnosticsView ----------
+function DiagnosticsView({ stats, corpus, verbose, setVerbose, onReloadCorpus }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1500);
+    return () => clearInterval(id);
+  }, []);
+  const logs = (window.__getLogRing ? window.__getLogRing() : []).slice(-80).reverse();
+  const fmtTs = (ms) => {
+    const d = new Date(ms);
+    const pad = (n) => (n < 10 ? "0" : "") + n;
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  };
+  const copyStamp = () => { safeCopy("V3.3.2"); };
+  const samplePending = (corpus.pending || []).slice(0, 5).map(p => ({
+    source_video_id: p.source_video_id || "",
+    issue: p.issue || "",
+    image_urls: (p.image_urls || []).length,
+  }));
+  return h(React.Fragment, null,
+    h(Section, { title: "Build", defaultOpen: true },
+      h("dl", { className: "dl-stack" },
+        h("dt", null, "version"), h("dd", null, h("span", { className: "mono", style: { cursor: "pointer" }, onClick: copyStamp, title: "Copy" }, "V3.3.2")),
+        h("dt", null, "host"), h("dd", { className: "mono" }, location.host || "(none)"),
+        h("dt", null, "pathname"), h("dd", { className: "mono" }, location.pathname || "/"),
+      ),
+    ),
+    h(Section, { title: "Corpus", defaultOpen: true },
+      h("dl", { className: "dl-stack" },
+        h("dt", null, "cases"), h("dd", null, String(stats.cases)),
+        h("dt", null, "rules"), h("dd", null, String(stats.rules)),
+        h("dt", null, "pending"), h("dd", null, String(stats.pending)),
+        h("dt", null, "issues"), h("dd", null, (corpus.facets && corpus.facets.issues || []).length + ""),
+        h("dt", null, "titles"), h("dd", null, (corpus.facets && corpus.facets.titles || []).length + ""),
+      ),
+      h("div", { className: "row tight", style: { marginTop: 8 } },
+        h("button", { className: "secondary", onClick: onReloadCorpus }, "Refresh corpus"),
+      ),
+    ),
+    h(Section, { title: "Pending sample", defaultOpen: false, badge: samplePending.length },
+      samplePending.length === 0
+        ? h("div", { className: "muted" }, "No pending rows.")
+        : h("table", { className: "diag-table" },
+            h("thead", null, h("tr", null, h("th", null, "ID"), h("th", null, "Issue"), h("th", null, "imgs"))),
+            h("tbody", null, samplePending.map((s, i) => h("tr", { key: i },
+              h("td", { className: "mono" }, s.source_video_id),
+              h("td", null, s.issue),
+              h("td", null, s.image_urls)))),
+          ),
+    ),
+    h(Section, { title: "Verbose logging", defaultOpen: false },
+      h("div", { className: "hint" }, "Session-only toggle (cleared on reload). Currently a placeholder — most modules log unconditionally."),
+      h("label", { style: { display: "flex", gap: 6, alignItems: "center", marginTop: 6 } },
+        h("input", { type: "checkbox", checked: !!verbose, onChange: e => setVerbose(e.target.checked) }),
+        h("span", null, verbose ? "Verbose ON" : "Verbose OFF"),
+      ),
+    ),
+    h(Section, { title: "Recent logs (last " + logs.length + ")", defaultOpen: true },
+      logs.length === 0
+        ? h("div", { className: "muted" }, "No logs yet.")
+        : h("div", { className: "log-list" },
+            logs.map((l, i) => h("div", { key: i, className: "log-row " + (l.level === "error" ? "error" : l.level === "warn" ? "warn" : "") },
+              h("span", { className: "log-ts" }, fmtTs(l.ts)),
+              h("span", null, l.text)))),
+    ),
+    h(Section, { title: "Design doc", defaultOpen: false },
+      h("div", { className: "hint" }, "Open the design doc in a new tab (host filesystem)."),
+      h("a", { href: "https://github.com/lichaowu/CaseReview", target: "_blank", rel: "noopener noreferrer", style: { color: "var(--primary)", fontSize: "var(--fs-meta)" } }, "github.com/lichaowu/CaseReview ↗"),
+    ),
+  );
+}
+
+try {
+        ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+      } catch (e) {
+        console.error("[CaseReview] React render failed:", e);
+        document.getElementById("root").innerHTML = '<pre style="padding:24px;color:#d1242f;font:12px ui-monospace,monospace;white-space:pre-wrap;">React render error: ' + (e && e.stack || e) + '</pre>';
+      }
+</script>
 </body>
 </html>
