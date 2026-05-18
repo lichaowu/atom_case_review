@@ -134,7 +134,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.3.4-phase3";
+const PLUGIN_VERSION = "atom-mvp v0.4.0-phase4";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -284,6 +284,148 @@ const DIM_NAMES = {
   }
 
   root.AtomEngine = { evaluate: evaluate, gateHit: gateHit, applyLifts: applyLifts, SEVERITY: SEVERITY };
+})(window);
+</script>
+
+<script>
+// =============================================================================
+// RETRIEVER (Phase 4) — inlined verbatim from retriever.js
+// Hybrid: 0.6 * BM25(text) + 0.4 * AtomJaccard(atoms, dim-weighted)
+// =============================================================================
+(function (root) {
+  "use strict";
+
+  var STOPWORDS = new Set([
+    "a","an","and","are","as","at","be","by","for","from","has","have","he","in",
+    "is","it","its","of","on","or","that","the","this","to","was","were","will","with",
+    "she","they","them","their","there","these","those","but","not","no","so","if",
+    "i","you","we","our","us","me","my","your","do","does","did","just","can","could",
+    "would","should","also","into","over","under","up","down","out","then","than"
+  ]);
+  function tokenize(text) {
+    if (!text) return [];
+    return String(text).toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .split(/\s+/)
+      .filter(function (t) { return t && t.length > 1 && !STOPWORDS.has(t); });
+  }
+  function caseText(c) {
+    return [c.visual_summary, c.asr_text, c.ocr_text, c.caption_text].filter(Boolean).join(" \n ");
+  }
+
+  var BM25_K1 = 1.5, BM25_B = 0.75;
+  function buildBm25Index(cases) {
+    var docs = [], docLens = [], df = Object.create(null), totalLen = 0;
+    for (var i = 0; i < cases.length; i++) {
+      var toks = tokenize(caseText(cases[i]));
+      var tf = Object.create(null);
+      for (var j = 0; j < toks.length; j++) tf[toks[j]] = (tf[toks[j]] || 0) + 1;
+      var seen = Object.create(null);
+      for (var t in tf) if (!seen[t]) { df[t] = (df[t] || 0) + 1; seen[t] = 1; }
+      docs.push(tf); docLens.push(toks.length); totalLen += toks.length;
+    }
+    return { docs: docs, docLens: docLens, df: df, N: cases.length, avgdl: cases.length ? totalLen / cases.length : 0 };
+  }
+  function bm25Score(idx, qTokens, docIdx) {
+    if (!idx.N || !qTokens.length) return 0;
+    var tf = idx.docs[docIdx], dl = idx.docLens[docIdx] || 0, avgdl = idx.avgdl || 1, s = 0;
+    for (var i = 0; i < qTokens.length; i++) {
+      var f = tf[qTokens[i]] || 0; if (!f) continue;
+      var n = idx.df[qTokens[i]] || 0;
+      var idf = Math.log(1 + (idx.N - n + 0.5) / (n + 0.5));
+      var num = f * (BM25_K1 + 1);
+      var den = f + BM25_K1 * (1 - BM25_B + BM25_B * (dl / avgdl));
+      s += idf * (num / den);
+    }
+    return s;
+  }
+
+  var DIM_WEIGHTS = { C: 1.0, S: 1.0, P: 1.0, R: 0.7, E: 0.7, M: 0.5, X: 0.5 };
+  var DIMS = ["C","S","P","R","E","M","X"];
+  function jaccard(a, b) {
+    if ((!a || !a.length) && (!b || !b.length)) return null;
+    if (!a || !a.length) return 0;
+    if (!b || !b.length) return 0;
+    var setA = new Set(a), setB = new Set(b), inter = 0;
+    setA.forEach(function (k) { if (setB.has(k)) inter++; });
+    var union = setA.size + setB.size - inter;
+    return union ? inter / union : 0;
+  }
+  function atomScore(qAtoms, cAtoms) {
+    var sumW = 0, acc = 0, perDim = {};
+    for (var i = 0; i < DIMS.length; i++) {
+      var d = DIMS[i];
+      var j = jaccard(qAtoms[d] || [], cAtoms[d] || []);
+      perDim[d] = j;
+      if (j === null) continue;
+      var w = DIM_WEIGHTS[d];
+      acc += j * w; sumW += w;
+    }
+    return { score: sumW ? acc / sumW : 0, per_dim: perDim };
+  }
+
+  function retrieve(candidate, cases, opts) {
+    opts = opts || {};
+    var topK = opts.topK || 5;
+    var mix  = opts.mix  || { text: 0.6, atom: 0.4 };
+    var scopeByTitle = opts.scopeByTitle !== false;
+
+    var pool = cases.slice();
+    if (scopeByTitle && candidate.policy_title) {
+      pool = pool.filter(function (c) {
+        return !c.policy_title || c.policy_title === candidate.policy_title;
+      });
+    }
+    if (!pool.length) return { results: [], pool_size: 0 };
+
+    var idx = buildBm25Index(pool);
+    var qTextSrc = [candidate.visual_summary, candidate.asr_text, candidate.ocr_text, candidate.caption_text]
+      .filter(Boolean).join(" \n ");
+    var qTokens = tokenize(qTextSrc);
+    if (!qTokens.length) {
+      var atomKeys = [];
+      for (var i = 0; i < DIMS.length; i++) {
+        var arr = (candidate.atoms || {})[DIMS[i]] || [];
+        for (var j = 0; j < arr.length; j++) atomKeys.push(arr[j]);
+      }
+      qTokens = atomKeys.flatMap(function (k) { return tokenize(k.replace(/[._]/g, " ")); });
+    }
+
+    var scored = pool.map(function (c, k) {
+      var bm = bm25Score(idx, qTokens, k);
+      var aj = atomScore(candidate.atoms || {}, c.atoms || {});
+      return {
+        case_id: c.case_id, record_id: c.record_id,
+        source_video_id: c.source_video_id, policy_title: c.policy_title,
+        issue: c.issue, decision: c.decision,
+        visual_summary: c.visual_summary, asr_text: c.asr_text,
+        ocr_text: c.ocr_text, caption_text: c.caption_text,
+        rationale: c.rationale, atoms: c.atoms,
+        _bm25: bm, _atom: aj.score, _atom_per_dim: aj.per_dim
+      };
+    });
+
+    var maxBm = 0;
+    for (var i = 0; i < scored.length; i++) if (scored[i]._bm25 > maxBm) maxBm = scored[i]._bm25;
+    var inv = maxBm > 0 ? 1 / maxBm : 0;
+    for (var i = 0; i < scored.length; i++) {
+      scored[i].bm25_norm = scored[i]._bm25 * inv;
+      scored[i].score = mix.text * scored[i].bm25_norm + mix.atom * scored[i]._atom;
+    }
+    scored.sort(function (a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b._atom !== a._atom) return b._atom - a._atom;
+      if (b._bm25 !== a._bm25) return b._bm25 - a._bm25;
+      return (a.case_id || "").localeCompare(b.case_id || "");
+    });
+    return { results: scored.slice(0, topK), pool_size: pool.length, total_scored: scored.length, mix: mix };
+  }
+
+  root.AtomRetriever = {
+    retrieve: retrieve, tokenize: tokenize,
+    buildBm25Index: buildBm25Index, bm25Score: bm25Score,
+    atomScore: atomScore, DIM_WEIGHTS: DIM_WEIGHTS
+  };
 })(window);
 </script>
 
@@ -630,6 +772,66 @@ function VerdictPane(props) {
   );
 }
 
+// ---- PrecedentsPane: hybrid retriever output --------------------------------
+function PrecedentsPane(props) {
+  const { result } = props;
+  if (!result) return null;
+  const { results, pool_size, total_scored, mix } = result;
+
+  if (!results || !results.length) {
+    return e("div", { className: "tag-card" },
+      e("strong", { style: { fontSize: 13 }}, "Top precedents"),
+      e("div", { className: "muted", style: { fontSize: 11, padding: "8px 0" }},
+        "No precedents in scope. Pool size: " + (pool_size || 0) + "."));
+  }
+
+  const decisionPill = (d) => e("span", {
+    className: "outcome-tag",
+    style: { background: "#222", color: "#fff", padding: "1px 6px", borderRadius: 4, fontSize: 10 }
+  }, d || "—");
+
+  const fmt = (n) => (n == null ? "—" : (Math.round(n * 1000) / 1000).toFixed(3));
+
+  return e("div", { className: "tag-card" },
+    e("div", { className: "row", style: { justifyContent: "space-between" }},
+      e("strong", { style: { fontSize: 13 }}, "Top precedents (" + results.length + ")"),
+      e("span", { className: "muted", style: { fontSize: 11 }},
+        "pool=" + pool_size + " · scored=" + total_scored +
+        " · mix " + Math.round(mix.text*100) + "/" + Math.round(mix.atom*100) + " (text/atom)")
+    ),
+    e("div", null,
+      ...results.map((r, i) => e("div", {
+        key: r.record_id || i,
+        className: "hit-row",
+        style: { padding: "8px 4px", borderBottom: "1px dashed var(--hairline)" }
+      },
+        e("div", { style: { display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }},
+          e("span", { className: "hit-id", style: { fontWeight: 600 }},
+            "#" + (i+1) + " · " + (r.case_id || r.source_video_id || r.record_id || "—")),
+          decisionPill(r.decision),
+          r.policy_title && e("span", { className: "ev-pill" }, r.policy_title),
+          r.issue && e("span", { className: "ev-pill" }, r.issue)
+        ),
+        e("div", { className: "muted", style: { fontSize: 11, marginBottom: 4 }},
+          "score=" + fmt(r.score) +
+          " · text=" + fmt(r.bm25_norm) +
+          " · atom=" + fmt(r._atom) +
+          (r._atom_per_dim ? " · dim[" +
+            ["C","S","P","R","E","M","X"]
+              .map(d => d + ":" + (r._atom_per_dim[d] == null ? "—" : fmt(r._atom_per_dim[d])))
+              .join(" ") + "]" : "")
+        ),
+        r.visual_summary && e("div", { className: "text-block",
+          style: { fontSize: 11, maxHeight: 60, overflow: "hidden", textOverflow: "ellipsis" }},
+          r.visual_summary.slice(0, 280) + (r.visual_summary.length > 280 ? "…" : "")),
+        r.rationale && e("div", { className: "muted",
+          style: { fontSize: 10, fontStyle: "italic", marginTop: 2 }},
+          "rationale: " + r.rationale.slice(0, 180) + (r.rationale.length > 180 ? "…" : ""))
+      ))
+    )
+  );
+}
+
 // ---- DimRow: chip multi-select for one dimension ---------------------------
 function DimRow(props) {
   const { dim, atoms, selected, onChange } = props;
@@ -765,6 +967,21 @@ function AtomTagger(props) {
     });
   }, [tags, pendingCase, corpus.claims, totalSelected]);
 
+  // Phase 4: hybrid retriever. Runs when a case is picked; uses pendingCase text +
+  // current atom selection to find similar precedents in corpus.cases.
+  const precedentsResult = React.useMemo(() => {
+    if (!pendingCase) return null;
+    const candidate = {
+      policy_title: pendingCase.policy_title,
+      atoms: tags,
+      visual_summary: pendingCase.visual_summary,
+      asr_text:       pendingCase.asr_text,
+      ocr_text:       pendingCase.ocr_text,
+      caption_text:   pendingCase.caption_text
+    };
+    return window.AtomRetriever.retrieve(candidate, corpus.cases, { topK: 5 });
+  }, [tags, pendingCase, corpus.cases]);
+
   return e("div", null,
     e("div", { className: "tag-card" },
       // Filter row: text search + policy_title narrowing
@@ -851,6 +1068,8 @@ function AtomTagger(props) {
 
     pendingCase && engineResult && e(VerdictPane, { result: engineResult }),
 
+    pendingCase && precedentsResult && e(PrecedentsPane, { result: precedentsResult }),
+
     pendingCase && e("details", { open: false },
       e("summary", null, "Engine I/O JSON (debug)"),
       e("pre", null, JSON.stringify({
@@ -860,7 +1079,18 @@ function AtomTagger(props) {
           policy_title: pendingCase.policy_title,
           atoms: tags
         },
-        engine_result: engineResult
+        engine_result: engineResult,
+        precedents: precedentsResult ? {
+          pool_size: precedentsResult.pool_size,
+          total_scored: precedentsResult.total_scored,
+          mix: precedentsResult.mix,
+          results: (precedentsResult.results || []).map(r => ({
+            case_id: r.case_id, source_video_id: r.source_video_id,
+            policy_title: r.policy_title, decision: r.decision,
+            score: r.score, bm25_norm: r.bm25_norm, atom: r._atom,
+            atom_per_dim: r._atom_per_dim
+          }))
+        } : null
       }, null, 2))
     ),
 
