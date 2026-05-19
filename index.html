@@ -171,7 +171,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.6.1-phase5b";
+const PLUGIN_VERSION = "atom-mvp v0.6.2-phase5b";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -1469,18 +1469,26 @@ function buildAtomRulesBlock(corpus, policyArea) {
     return ci === policyArea;
   });
 
-  // 2. Collect referenced atom_keys.
+  // 2. Collect referenced atom_keys (normalized: trim only — atom_keys are case-sensitive).
   const referenced = new Set();
   for (const c of issueClaims) {
     const keys = atomKeysReferencedByClaim(c);
-    keys.forEach(k => referenced.add(k));
+    keys.forEach(k => { if (k) referenced.add(String(k).trim()); });
   }
 
   // 3. Build NSA-scoped atoms_catalog. Group by dimension.
-  const catalog = { C: [], S: [], P: [], R: [], E: [], M: [], X: [] };
+  // Index corpus.atoms by trimmed atom_key for resilient lookup.
+  const atomByKey = {};
   for (const a of corpus.atoms) {
-    if (!referenced.has(a.atom_key)) continue;
-    const d = a.dimension || "X";
+    const k = String(a.atom_key || "").trim();
+    if (k) atomByKey[k] = a;
+  }
+  const catalog = { C: [], S: [], P: [], R: [], E: [], M: [], X: [] };
+  let unresolved = 0;
+  for (const k of referenced) {
+    const a = atomByKey[k];
+    if (!a) { unresolved++; continue; }
+    const d = (a.dimension || "X").toString().trim().toUpperCase().charAt(0);
     if (!catalog[d]) catalog[d] = [];
     catalog[d].push({
       atom_key:    a.atom_key,
@@ -1495,6 +1503,16 @@ function buildAtomRulesBlock(corpus, policyArea) {
   for (const d of Object.keys(catalog)) {
     catalog[d].sort((x, y) => String(x.serial_code || "").localeCompare(String(y.serial_code || "")));
   }
+  if (unresolved > 0) {
+    try { console.warn("[AtomConsole] buildAtomRulesBlock:",
+      unresolved, "/", referenced.size, "referenced atom_keys did not resolve in corpus.atoms"); } catch(_) {}
+  }
+  try { console.info("[AtomConsole] atom_rules built:",
+    "policy=" + policyArea,
+    "claims=" + issueClaims.length,
+    "referenced=" + referenced.size,
+    "resolved=" + (referenced.size - unresolved),
+    "corpus.atoms=" + corpus.atoms.length); } catch(_) {}
 
   // 4. Emit claim list (full structure — specialist needs gates+modifiers+lifts+routing).
   const claimsOut = issueClaims.map(c => ({
@@ -1658,25 +1676,37 @@ function PayloadPane(props) {
   const claimsTotal = ar ? ar.claims_total : 0;
 
   const onCopy = async () => {
+    // Bitable iframes often disable both Clipboard API and execCommand via
+    // Permissions-Policy. We try both, then surface a clear "use Download" hint
+    // on failure so the reviewer knows the workaround.
+    let ok = false;
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
+      if (navigator.clipboard && navigator.clipboard.writeText &&
+          window.isSecureContext !== false) {
         await navigator.clipboard.writeText(json);
-      } else {
-        // Fallback for non-secure contexts
+        ok = true;
+      }
+    } catch (e) { /* fall through to execCommand */ }
+    if (!ok) {
+      try {
         const ta = document.createElement("textarea");
         ta.value = json;
-        ta.style.position = "fixed"; ta.style.left = "-1000px";
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed"; ta.style.left = "-1000px"; ta.style.top = "0";
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand("copy");
+        ta.setSelectionRange(0, json.length);
+        ok = !!document.execCommand("copy");
         document.body.removeChild(ta);
-      }
+      } catch (e) { ok = false; }
+    }
+    if (ok) {
       setCopyState("ok");
       setTimeout(() => setCopyState("idle"), 1800);
-    } catch (e) {
-      console.error("[AtomConsole] copy failed:", e);
+    } else {
+      console.warn("[AtomConsole] clipboard write blocked by iframe policy — use Download instead");
       setCopyState("err");
-      setTimeout(() => setCopyState("idle"), 2500);
+      setTimeout(() => setCopyState("idle"), 4000);
     }
   };
 
@@ -1716,9 +1746,13 @@ function PayloadPane(props) {
         e("button", { className: copyClass, onClick: onCopy, title: "Copy JSON to clipboard" },
           copyLabel),
         e("button", { className: "copy-btn secondary", onClick: onDownload,
-          title: "Download as .json file" }, "Download")
+          title: "Download as .json file (use this if Copy is blocked by iframe policy)" }, "Download")
       )
     ),
+    copyState === "err" && e("div", {
+      style: { fontSize: 11, color: "var(--error, #c00)", marginBottom: 6 }
+    }, "⚠ Clipboard blocked by Bitable iframe permissions policy. Use ", e("b", null, "Download"),
+       " → drag the .json file into the chat instead."),
     e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }},
       e("span", { className: "payload-stat routing",
         title: "Routes to which specialist skill" },
