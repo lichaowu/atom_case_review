@@ -120,6 +120,21 @@
   .routing-pill{display:inline-block;padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:11px;background:var(--surface-soft);color:var(--muted);margin-right:4px}
   .suppressed-row{padding:5px 0;font-size:11px;color:var(--muted);border-top:1px dashed var(--hairline)}
   .suppressed-row:first-child{border-top:none}
+
+  /* Phase 5 — Payload card */
+  .payload-card{background:#fff;border:1px solid var(--hairline);border-radius:10px;padding:14px;margin:12px 0}
+  .payload-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+  .payload-title{font-size:13px;font-weight:600;color:var(--ink)}
+  .payload-meta{font-size:11px;color:var(--muted);font-family:var(--mono)}
+  .payload-actions{display:flex;gap:6px;align-items:center}
+  .payload-stat{display:inline-block;padding:2px 7px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--surface-soft);color:var(--ink)}
+  .payload-stat.routing{background:var(--primary);color:#fff}
+  .copy-btn{font-family:var(--sans);font-size:11px;padding:5px 10px;border-radius:5px;border:1px solid var(--primary);background:var(--primary);color:#fff;cursor:pointer}
+  .copy-btn:hover{background:var(--primary-active);border-color:var(--primary-active)}
+  .copy-btn.ok{background:var(--success);border-color:var(--success)}
+  .copy-btn.err{background:var(--error);border-color:var(--error)}
+  .copy-btn.secondary{background:#fff;color:var(--ink)}
+  .copy-btn.secondary:hover{background:var(--surface-soft)}
 </style>
 </head>
 <body>
@@ -156,7 +171,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.4.6-phase4";
+const PLUGIN_VERSION = "atom-mvp v0.5.0-phase5";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -988,7 +1003,13 @@ function evidencePills(ev) {
 
 function VerdictPane(props) {
   const { result } = props;
-  if (!result) return null;
+  if (!result) return e("div", { className: "verdict-card" },
+    e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }},
+      e("span", { className: "verdict-pill verdict-NO_CLAIM_FIRED" }, "AWAITING ATOMS"),
+      e("span", { className: "verdict-meta" },
+        "Tag at least one atom to evaluate claims.")
+    )
+  );
   const { verdict, gate_hits, suppressed, routing, applied_claim_chain, lifts_applied } = result;
   const top = gate_hits[0] || null;
   const rest = gate_hits.slice(1, 5);
@@ -998,9 +1019,9 @@ function VerdictPane(props) {
     e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }},
       e("span", { className: "verdict-pill verdict-" + verdict }, verdict),
       e("span", { className: "verdict-meta" },
-        gate_hits.length, " hit", gate_hits.length===1?"":"s", " · ",
-        suppressed.length, " suppressed",
-        applied_claim_chain.length ? " · top: " + applied_claim_chain[0] : ""
+        gate_hits.length, " gate hit", gate_hits.length===1?"":"s",
+        " · ", suppressed.length, " suppressed",
+        applied_claim_chain.length ? " · top claim: " + applied_claim_chain[0] : ""
       )
     ),
     hasRouting && e("div", { style: { marginTop: 8 }},
@@ -1367,6 +1388,231 @@ function DimRow(props) {
   );
 }
 
+// ---- Phase 5: Payload v0.4 emit -------------------------------------------
+// Emits `case-review-payload v0.4` consumable by NSA/HHB/HRA/SGC/VBDA specialist
+// skills. The MVP is scope-locked to ATLAS atoms (no V0.3 Rule Book), so:
+//   - candidate_rule = null         → specialist falls back to Appendix A,
+//                                     caps confidence at 6
+//   - companion_rules = []          → ditto, caps confidence at 7
+//   - extension `atom_assessment`   → carries our deterministic engine output:
+//                                     verdict, gate_hits, applied_claim_chain,
+//                                     lifts_applied, suppressed, routing, atoms
+//
+// policy_area is derived from candidate.issue (NSA/HHB/HRA/SGC/VBDA). If the
+// issue doesn't map to a known specialist, we still emit the payload but flag
+// it on the UI so the reviewer can choose manually.
+const POLICY_AREA_MAP = {
+  NSA:  "NSA",
+  HHB:  "HHB",
+  HRA:  "HRA",
+  SGC:  "SGC",
+  VBDA: "VBDA"
+};
+function resolvePolicyArea(issue) {
+  if (!issue) return null;
+  const k = String(issue).toUpperCase().trim();
+  if (POLICY_AREA_MAP[k]) return POLICY_AREA_MAP[k];
+  // Heuristic: pick the first known token contained in the issue text
+  for (const key in POLICY_AREA_MAP) {
+    if (k.indexOf(key) >= 0) return key;
+  }
+  return null;
+}
+
+function imagesAttachedSummary(images) {
+  if (!images || !images.length) return { count: 0, note: "no images attached" };
+  const types = {};
+  for (const im of images) {
+    const t = (im && (im.type || im.ext || "")) || "image";
+    types[t] = (types[t] || 0) + 1;
+  }
+  const parts = Object.keys(types).map(k => k + "×" + types[k]).join(", ");
+  return { count: images.length, note: parts };
+}
+
+function buildPayload(pendingCase, tags, engineResult, precedentsResult) {
+  if (!pendingCase) return null;
+  const policy_area = resolvePolicyArea(pendingCase.issue);
+  const imgSummary = imagesAttachedSummary(pendingCase.images);
+
+  const candidate = {
+    item_id:                pendingCase.source_video_id || pendingCase.record_id || "",
+    record_id:              pendingCase.record_id || "",
+    topic:                  pendingCase.policy_title || pendingCase.issue || "",
+    visual_summary:         pendingCase.visual_summary || "",
+    asr_text:               pendingCase.asr_text || "",
+    ocr_text:               pendingCase.ocr_text || "",
+    caption_text:           pendingCase.caption_text || "",
+    images_attached_count:  imgSummary.count,
+    images_note:            imgSummary.note
+  };
+
+  // Precedent records — preserve the channel/score signal so the specialist
+  // can see how they were retrieved.
+  const precedents = ((precedentsResult && precedentsResult.results) || []).map((r, i) => ({
+    rank:               i + 1,
+    case_id:            r.case_id || "",
+    record_id:          r.record_id || "",
+    source_video_id:    r.source_video_id || "",
+    policy_title:       r.policy_title || "",
+    issue:              r.issue || "",
+    decision:           r.decision || "",
+    visual_summary:     r.visual_summary || "",
+    asr_text:           r.asr_text || "",
+    ocr_text:           r.ocr_text || "",
+    caption_text:       r.caption_text || "",
+    rationale:          r.rationale || "",
+    atoms:              r.atoms || {},
+    retrieval: {
+      score:        r.score        != null ? Number(r.score.toFixed(4))        : null,
+      visual_score: r.visual_score != null ? Number(r.visual_score.toFixed(4)) : null,
+      text_score:   r.text_score   != null ? Number(r.text_score.toFixed(4))   : null,
+      atom_jaccard: r._atom        != null ? Number(r._atom.toFixed(4))        : null,
+      channels:     r.channels || []
+    }
+  }));
+
+  // Atom assessment — our deterministic engine output. Specialist may inspect
+  // or ignore. Verdict is the suggested outcome before specialist review.
+  const atom_assessment = engineResult ? {
+    verdict:              engineResult.verdict,
+    applied_claim_chain:  engineResult.applied_claim_chain || [],
+    lifts_applied:        engineResult.lifts_applied || [],
+    routing:              engineResult.routing || {},
+    gate_hits: (engineResult.gate_hits || []).map(h => ({
+      claim_id:            h.claim_id,
+      outcome_base:        h.outcome_base,
+      outcome_after_lifts: h.outcome_after_lifts,
+      lift:                h.lift || null,
+      evidence:            h.evidence || {}
+    })),
+    suppressed: (engineResult.suppressed || []).map(s => ({
+      claim_id:        s.claim_id,
+      outcome_base:    s.outcome_base,
+      suppress_reason: s.suppress_reason
+    })),
+    atoms_tagged: tags || {}
+  } : null;
+
+  return {
+    schema:           "case-review-payload",
+    version:          "v0.4",
+    policy_area:      policy_area,
+    generated_at:     new Date().toISOString(),
+    generator:        PLUGIN_VERSION,
+    candidate:        candidate,
+    candidate_rule:   null,                    // ATLAS-only MVP; specialist falls back to Appendix A
+    companion_rules:  { disambiguation: [], exception: [] },
+    precedents:       precedents,
+    atom_assessment:  atom_assessment           // extension; specialists ignore if unknown
+  };
+}
+
+// ---- PayloadPane: emit + copy + JSON preview -------------------------------
+function PayloadPane(props) {
+  const { payload } = props;
+  const [copyState, setCopyState] = React.useState("idle"); // idle | ok | err
+  const [open, setOpen] = React.useState(false);
+
+  if (!payload) return null;
+
+  const json = React.useMemo(() => JSON.stringify(payload, null, 2), [payload]);
+  const sizeKb = (json.length / 1024).toFixed(1);
+  const precCount = (payload.precedents || []).length;
+  const policyArea = payload.policy_area || "—";
+  const verdict = payload.atom_assessment ? payload.atom_assessment.verdict : "(no atoms tagged)";
+
+  const onCopy = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(json);
+      } else {
+        // Fallback for non-secure contexts
+        const ta = document.createElement("textarea");
+        ta.value = json;
+        ta.style.position = "fixed"; ta.style.left = "-1000px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopyState("ok");
+      setTimeout(() => setCopyState("idle"), 1800);
+    } catch (e) {
+      console.error("[AtomConsole] copy failed:", e);
+      setCopyState("err");
+      setTimeout(() => setCopyState("idle"), 2500);
+    }
+  };
+
+  const onDownload = () => {
+    try {
+      const blob = new Blob([json], { type: "application/json" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      const itemId = (payload.candidate && payload.candidate.item_id) || "case";
+      a.href = url;
+      a.download = "payload-" + (policyArea || "X") + "-" + itemId + ".json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      console.error("[AtomConsole] download failed:", e);
+    }
+  };
+
+  const copyLabel = copyState === "ok"  ? "✓ copied"
+                  : copyState === "err" ? "✗ failed"
+                  : "Copy payload";
+  const copyClass = "copy-btn" + (copyState === "ok" ? " ok"
+                                : copyState === "err" ? " err" : "");
+
+  return e("div", { className: "payload-card" },
+    e("div", { className: "payload-head" },
+      e("div", null,
+        e("div", { className: "payload-title" }, "Specialist payload"),
+        e("div", { className: "payload-meta" },
+          payload.schema, " · ", payload.version, " · ", sizeKb, " KB · ",
+          precCount, " precedent", precCount===1?"":"s"
+        )
+      ),
+      e("div", { className: "payload-actions" },
+        e("button", { className: copyClass, onClick: onCopy, title: "Copy JSON to clipboard" },
+          copyLabel),
+        e("button", { className: "copy-btn secondary", onClick: onDownload,
+          title: "Download as .json file" }, "Download")
+      )
+    ),
+    e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }},
+      e("span", { className: "payload-stat routing",
+        title: "Routes to which specialist skill" },
+        "→ " + (policyArea ? policyArea + "-precedent-review" : "no-route (set issue)")),
+      e("span", { className: "payload-stat",
+        title: "Atom-engine suggested verdict (specialist may override)" },
+        "engine: " + verdict),
+      payload.candidate_rule === null && e("span", { className: "payload-stat",
+        title: "ATLAS-only MVP — specialist will fall back to Appendix A and cap confidence at 6" },
+        "candidate_rule: null"),
+      (!payload.companion_rules ||
+       (!payload.companion_rules.disambiguation || !payload.companion_rules.disambiguation.length) &&
+       (!payload.companion_rules.exception      || !payload.companion_rules.exception.length))
+        && e("span", { className: "payload-stat",
+            title: "No companion rules supplied — specialist caps confidence at 7" },
+            "companion_rules: empty")
+    ),
+    !policyArea && e("div", { className: "muted",
+      style: { fontSize: 11, padding: "4px 0", color: "var(--error)" }},
+      "⚠ No policy_area resolved from issue \"",
+      payload.candidate && payload.candidate.topic,
+      "\". Set the case's `issue` to one of: NSA / HHB / HRA / SGC / VBDA."),
+    e("details", { open: open, onToggle: ev => setOpen(ev.target.open) },
+      e("summary", null, open ? "Hide JSON preview" : "Show JSON preview"),
+      e("pre", null, json)
+    )
+  );
+}
+
 // ---- AtomTagger: top-level pane --------------------------------------------
 function AtomTagger(props) {
   const { corpus } = props;
@@ -1470,6 +1716,13 @@ function AtomTagger(props) {
     return out;
   }, [precedentsResult]);
 
+  // Phase 5: payload v0.4 emit. Memoized on (pendingCase, tags, engineResult,
+  // precedentsResult). Returns null when no case picked.
+  const payload = React.useMemo(() => {
+    if (!pendingCase) return null;
+    return buildPayload(pendingCase, tags, engineResult, precedentsResult);
+  }, [pendingCase, tags, engineResult, precedentsResult]);
+
   return e("div", null,
     e("div", { className: "tag-card" },
       // Filter row: text search + policy_title narrowing
@@ -1565,12 +1818,14 @@ function AtomTagger(props) {
       }))
     ),
 
-    pendingCase && engineResult && e(VerdictPane, { result: engineResult }),
+    pendingCase && e(VerdictPane, { result: engineResult }),
 
     pendingCase && precedentsResult && e(PrecedentsPane, {
       result: precedentsResult,
       imageMeta: corpus.image_meta
     }),
+
+    pendingCase && payload && e(PayloadPane, { payload: payload }),
 
     pendingCase && e("details", { open: false },
       e("summary", null, "Engine I/O JSON (debug)"),
@@ -1705,8 +1960,9 @@ function App() {
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
     e("div", { className: "sub", style: { marginTop: 24 }},
-      "Phase 3 of 7 — DeterministicEngine wired live. Verdict updates on every tag change. ",
-      "Next: Phase 4 = hybrid retriever (BM25 + atom-overlap) over precedents.")
+      "Phase 5 of 7 — case-review-payload v0.4 emit live. Copy/download to feed any of: ",
+      "NSA, HHB, HRA, SGC, VBDA precedent-review specialists. ",
+      "Next: Phase 6 = wire specialist call directly + auto-tag opt-in.")
   );
 }
 
