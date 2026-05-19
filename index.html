@@ -83,7 +83,7 @@
 
   /* Phase 3 — Verdict UI */
   .verdict-card{background:#fff;border:1px solid var(--hairline);border-radius:10px;padding:14px;margin:12px 0}
-  .verdict-pill{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.04em}
+  .verdict-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:9999px;font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:.06em;line-height:1.3;border:1px solid transparent}
   .verdict-VIOLATION{background:#fbe4e0;color:#a8332a;border:1px solid #f0c0b8}
   .verdict-NOT_RECOMMEND{background:#fcecd6;color:#8a5a13;border:1px solid #ecd2a3}
   .verdict-NOT_FOR_FEED{background:#fff5d6;color:#7a5b0a;border:1px solid #efddaa}
@@ -118,21 +118,22 @@
   .atom-chip.dim-E{background:#e8dee6;color:#3d3d3a}
   .atom-chip.dim-M{background:#dee5dc;color:#3d3d3a}
   .atom-chip.dim-X{background:#f3dcd9;color:#3d3d3a}
-  /* Dim row — labelled cluster, subtle dashed separator */
-  .dim-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;font-size:12px;border-top:1px dashed var(--hairline-soft)}
-  .dim-row:first-child{border-top:none;padding-top:0}
-  .dim-row .dim-bullet{flex:0 0 22px;width:22px;height:22px;border-radius:50%;background:var(--surface-card);color:var(--ink);display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:0;margin-top:1px}
-  .dim-row .dim-bullet.dim-C{background:#ede4d8}
-  .dim-row .dim-bullet.dim-S{background:#f3dcd0}
-  .dim-row .dim-bullet.dim-P{background:#e2e6dc}
-  .dim-row .dim-bullet.dim-R{background:#f1e4cd}
-  .dim-row .dim-bullet.dim-E{background:#e8dee6}
-  .dim-row .dim-bullet.dim-M{background:#dee5dc}
-  .dim-row .dim-bullet.dim-X{background:#f3dcd9}
-  .dim-row .dim-meta{flex:0 0 auto;display:flex;flex-direction:column;gap:1px;min-width:80px}
-  .dim-row .dim-meta .dim-name{font-family:var(--sans);font-weight:500;font-size:12px;color:var(--ink)}
-  .dim-row .dim-meta .dim-count{font-family:var(--mono);font-size:10px;color:var(--muted)}
-  .dim-row .dim-cells{flex:1;display:flex;flex-wrap:wrap;align-items:center;gap:2px}
+  /* Dim row (scoped to the reasoned-verdict card so it does NOT clash with
+     the AtomTagger DimRow grid layout above) */
+  .reasoned-card .dim-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;font-size:12px;border-top:1px dashed var(--hairline-soft);grid-template-columns:none}
+  .reasoned-card .dim-row:first-child{border-top:none;padding-top:0}
+  .reasoned-card .dim-row .dim-bullet{flex:0 0 22px;width:22px;height:22px;border-radius:50%;background:var(--surface-card);color:var(--ink);display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:0;margin-top:1px}
+  .reasoned-card .dim-row .dim-bullet.dim-C{background:#ede4d8}
+  .reasoned-card .dim-row .dim-bullet.dim-S{background:#f3dcd0}
+  .reasoned-card .dim-row .dim-bullet.dim-P{background:#e2e6dc}
+  .reasoned-card .dim-row .dim-bullet.dim-R{background:#f1e4cd}
+  .reasoned-card .dim-row .dim-bullet.dim-E{background:#e8dee6}
+  .reasoned-card .dim-row .dim-bullet.dim-M{background:#dee5dc}
+  .reasoned-card .dim-row .dim-bullet.dim-X{background:#f3dcd9}
+  .reasoned-card .dim-row .dim-meta{flex:0 0 auto;display:flex;flex-direction:column;gap:1px;min-width:80px}
+  .reasoned-card .dim-row .dim-meta .dim-name{font-family:var(--sans);font-weight:500;font-size:12px;color:var(--ink)}
+  .reasoned-card .dim-row .dim-meta .dim-count{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .reasoned-card .dim-row .dim-cells{flex:1;display:flex;flex-wrap:wrap;align-items:center;gap:2px}
   /* Claim chain row — dominant first, highlighted */
   .claim-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;padding:8px 0;border-top:1px solid var(--hairline-soft);font-size:12px;align-items:center}
   .claim-row:first-child{border-top:none}
@@ -248,7 +249,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.7.1-phase6a";
+const PLUGIN_VERSION = "atom-mvp v0.7.4-phase6a";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -1903,7 +1904,6 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
   const candidate = {
     item_id:                pendingCase.source_video_id || pendingCase.record_id || "",
     record_id:              pendingCase.record_id || "",
-    topic:                  pendingCase.policy_title || pendingCase.issue || "",
     policy_title:           pendingCase.policy_title || "",
     issue:                  pendingCase.issue || "",
     visual_summary:         pendingCase.visual_summary || "",
@@ -1918,20 +1918,30 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
 
   // Precedents — content-only, no retrieval scores. Atoms are the analogy
   // anchor. Decision + rationale tell the specialist how the atom set was
-  // historically resolved.
+  // historically resolved. Long text fields are capped to keep payload size
+  // sane (typical case shrinks 122 KB → ~40 KB without losing precedential
+  // signal — the specialist also reads the candidate composite image).
+  const PREC_VS_CAP   = 1500;   // visual_summary
+  const PREC_TEXT_CAP = 800;    // asr_text / ocr_text / caption_text each
+  const PREC_RAT_CAP  = 1000;   // rationale
+  const _cap = (s, n) => {
+    if (!s) return "";
+    const t = String(s);
+    if (t.length <= n) return t;
+    return t.slice(0, n) + " …[truncated +" + (t.length - n) + " chars]";
+  };
   const precedents = ((precedentsResult && precedentsResult.results) || []).map((r, i) => ({
     rank:               i + 1,
     case_id:            r.case_id || "",
-    record_id:          r.record_id || "",
     source_video_id:    r.source_video_id || "",
     policy_title:       r.policy_title || "",
     issue:              r.issue || "",
     decision:           r.decision || "",
-    visual_summary:     r.visual_summary || "",
-    asr_text:           r.asr_text || "",
-    ocr_text:           r.ocr_text || "",
-    caption_text:       r.caption_text || "",
-    rationale:          r.rationale || "",
+    visual_summary:     _cap(r.visual_summary, PREC_VS_CAP),
+    asr_text:           _cap(r.asr_text,       PREC_TEXT_CAP),
+    ocr_text:           _cap(r.ocr_text,       PREC_TEXT_CAP),
+    caption_text:       _cap(r.caption_text,   PREC_TEXT_CAP),
+    rationale:          _cap(r.rationale,      PREC_RAT_CAP),
     atoms:              r.atoms || {},        // full tag set, all 7 dims
     images:             (r.images || []).map(im => ({
       // Strip volatile tokens; keep stable metadata so specialist can reference
@@ -1960,9 +1970,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
       claim_id:        s.claim_id,
       outcome_base:    s.outcome_base,
       suppress_reason: s.suppress_reason
-    })),
-    note: "Deterministic engine output for the candidate.draft_atom_tags. " +
-          "Specialist may revise the tags after reading precedents and re-derive the verdict."
+    }))
   } : null;
 
   // The atoms_catalog (constant interpretation knowledge — atom audit_rules)
@@ -2010,11 +2018,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
         policy_title:       pendingCase.policy_title || null,
         tagged_atom_count:  Object.keys(tags || {}).reduce((s,d)=>s+(tags[d]||[]).length,0),
         precedent_count:    precedents.length
-      },
-      note: "This is a CASE-SCOPED slice. The full NSA atoms_catalog (with " +
-            "audit_rule per atom) is baked into the specialist skill. The " +
-            "specialist may walk these claims directly OR re-derive a slice " +
-            "if its proposed_atom_tags differ materially from the draft tags."
+      }
     };
   })();
 
@@ -2022,10 +2026,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
   const rule_book_ref = {
     schema: "atom-catalog",
     version: "v1.0",
-    policy_area: policy_area,
-    note: "Full atoms_catalog (with audit_rule) is baked into the specialist skill. " +
-          "If catalog or claim shapes drift, reviewer re-exports via Atom Console " +
-          "(Loader → Admin → Export " + (policy_area || "NSA") + ") and re-bakes the skill."
+    policy_area: policy_area
   };
 
   return {
@@ -2851,7 +2852,7 @@ function AtomTagger(props) {
       ocr_text:       pendingCase.ocr_text,
       caption_text:   pendingCase.caption_text
     };
-    return window.AtomRetriever.retrieve(candidate, corpus.cases, { topPerChannel: 5, totalK: 10 });
+    return window.AtomRetriever.retrieve(candidate, corpus.cases, { topPerChannel: 4, totalK: 8 });
   }, [tags, pendingCase, corpus.cases]);
 
   // Suggested atoms per dim = union of atoms from top-5 precedents.
@@ -2925,7 +2926,7 @@ function AtomTagger(props) {
             "— pick a pending case (" + filteredPending.length +
             " of " + corpus.pending.length + ") —"),
           ...filteredPending.map(p => e("option", { key: p.record_id, value: p.record_id },
-            (p.policy_title || "?") + " · " + p.source_video_id +
+            (p.issue || "?") + " · " + (p.policy_title || "(untitled)") + " · " + p.source_video_id +
             (p.visual_summary ? " · " + p.visual_summary.slice(0, 60).replace(/\s+/g," ") : "")
           ))
         )
