@@ -156,7 +156,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.4.3-phase4";
+const PLUGIN_VERSION = "atom-mvp v0.4.4-phase4";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -751,13 +751,86 @@ async function loadAtomCorpus() {
   const caseTableId    = casesTbl   ? (casesTbl.id   || casesTbl.tableId   || null) : null;
   const pendingTableId = pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null;
 
+  // Field-level URL resolver: mirrors the working Case Review Console pattern.
+  // The SDK exposes attachment URL resolution as field-level methods (NOT base.getAttachmentUrl).
+  // Strategy:
+  //   1. table.getFieldById(fieldId) → Field
+  //   2. Try field.getAttachmentUrls(recordId)  → fresh signed URLs (preferred)
+  //   3. Try field.getTmpUrls([tokens])        → temp URLs, by token
+  //   4. Fall back to embedded url/tmp_url/tmpUrl on the cell value (may be expired)
+  // Returns array of URL strings aligned to the input `images` array (same length, "" on failure).
+  async function resolveAttachmentUrls(scope, recordId, images) {
+    if (!images || !images.length) return [];
+    const tbl     = scope === "case" ? casesTbl   : pendingTbl;
+    const fieldId = scope === "case" ? caseImgFieldId : pendingImgFieldId;
+    const tokens  = images.map(img => img && img.token).filter(Boolean);
+    const out     = images.map(() => "");
+    const fillFromEmbedded = () => {
+      for (let i = 0; i < images.length; i++) {
+        if (out[i]) continue;
+        const im = images[i] || {};
+        const u = im.url || im.tmp_url || im.tmpUrl || "";
+        if (/^https?:\/\//i.test(u)) out[i] = u;
+      }
+    };
+
+    if (!tbl || !fieldId || !recordId) {
+      fillFromEmbedded();
+      return out;
+    }
+
+    let field = null;
+    try { field = await tbl.getFieldById(fieldId); } catch (e) { field = null; }
+
+    // Path A: getAttachmentUrls(recordId) — returns array aligned to the cell's tokens.
+    if (field && typeof field.getAttachmentUrls === "function") {
+      try {
+        const arr = await Promise.race([
+          field.getAttachmentUrls(recordId),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+        ]);
+        if (Array.isArray(arr)) {
+          for (let i = 0; i < images.length && i < arr.length; i++) {
+            const v = arr[i];
+            const u = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
+            if (u) out[i] = u;
+          }
+        }
+      } catch (e) { /* fall through */ }
+    }
+
+    // Path B: getTmpUrls([tokens]) — token-keyed.
+    if (out.some(u => !u) && field && typeof field.getTmpUrls === "function" && tokens.length) {
+      try {
+        const arr = await Promise.race([
+          field.getTmpUrls(tokens),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+        ]);
+        if (Array.isArray(arr)) {
+          let j = 0;
+          for (let i = 0; i < images.length; i++) {
+            if (out[i]) continue;
+            const v = arr[j++];
+            const u = (typeof v === "string") ? v : (v && (v.tmpUrl || v.url || v.tmp_url) || "");
+            if (u) out[i] = u;
+          }
+        }
+      } catch (e) { /* fall through */ }
+    }
+
+    // Path C: embedded url on cell value.
+    fillFromEmbedded();
+    return out;
+  }
+
   return {
     atoms, atomsByDim, claims, cases, pending,
     image_meta: {
       case_field_id:    caseImgFieldId,
       pending_field_id: pendingImgFieldId,
       case_table_id:    caseTableId,
-      pending_table_id: pendingTableId
+      pending_table_id: pendingTableId,
+      resolve:          resolveAttachmentUrls
     }
   };
 }
@@ -930,8 +1003,8 @@ function PrecedentsPane(props) {
           r.images && r.images.length > 0 && e(ImagesPane, {
             images: r.images,
             recordId: r.record_id,
-            fieldId: imageMeta && imageMeta.case_field_id,
-            tableId: imageMeta && imageMeta.case_table_id,
+            scope: "case",
+            resolve: imageMeta && imageMeta.resolve,
             label: "precedent images"
           }),
           r.visual_summary && e("div", { className: "prec-summary" },
@@ -951,64 +1024,34 @@ function PrecedentsPane(props) {
 // display we re-resolve via base.getAttachmentUrl(token, recordId, fieldId, tableId).
 // Falls back to the embedded url if available.
 function ImagesPane(props) {
-  const { images, recordId, fieldId, tableId, label } = props;
-  const [resolved, setResolved] = React.useState({}); // token -> url
-  const [failed,   setFailed]   = React.useState({}); // token -> reason string
-  const [pending,  setPending]  = React.useState({}); // token -> bool (initial true)
-  const [error, setError] = React.useState("");
+  const { images, recordId, scope, resolve, label } = props;
+  const [resolved, setResolved] = React.useState([]); // index-aligned url[]
+  const [done,     setDone]     = React.useState(false);
+  const [error,    setError]    = React.useState("");
 
   React.useEffect(() => {
     let cancelled = false;
     setError("");
-    setResolved({});
-    setFailed({});
-    if (!images || !images.length) { setPending({}); return; }
-    // Mark all tokens as pending until each individual resolution settles.
-    const initPending = {};
-    for (const img of images) initPending[img.token] = true;
-    setPending(initPending);
-
-    const canSdk = !!(window.bitable && window.bitable.base && fieldId && tableId && recordId);
-
-    const resolveOne = async (img) => {
-      // 1) Try fresh signed URL via SDK if all coords present.
-      if (canSdk && img.token) {
-        try {
-          const u = await window.bitable.base.getAttachmentUrl(img.token, recordId, fieldId, tableId);
-          if (u) return { token: img.token, url: u };
-        } catch (e) {
-          // fall through to embedded url
-        }
-      }
-      // 2) Fallback to embedded url (may be expired but worth trying).
-      if (img.url) return { token: img.token, url: img.url, stale: true };
-      // 3) Both failed.
-      return { token: img.token, error: "no signed url and no embedded url" };
-    };
-
-    Promise.allSettled(images.map(resolveOne)).then(settled => {
+    setResolved([]);
+    setDone(false);
+    if (!images || !images.length) { setDone(true); return; }
+    if (typeof resolve !== "function") {
+      // No resolver — fall back to embedded urls only.
+      const urls = images.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
+      if (!cancelled) { setResolved(urls); setDone(true); }
+      return;
+    }
+    resolve(scope || "case", recordId, images).then(urls => {
       if (cancelled) return;
-      const ok = {};
-      const bad = {};
-      const stillPending = {};
-      for (const s of settled) {
-        if (s.status === "fulfilled") {
-          const v = s.value;
-          if (v.url) ok[v.token] = v.url;
-          else bad[v.token] = v.error || "unresolved";
-        } else {
-          // Promise itself rejected — record reason against an unknown slot.
-          // We can't map back to a token reliably here, so surface in top error.
-          setError(prev => prev || String(s.reason && s.reason.message || s.reason));
-        }
-      }
-      setResolved(ok);
-      setFailed(bad);
-      setPending(stillPending); // empty: nothing pending anymore
-    }).catch(e => { if (!cancelled) setError(String(e && e.message || e)); });
-
+      setResolved(Array.isArray(urls) ? urls : []);
+      setDone(true);
+    }).catch(e => {
+      if (cancelled) return;
+      setError(String(e && e.message || e));
+      setDone(true);
+    });
     return () => { cancelled = true; };
-  }, [images, recordId, fieldId, tableId]);
+  }, [images, recordId, scope, resolve]);
 
   if (!images || !images.length) {
     return e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
@@ -1017,9 +1060,7 @@ function ImagesPane(props) {
 
   return e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, padding: "4px 0" }},
     ...images.map((img, i) => {
-      const url = resolved[img.token];
-      const failReason = failed[img.token];
-      const isPending  = pending[img.token];
+      const url = resolved[i] || "";
       const isImg = !img.type || /^image\//i.test(img.type) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(img.name || "");
       let body;
       if (url && isImg) {
@@ -1028,29 +1069,24 @@ function ImagesPane(props) {
             src: url,
             alt: img.name || ("attachment " + (i+1)),
             style: { width: "100%", height: 100, objectFit: "cover", display: "block" },
-            onError: (ev) => {
-              // Image element couldn't load the URL — likely expired or network error.
-              // Mark as failed so we re-render the unavailable tile.
-              setResolved(prev => { const n = { ...prev }; delete n[img.token]; return n; });
-              setFailed(prev => ({ ...prev, [img.token]: "img element failed to load" }));
+            onError: () => {
+              setResolved(prev => { const n = prev.slice(); n[i] = ""; return n; });
             }
           }));
       } else if (url) {
         body = e("a", { href: url, target: "_blank", rel: "noreferrer",
           style: { display: "block", padding: 6, fontSize: 10, textDecoration: "none" }},
           "📎 " + (img.name || "attachment"));
-      } else if (failReason) {
+      } else if (done) {
         body = e("div", {
           style: { padding: 6, fontSize: 10, color: "#a00", lineHeight: 1.3 },
-          title: failReason + " · token=" + (img.token || "?")
+          title: "no signed url returned · token=" + (img.token || "?")
         }, "image unavailable");
-      } else if (isPending) {
-        body = e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "loading…");
       } else {
-        body = e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "no source");
+        body = e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "loading…");
       }
       return e("div", {
-        key: img.token + "_" + i,
+        key: (img.token || "noTok") + "_" + i,
         style: { width: 140, border: "1px solid var(--hairline)", borderRadius: 4, overflow: "hidden", background: "#0001" }
       },
         body,
@@ -1325,8 +1361,8 @@ function AtomTagger(props) {
           e(ImagesPane, {
             images: pendingCase.images,
             recordId: pendingCase.record_id,
-            fieldId: corpus.image_meta && corpus.image_meta.pending_field_id,
-            tableId: corpus.image_meta && corpus.image_meta.pending_table_id,
+            scope: "pending",
+            resolve: corpus.image_meta && corpus.image_meta.resolve,
             label: "Pending images"
           })
         ),
