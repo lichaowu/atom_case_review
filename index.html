@@ -171,7 +171,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.5.0-phase5";
+const PLUGIN_VERSION = "atom-mvp v0.6.1-phase5b";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -1388,19 +1388,24 @@ function DimRow(props) {
   );
 }
 
-// ---- Phase 5: Payload v0.4 emit -------------------------------------------
-// Emits `case-review-payload v0.4` consumable by NSA/HHB/HRA/SGC/VBDA specialist
-// skills. The MVP is scope-locked to ATLAS atoms (no V0.3 Rule Book), so:
-//   - candidate_rule = null         → specialist falls back to Appendix A,
-//                                     caps confidence at 6
-//   - companion_rules = []          → ditto, caps confidence at 7
-//   - extension `atom_assessment`   → carries our deterministic engine output:
-//                                     verdict, gate_hits, applied_claim_chain,
-//                                     lifts_applied, suppressed, routing, atoms
+// ---- Phase 5b: Payload v0.5 emit ------------------------------------------
+// Atom-rule-grounded payload for the per-policy precedent-review specialist.
+// The specialist needs to: (1) know the NSA atom rule book, (2) read precedents
+// (text+images+atoms+decision+rationale), (3) tag the candidate's atoms by
+// analogy, (4) run the deterministic claim chain, (5) return verdict.
 //
-// policy_area is derived from candidate.issue (NSA/HHB/HRA/SGC/VBDA). If the
-// issue doesn't map to a known specialist, we still emit the payload but flag
-// it on the UI so the reviewer can choose manually.
+// Schema v0.5 differences from v0.4:
+//   - DROP retrieval scores (BM25/atom-jaccard) — they're retrieval-internal
+//     noise. The specialist reasons over content + atom analogy, not ranks.
+//   - DROP candidate_rule / companion_rules (V0.3 Rule Book artifacts).
+//   - ADD atom_rules block: NSA-scoped atoms_catalog + all NSA claims +
+//     dimension definitions + scoring semantics.
+//   - Each precedent retains: text fields, images, full atom tags by dim,
+//     decision, rationale.
+//
+// `atoms_catalog` is filtered to atom_keys actually referenced by any claim
+// for the candidate's issue (NSA-relevant atoms). `claims` is all claims for
+// candidate.issue (preserves cross-title routing).
 const POLICY_AREA_MAP = {
   NSA:  "NSA",
   HHB:  "HHB",
@@ -1412,7 +1417,6 @@ function resolvePolicyArea(issue) {
   if (!issue) return null;
   const k = String(issue).toUpperCase().trim();
   if (POLICY_AREA_MAP[k]) return POLICY_AREA_MAP[k];
-  // Heuristic: pick the first known token contained in the issue text
   for (const key in POLICY_AREA_MAP) {
     if (k.indexOf(key) >= 0) return key;
   }
@@ -1430,7 +1434,127 @@ function imagesAttachedSummary(images) {
   return { count: images.length, note: parts };
 }
 
-function buildPayload(pendingCase, tags, engineResult, precedentsResult) {
+// Collect every atom_key referenced by a claim's gates/modifiers/exceptions.
+function atomKeysReferencedByClaim(c) {
+  const acc = new Set();
+  const dims = ["C","S","P","R","E"];
+  for (const d of dims) {
+    const arr = (c.gates && c.gates[d]) || [];
+    for (const k of arr) acc.add(k);
+  }
+  ["modifiers_required","modifiers_excluded","modifiers_lift_to_approve",
+   "exceptions_required"].forEach(prop => {
+    const arr = c[prop] || [];
+    for (const k of arr) acc.add(k);
+  });
+  // modifiers_lift_dnf is array of { atom_key, lift }
+  const dnf = c.modifiers_lift_dnf || [];
+  for (const item of dnf) {
+    if (item && item.atom_key) acc.add(item.atom_key);
+  }
+  // exception_qualifiers: { atom_key: [...] } — keys are atom_keys
+  const eq = c.exception_qualifiers || {};
+  for (const k in eq) acc.add(k);
+  const eqm = c.exception_qualifier_modifiers || {};
+  for (const k in eqm) acc.add(k);
+  return acc;
+}
+
+function buildAtomRulesBlock(corpus, policyArea) {
+  if (!policyArea || !corpus || !corpus.claims || !corpus.atoms) return null;
+
+  // 1. Filter claims to ones whose `issue` matches the policy area.
+  const issueClaims = corpus.claims.filter(c => {
+    const ci = String(c.issue || "").toUpperCase().trim();
+    return ci === policyArea;
+  });
+
+  // 2. Collect referenced atom_keys.
+  const referenced = new Set();
+  for (const c of issueClaims) {
+    const keys = atomKeysReferencedByClaim(c);
+    keys.forEach(k => referenced.add(k));
+  }
+
+  // 3. Build NSA-scoped atoms_catalog. Group by dimension.
+  const catalog = { C: [], S: [], P: [], R: [], E: [], M: [], X: [] };
+  for (const a of corpus.atoms) {
+    if (!referenced.has(a.atom_key)) continue;
+    const d = a.dimension || "X";
+    if (!catalog[d]) catalog[d] = [];
+    catalog[d].push({
+      atom_key:    a.atom_key,
+      atom_name:   a.atom_name,
+      dimension:   a.dimension,
+      serial_code: a.serial_code,
+      description: a.description,
+      audit_rule:  a.audit_rule
+    });
+  }
+  // Sort each dim by serial_code for stable, readable ordering.
+  for (const d of Object.keys(catalog)) {
+    catalog[d].sort((x, y) => String(x.serial_code || "").localeCompare(String(y.serial_code || "")));
+  }
+
+  // 4. Emit claim list (full structure — specialist needs gates+modifiers+lifts+routing).
+  const claimsOut = issueClaims.map(c => ({
+    claim_id:               c.claim_id,
+    policy_titles:          c.policy_titles || [],
+    issue:                  c.issue,
+    outcome:                c.outcome,
+    gates:                  c.gates || {},
+    modifiers_required:     c.modifiers_required || [],
+    modifiers_excluded:     c.modifiers_excluded || [],
+    modifiers_lift_to_approve: c.modifiers_lift_to_approve || [],
+    modifiers_lift_dnf:     c.modifiers_lift_dnf || [],
+    exceptions_required:    c.exceptions_required || [],
+    exceptions_lift_to_approve: !!c.exceptions_lift_to_approve,
+    exception_qualifiers:   c.exception_qualifiers || {},
+    exception_qualifier_modifiers: c.exception_qualifier_modifiers || {},
+    requires_exception_context: !!c.requires_exception_context,
+    routing:                c.routing || {},
+    molecule_ids:           c.molecule_ids || [],
+    notes:                  c.notes || ""
+  }));
+
+  // Stats for header
+  const catCounts = {};
+  let total = 0;
+  for (const d of ["C","S","P","R","E","M","X"]) {
+    catCounts[d] = catalog[d].length;
+    total += catalog[d].length;
+  }
+
+  return {
+    policy_area: policyArea,
+    dimensions: {
+      C: { name: "Content",       weight: 1.0, role: "primary gate" },
+      S: { name: "Subject",       weight: 1.0, role: "primary gate" },
+      P: { name: "Portrayal",     weight: 1.0, role: "primary gate" },
+      R: { name: "Realism",       weight: 0.7, role: "secondary gate; affects routing" },
+      E: { name: "Explicitness",  weight: 0.7, role: "secondary gate" },
+      M: { name: "Modifier",      weight: 0.5, role: "lift / suppress claim outcome" },
+      X: { name: "Exception",     weight: 0.5, role: "lift / context-required" }
+    },
+    semantics: {
+      gate_logic: "AND across dimensions (C,S,P,R,E); OR within each dimension. " +
+                  "Empty dimension = wildcard (no constraint).",
+      verdict_priority: ["VIOLATION","NOT_RECOMMEND","NOT_FOR_FEED","APPROVE","NO_CLAIM_FIRED"],
+      lift_logic: "modifiers_lift_to_approve atoms tagged → outcome upgraded to APPROVE. " +
+                  "modifiers_lift_dnf atoms apply per-claim partial lifts. " +
+                  "exceptions_required atoms must all be tagged when requires_exception_context=true.",
+      routing_logic: "non_realistic_routes_to: when realism atoms imply non-realistic content, " +
+                     "re-route to a different claim chain. cross_title_redirect: rebind verdict to a different policy_title."
+    },
+    atoms_catalog: catalog,        // grouped by dim, NSA-only
+    atoms_total:   total,
+    atoms_per_dim: catCounts,
+    claims:        claimsOut,
+    claims_total:  claimsOut.length
+  };
+}
+
+function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus) {
   if (!pendingCase) return null;
   const policy_area = resolvePolicyArea(pendingCase.issue);
   const imgSummary = imagesAttachedSummary(pendingCase.images);
@@ -1439,16 +1563,21 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult) {
     item_id:                pendingCase.source_video_id || pendingCase.record_id || "",
     record_id:              pendingCase.record_id || "",
     topic:                  pendingCase.policy_title || pendingCase.issue || "",
+    policy_title:           pendingCase.policy_title || "",
+    issue:                  pendingCase.issue || "",
     visual_summary:         pendingCase.visual_summary || "",
     asr_text:               pendingCase.asr_text || "",
     ocr_text:               pendingCase.ocr_text || "",
     caption_text:           pendingCase.caption_text || "",
     images_attached_count:  imgSummary.count,
-    images_note:            imgSummary.note
+    images_note:            imgSummary.note,
+    // Reviewer's draft tags (may be empty). Specialist may revise.
+    draft_atom_tags:        tags || {}
   };
 
-  // Precedent records — preserve the channel/score signal so the specialist
-  // can see how they were retrieved.
+  // Precedents — content-only, no retrieval scores. Atoms are the analogy
+  // anchor. Decision + rationale tell the specialist how the atom set was
+  // historically resolved.
   const precedents = ((precedentsResult && precedentsResult.results) || []).map((r, i) => ({
     rank:               i + 1,
     case_id:            r.case_id || "",
@@ -1462,19 +1591,19 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult) {
     ocr_text:           r.ocr_text || "",
     caption_text:       r.caption_text || "",
     rationale:          r.rationale || "",
-    atoms:              r.atoms || {},
-    retrieval: {
-      score:        r.score        != null ? Number(r.score.toFixed(4))        : null,
-      visual_score: r.visual_score != null ? Number(r.visual_score.toFixed(4)) : null,
-      text_score:   r.text_score   != null ? Number(r.text_score.toFixed(4))   : null,
-      atom_jaccard: r._atom        != null ? Number(r._atom.toFixed(4))        : null,
-      channels:     r.channels || []
-    }
+    atoms:              r.atoms || {},        // full tag set, all 7 dims
+    images:             (r.images || []).map(im => ({
+      // Strip volatile tokens; keep stable metadata so specialist can reference
+      // "image #2 shows X" without leaking signed urls.
+      name: im && im.name || "",
+      type: im && (im.type || im.ext) || "",
+      size: im && im.size || null
+    }))
   }));
 
-  // Atom assessment — our deterministic engine output. Specialist may inspect
-  // or ignore. Verdict is the suggested outcome before specialist review.
-  const atom_assessment = engineResult ? {
+  // Engine output as a simulation hint (the specialist may agree, override, or
+  // re-tag and re-run mentally using the embedded atom_rules.claims).
+  const engine_simulation = engineResult ? {
     verdict:              engineResult.verdict,
     applied_claim_chain:  engineResult.applied_claim_chain || [],
     lifts_applied:        engineResult.lifts_applied || [],
@@ -1491,20 +1620,23 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult) {
       outcome_base:    s.outcome_base,
       suppress_reason: s.suppress_reason
     })),
-    atoms_tagged: tags || {}
+    note: "Deterministic engine output for the candidate.draft_atom_tags. " +
+          "Specialist may revise the tags after reading precedents and re-derive the verdict."
   } : null;
+
+  // Atom rule book — NSA-only when policy_area=NSA.
+  const atom_rules = buildAtomRulesBlock(corpus, policy_area);
 
   return {
     schema:           "case-review-payload",
-    version:          "v0.4",
+    version:          "v0.5",
     policy_area:      policy_area,
     generated_at:     new Date().toISOString(),
     generator:        PLUGIN_VERSION,
     candidate:        candidate,
-    candidate_rule:   null,                    // ATLAS-only MVP; specialist falls back to Appendix A
-    companion_rules:  { disambiguation: [], exception: [] },
     precedents:       precedents,
-    atom_assessment:  atom_assessment           // extension; specialists ignore if unknown
+    atom_rules:       atom_rules,
+    engine_simulation: engine_simulation
   };
 }
 
@@ -1520,7 +1652,10 @@ function PayloadPane(props) {
   const sizeKb = (json.length / 1024).toFixed(1);
   const precCount = (payload.precedents || []).length;
   const policyArea = payload.policy_area || "—";
-  const verdict = payload.atom_assessment ? payload.atom_assessment.verdict : "(no atoms tagged)";
+  const verdict = payload.engine_simulation ? payload.engine_simulation.verdict : "(no atoms tagged)";
+  const ar = payload.atom_rules || null;
+  const atomsTotal = ar ? ar.atoms_total : 0;
+  const claimsTotal = ar ? ar.claims_total : 0;
 
   const onCopy = async () => {
     try {
@@ -1587,24 +1722,23 @@ function PayloadPane(props) {
     e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }},
       e("span", { className: "payload-stat routing",
         title: "Routes to which specialist skill" },
-        "→ " + (policyArea ? policyArea + "-precedent-review" : "no-route (set issue)")),
+        "→ " + (policyArea ? policyArea.toLowerCase() + "-atom-precedent-review" : "no-route (set issue)")),
       e("span", { className: "payload-stat",
-        title: "Atom-engine suggested verdict (specialist may override)" },
+        title: "Atom-engine suggested verdict (specialist may revise tags and override)" },
         "engine: " + verdict),
-      payload.candidate_rule === null && e("span", { className: "payload-stat",
-        title: "ATLAS-only MVP — specialist will fall back to Appendix A and cap confidence at 6" },
-        "candidate_rule: null"),
-      (!payload.companion_rules ||
-       (!payload.companion_rules.disambiguation || !payload.companion_rules.disambiguation.length) &&
-       (!payload.companion_rules.exception      || !payload.companion_rules.exception.length))
-        && e("span", { className: "payload-stat",
-            title: "No companion rules supplied — specialist caps confidence at 7" },
-            "companion_rules: empty")
+      ar && e("span", { className: "payload-stat",
+        title: "Atom rule book embedded for this policy area: " + atomsTotal +
+               " atoms (referenced by any " + policyArea + " claim) across " +
+               claimsTotal + " active claims" },
+        "atom_rules: " + atomsTotal + " atoms · " + claimsTotal + " claims"),
+      !ar && policyArea && e("span", { className: "payload-stat",
+        title: "No atom rules found for this policy area — specialist will lack the rule book" },
+        "⚠ atom_rules: empty")
     ),
     !policyArea && e("div", { className: "muted",
       style: { fontSize: 11, padding: "4px 0", color: "var(--error)" }},
       "⚠ No policy_area resolved from issue \"",
-      payload.candidate && payload.candidate.topic,
+      payload.candidate && payload.candidate.issue,
       "\". Set the case's `issue` to one of: NSA / HHB / HRA / SGC / VBDA."),
     e("details", { open: open, onToggle: ev => setOpen(ev.target.open) },
       e("summary", null, open ? "Hide JSON preview" : "Show JSON preview"),
@@ -1716,12 +1850,12 @@ function AtomTagger(props) {
     return out;
   }, [precedentsResult]);
 
-  // Phase 5: payload v0.4 emit. Memoized on (pendingCase, tags, engineResult,
-  // precedentsResult). Returns null when no case picked.
+  // Phase 5: payload v0.5 emit. Memoized on (pendingCase, tags, engineResult,
+  // precedentsResult, corpus). Returns null when no case picked.
   const payload = React.useMemo(() => {
     if (!pendingCase) return null;
-    return buildPayload(pendingCase, tags, engineResult, precedentsResult);
-  }, [pendingCase, tags, engineResult, precedentsResult]);
+    return buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus);
+  }, [pendingCase, tags, engineResult, precedentsResult, corpus]);
 
   return e("div", null,
     e("div", { className: "tag-card" },
@@ -1960,8 +2094,8 @@ function App() {
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
     e("div", { className: "sub", style: { marginTop: 24 }},
-      "Phase 5 of 7 — case-review-payload v0.4 emit live. Copy/download to feed any of: ",
-      "NSA, HHB, HRA, SGC, VBDA precedent-review specialists. ",
+      "Phase 5b of 7 — case-review-payload v0.5 (atom-rule-grounded). ",
+      "NSA pipeline ready — feed to /nsa-atom-precedent-review. ",
       "Next: Phase 6 = wire specialist call directly + auto-tag opt-in.")
   );
 }
