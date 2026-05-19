@@ -89,6 +89,38 @@
   .verdict-NOT_FOR_FEED{background:#fff5d6;color:#7a5b0a;border:1px solid #efddaa}
   .verdict-APPROVE{background:#e6f3df;color:#3d6b2a;border:1px solid #c8e0bd}
   .verdict-NO_CLAIM_FIRED{background:#ece8e1;color:#6c6a64;border:1px solid #d8d2c4}
+  .verdict-ESCALATE{background:#ffe4ef;color:#92265a;border:1px solid #eeb6cf}
+  /* ---- v0.7.0 phase6a: reasoned-verdict (paste-back) styles ---- */
+  .reasoned-card{background:#fff;border:1px solid var(--primary);border-radius:10px;padding:14px;margin:12px 0}
+  .reasoned-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+  .reasoned-title{font-family:var(--serif,Georgia,serif);font-weight:600;font-size:15px;color:var(--ink)}
+  .reasoned-meta{font-size:11px;color:var(--muted)}
+  .reasoned-paste{width:100%;min-height:84px;font-family:var(--mono);font-size:11px;line-height:1.4;border:1px solid var(--hairline);border-radius:6px;padding:8px;background:var(--surface-soft,#f5f0e8);color:var(--ink);resize:vertical}
+  .reasoned-paste:focus{outline:2px solid var(--primary);outline-offset:-1px}
+  .reasoned-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center}
+  .reasoned-err{background:#fff3f0;border:1px solid #f0c0b8;color:var(--error);padding:6px 8px;border-radius:5px;font-size:11px;margin-top:6px}
+  .reasoned-warn{background:#fcecd6;border:1px solid #ecd2a3;color:#8a5a13;padding:6px 8px;border-radius:5px;font-size:11px;margin-top:6px}
+  .atom-chip{display:inline-block;padding:2px 7px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--surface-soft);color:var(--ink);margin:2px}
+  .atom-chip.rejected{text-decoration:line-through;color:var(--muted);background:#f5f0e8;opacity:.7}
+  .atom-chip.dim-C{background:#e6efff;color:#1f3d6b}
+  .atom-chip.dim-S{background:#ffe6f0;color:#7a1f4a}
+  .atom-chip.dim-P{background:#e6f7f0;color:#1f6b4f}
+  .atom-chip.dim-R{background:#fff3d6;color:#7a5b0a}
+  .atom-chip.dim-E{background:#f3e6ff;color:#4a1f7a}
+  .atom-chip.dim-M{background:#e6efe6;color:#3d6b2a}
+  .atom-chip.dim-X{background:#ffe6e6;color:#a8332a}
+  .dim-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:11px;border-top:1px dashed var(--hairline)}
+  .dim-row:first-child{border-top:none}
+  .dim-label{font-family:var(--mono);font-weight:600;font-size:11px;color:var(--muted);min-width:18px}
+  .dim-cells{flex:1;display:flex;flex-wrap:wrap;align-items:center}
+  .claim-row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;padding:6px 0;border-top:1px solid var(--hairline);font-size:11px}
+  .claim-row:first-child{border-top:none}
+  .claim-id{font-family:var(--mono);font-weight:500;color:var(--ink)}
+  .precedent-pa{padding:6px 8px;background:var(--surface-soft);border-left:3px solid var(--hairline);border-radius:3px;margin:4px 0;font-size:11px}
+  .precedent-pa.applicable{border-left-color:var(--success)}
+  .precedent-pa.partial{border-left-color:var(--warning)}
+  .precedent-pa.non-applicable{border-left-color:var(--muted-soft,#8e8b82)}
+  .watch-out{padding:4px 8px;background:#fcecd6;border-left:3px solid var(--warning);font-size:11px;margin:3px 0;border-radius:3px}
   .verdict-meta{margin-left:10px;font-size:11px;color:var(--muted);font-family:var(--sans)}
   .hit-row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;padding:7px 0;border-top:1px solid var(--hairline);font-size:12px}
   .hit-row:first-child{border-top:none}
@@ -174,7 +206,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.6.6-phase5c";
+const PLUGIN_VERSION = "atom-mvp v0.7.0-phase6a";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -2200,6 +2232,349 @@ function PayloadPane(props) {
   );
 }
 
+// ---- v0.7.0 phase6a: paste-back loop ---------------------------------------
+// Mira does not expose a public skill-invocation API to third-party iframes
+// (verified May 2026 — only inbound MCP/Skill flows are documented). The
+// established workflow is therefore manual:
+//   1. Plugin emits payload + composite keyframes (handled by PayloadPane).
+//   2. Reviewer pastes both into a Mira chat with the atom skill.
+//   3. Skill replies with a single fenced ```json block (Atom Verdict Schema).
+//   4. Reviewer copies that reply and pastes it into ReasonedVerdictPane,
+//      which parses, schema-checks, and renders a structured view here.
+//
+// tryParseVerdictJson — port of legacy tryParseReasonedJson (case_review_mvp
+// V3.x). Strips ```json fences if present, then locates the outermost {…}
+// object and JSON.parses it. Returns null on any failure (no exceptions).
+function tryParseVerdictJson(raw) {
+  if (!raw) return null;
+  let txt = String(raw).trim();
+  // Strip markdown fences (```json …``` or ``` …```) if the model wrapped them.
+  txt = txt.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  // Tolerate any prose before/after the object — grab the outermost braces.
+  const start = txt.indexOf("{");
+  const end   = txt.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) return null;
+  try {
+    return JSON.parse(txt.slice(start, end + 1));
+  } catch (e) {
+    return null;
+  }
+}
+
+// validateAtomVerdict — soft schema check for atom-verdict v1.0. Returns
+// { ok, errors[], warnings[] }. Errors block the render; warnings annotate
+// the verdict view (e.g. unknown verdict literal, missing dim, rejected
+// shape mismatch). Permissive on extra fields so downstream skill rev-bumps
+// don't break the plugin.
+const VERDICT_ENUM = ["VIOLATION","NOT_RECOMMEND","NOT_FOR_FEED","APPROVE","ESCALATE"];
+const ATOM_DIMS = ["C","S","P","R","E","M","X"];
+function validateAtomVerdict(v) {
+  const errors = [], warnings = [];
+  if (!v || typeof v !== "object") {
+    return { ok: false, errors: ["payload is not a JSON object"], warnings };
+  }
+  if (v.schema && v.schema !== "atom-verdict") {
+    warnings.push("schema is \"" + v.schema + "\", expected \"atom-verdict\"");
+  }
+  if (v.vertical && v.vertical !== "NSA") {
+    warnings.push("vertical is \"" + v.vertical + "\", expected \"NSA\" for this plugin");
+  }
+  if (!v.verdict || VERDICT_ENUM.indexOf(v.verdict) === -1) {
+    errors.push("verdict must be one of " + VERDICT_ENUM.join(" / "));
+  }
+  if (typeof v.confidence !== "number" || v.confidence < 1 || v.confidence > 10) {
+    warnings.push("confidence should be an integer 1–10");
+  }
+  if (!v.proposed_atom_tags || typeof v.proposed_atom_tags !== "object") {
+    errors.push("proposed_atom_tags missing or not an object");
+  } else {
+    const missing = ATOM_DIMS.filter(d => !Array.isArray(v.proposed_atom_tags[d]));
+    if (missing.length) warnings.push("proposed_atom_tags missing dim(s): " + missing.join(","));
+  }
+  if (v.simulated_claim_chain && !Array.isArray(v.simulated_claim_chain)) {
+    errors.push("simulated_claim_chain must be an array");
+  }
+  if (v.precedent_analysis && !Array.isArray(v.precedent_analysis)) {
+    errors.push("precedent_analysis must be an array");
+  }
+  if (v.rejected_draft_atoms && !Array.isArray(v.rejected_draft_atoms)) {
+    warnings.push("rejected_draft_atoms is not an array — ignoring");
+  }
+  if (v.watch_outs && !Array.isArray(v.watch_outs)) {
+    warnings.push("watch_outs is not an array — ignoring");
+  }
+  return { ok: errors.length === 0, errors, warnings };
+}
+
+// _splitReason — split the v0.6 skill's `reason` string into tagged sections
+// keyed by [VISUAL ANALYSIS] / [TEXT ANALYSIS] / [PRECEDENT TRIAGE] /
+// [ATOM TAGGING] / [CLAIM SIMULATION] / [VERDICT]. Returns { sectionKey:text }.
+// Falls back to { _full: raw } if no tags are detected.
+function _splitReason(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const re = /\[(VISUAL ANALYSIS|TEXT ANALYSIS|PRECEDENT TRIAGE|ATOM TAGGING|CLAIM SIMULATION|VERDICT)\]/g;
+  const matches = [];
+  let m;
+  while ((m = re.exec(raw)) !== null) matches.push({ tag: m[1], idx: m.index });
+  if (!matches.length) return { _full: raw };
+  const out = {};
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].idx + matches[i].tag.length + 2; // +2 for [ ]
+    const end = (i + 1 < matches.length) ? matches[i+1].idx : raw.length;
+    out[matches[i].tag] = raw.slice(start, end).trim();
+  }
+  return out;
+}
+
+// ReasonedVerdictPane — render an atom-verdict v1.0 object pasted back from
+// Mira chat. Mirrors the legacy ReasonedVerdict component's layout:
+//   • Header pill (verdict + confidence + grey + policy_title + pattern)
+//   • Proposed atoms by dimension (with rejected drafts struck through)
+//   • Simulated claim chain (dominant first)
+//   • Precedent analysis cards
+//   • Watch-outs / next_step / suppressed claims (collapsible)
+//   • Engine alignment delta + tagged reasoning sections (collapsible)
+function ReasonedVerdictPane(props) {
+  const { engineSimulation } = props || {};
+  const [raw, setRaw]         = React.useState("");
+  const [parsed, setParsed]   = React.useState(null);
+  const [check, setCheck]     = React.useState({ ok: true, errors: [], warnings: [] });
+  const [touched, setTouched] = React.useState(false);
+
+  const onChange = (ev) => {
+    const v = ev.target.value;
+    setRaw(v);
+    if (!touched) setTouched(true);
+    if (!v.trim()) { setParsed(null); setCheck({ ok: true, errors: [], warnings: [] }); return; }
+    const p = tryParseVerdictJson(v);
+    if (!p) {
+      setParsed(null);
+      setCheck({ ok: false,
+        errors: ["Could not locate a single JSON object. Make sure you copied the entire ```json block (or the bare {…}) from Mira's reply."],
+        warnings: [] });
+      return;
+    }
+    const c = validateAtomVerdict(p);
+    setParsed(p);
+    setCheck(c);
+  };
+
+  const onClear = () => { setRaw(""); setParsed(null); setCheck({ ok: true, errors: [], warnings: [] }); setTouched(false); };
+
+  const verdict    = parsed && parsed.verdict;
+  const conf       = parsed && parsed.confidence;
+  const grey       = parsed && parsed.grey;
+  const pattern    = parsed && parsed.pattern;
+  const finalTitle = parsed && parsed.final_policy_title;
+  const tags       = (parsed && parsed.proposed_atom_tags) || null;
+  const rejected   = (parsed && parsed.rejected_draft_atoms) || [];
+  const chain      = (parsed && parsed.simulated_claim_chain) || [];
+  const suppressed = (parsed && parsed.suppressed_claims) || [];
+  const align      = parsed && parsed.engine_alignment;
+  const precs      = (parsed && parsed.precedent_analysis) || [];
+  const watchOuts  = (parsed && parsed.watch_outs) || [];
+  const nextStep   = parsed && parsed.next_step;
+  const reasonSecs = parsed && parsed.reason ? _splitReason(parsed.reason) : null;
+
+  // Build a quick set of rejected-atom keys for strikethrough rendering.
+  const rejectedSet = React.useMemo(() => {
+    const s = new Set();
+    for (const r of rejected) if (r && r.atom_key) s.add((r.dim || "?") + ":" + r.atom_key);
+    return s;
+  }, [rejected]);
+
+  // Engine vs specialist delta detection — surface as a small chip if they
+  // differ. Allows reviewer to spot over- or under-tagging at a glance.
+  const engineV = (align && align.engine_verdict)
+                || (engineSimulation && engineSimulation.verdict)
+                || null;
+  const deltaText = align && align.delta && align.delta !== "none" ? align.delta : null;
+
+  return e("div", { className: "reasoned-card" },
+    e("div", { className: "reasoned-head" },
+      e("div", null,
+        e("div", { className: "reasoned-title" }, "🧠 Reasoned verdict (paste-back)"),
+        e("div", { className: "reasoned-meta" },
+          "Paste Mira's ```json verdict reply below. Parser + schema check run live as you type.")
+      ),
+      raw && e("button", { className: "copy-btn ghost", onClick: onClear,
+        title: "Clear the textarea and rendered verdict." }, "clear")
+    ),
+    e("textarea", {
+      className: "reasoned-paste",
+      value: raw,
+      onChange: onChange,
+      placeholder: "Paste the entire ```json …``` block (or the bare {…}) from Mira's reply here.",
+      spellCheck: false
+    }),
+    !check.ok && check.errors.length > 0 && e("div", { className: "reasoned-err" },
+      check.errors.map((er, i) => e("div", { key: i }, "✗ ", er))
+    ),
+    check.warnings.length > 0 && e("div", { className: "reasoned-warn" },
+      check.warnings.map((w, i) => e("div", { key: i }, "⚠ ", w))
+    ),
+
+    // ---- rendered verdict view -------------------------------------------
+    parsed && check.ok && e("div", { style: { marginTop: 10 } },
+      // Header strip: verdict pill + meta chips
+      e("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 8 } },
+        e("span", { className: "verdict-pill verdict-" + (verdict || "NO_CLAIM_FIRED") },
+          verdict || "?"),
+        (typeof conf === "number") && e("span", { className: "payload-stat",
+          title: "Specialist confidence (1–10)" },
+          "conf " + conf + "/10"),
+        grey && e("span", { className: "payload-stat", style: { background: "#fbe4e0", color: "#a8332a" } }, "GREY"),
+        pattern && e("span", { className: "payload-stat" }, pattern),
+        finalTitle && e("span", { className: "payload-stat routing" }, finalTitle),
+        engineV && verdict && engineV !== verdict && e("span", { className: "payload-stat",
+          style: { background: "#fcecd6", color: "#8a5a13" },
+          title: "Specialist revised the engine's verdict" },
+          "engine: " + engineV + " → " + verdict),
+        deltaText && e("span", { className: "payload-stat",
+          style: { background: "var(--surface-soft)", color: "var(--muted)" },
+          title: "engine_alignment.delta" },
+          "Δ " + (deltaText.length > 60 ? deltaText.slice(0, 57) + "…" : deltaText))
+      ),
+
+      // Proposed atom tags (with rejected drafts struck through inline)
+      tags && e("details", { open: true, style: { marginTop: 6 } },
+        e("summary", null, "Proposed atom tags ",
+          e("span", { className: "muted", style: { fontSize: 11, fontFamily: "var(--mono)" } },
+            "(" + ATOM_DIMS.reduce((n,d) => n + ((tags[d]||[]).length), 0) + " atoms across " +
+            ATOM_DIMS.filter(d => (tags[d]||[]).length).length + " dim" +
+            (ATOM_DIMS.filter(d => (tags[d]||[]).length).length === 1 ? "" : "s") + ")")
+        ),
+        e("div", { style: { marginTop: 6 } },
+          ATOM_DIMS.map(d => {
+            const list = (tags[d] || []);
+            const dimRejected = rejected.filter(r => (r.dim || "") === d);
+            if (!list.length && !dimRejected.length) return null;
+            return e("div", { key: d, className: "dim-row" },
+              e("span", { className: "dim-label" }, d),
+              e("div", { className: "dim-cells" },
+                list.map(k => e("span", { key: k, className: "atom-chip dim-" + d, title: k }, k)),
+                dimRejected.map((r, i) => e("span", {
+                  key: "r" + i,
+                  className: "atom-chip rejected",
+                  title: r.reason || "rejected by specialist"
+                }, r.atom_key))
+              )
+            );
+          })
+        )
+      ),
+
+      // Simulated claim chain
+      chain.length > 0 && e("details", { open: true, style: { marginTop: 8 } },
+        e("summary", null, "Simulated claim chain ",
+          e("span", { className: "muted", style: { fontSize: 11, fontFamily: "var(--mono)" } },
+            "(" + chain.length + " fired, dominant first)")
+        ),
+        e("div", { style: { marginTop: 4 } },
+          chain.map((c, i) => e("div", { key: i, className: "claim-row" },
+            e("span", { className: "claim-id" }, c.claim_id || "—"),
+            e("div", null,
+              c.outcome_base && e("span", { className: "ev-pill" }, c.outcome_base),
+              c.outcome_after_lifts && c.outcome_after_lifts !== c.outcome_base &&
+                e("span", { className: "lift-pill", style: { marginLeft: 4 } },
+                  "→ " + c.outcome_after_lifts),
+              c.lift_applied && e("span", { className: "lift-pill", style: { marginLeft: 4 } },
+                "lift:" + (typeof c.lift_applied === "string" ? c.lift_applied : JSON.stringify(c.lift_applied))),
+              c.routing && c.routing.cross_title_redirect && e("span", { className: "routing-pill", style: { marginLeft: 4 } },
+                "→ " + c.routing.cross_title_redirect)
+            ),
+            i === 0 && e("span", { className: "payload-stat",
+              style: { background: "var(--primary)", color: "#fff" } }, "dominant")
+          ))
+        )
+      ),
+
+      // Suppressed claims (collapsible, secondary detail)
+      suppressed.length > 0 && e("details", null,
+        e("summary", null, "Suppressed claims (" + suppressed.length + ")"),
+        e("div", { style: { marginTop: 4 } },
+          suppressed.slice(0, 12).map((s, i) => e("div", { key: i, className: "claim-row" },
+            e("span", { className: "claim-id" }, s.claim_id || "—"),
+            e("span", { className: "muted", style: { fontSize: 11 } }, s.suppress_reason || "—")
+          )),
+          suppressed.length > 12 && e("div", { className: "muted", style: { fontSize: 11, marginTop: 4 } },
+            "… and " + (suppressed.length - 12) + " more")
+        )
+      ),
+
+      // Precedent analysis (one card per precedent)
+      precs.length > 0 && e("details", { open: true, style: { marginTop: 8 } },
+        e("summary", null, "Precedent analysis (" + precs.length + ")"),
+        e("div", { style: { marginTop: 4 } },
+          precs.map((pa, i) => {
+            const ap = (pa.applicability || "").toUpperCase();
+            const cls = "precedent-pa " +
+              (ap === "APPLICABLE" ? "applicable" :
+               ap === "PARTIAL" ? "partial" : "non-applicable");
+            return e("div", { key: i, className: cls },
+              e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" } },
+                e("span", { className: "payload-stat",
+                  style: ap === "APPLICABLE" ? { background: "var(--success)", color: "#fff" }
+                       : ap === "PARTIAL"    ? { background: "var(--warning)", color: "#fff" }
+                       : { background: "var(--surface-soft)", color: "var(--muted)" } },
+                  ap || "?"),
+                pa.case_id && e("span", { style: { fontFamily: "var(--mono)", fontSize: 11 } }, pa.case_id),
+                typeof pa.rank === "number" && e("span", { className: "muted", style: { fontSize: 11 } },
+                  "#" + pa.rank),
+                pa.decision && e("span", { className: "payload-stat" }, pa.decision),
+                pa.decision_alignment && e("span", { className: "muted", style: { fontSize: 11 } },
+                  "→ " + pa.decision_alignment)
+              ),
+              Array.isArray(pa.shared_atoms) && pa.shared_atoms.length > 0 && e("div", { style: { marginTop: 3 } },
+                e("span", { className: "muted", style: { fontSize: 10 } }, "shared: "),
+                pa.shared_atoms.map(a => e("span", { key: a, className: "atom-chip", style: { fontSize: 9, padding: "1px 5px" } }, a))
+              ),
+              Array.isArray(pa.conflicting_atoms) && pa.conflicting_atoms.length > 0 && e("div", { style: { marginTop: 3 } },
+                e("span", { className: "muted", style: { fontSize: 10 } }, "conflict: "),
+                pa.conflicting_atoms.map(a => e("span", { key: a, className: "atom-chip rejected", style: { fontSize: 9, padding: "1px 5px" } }, a))
+              ),
+              pa.note && e("div", { style: { marginTop: 3, fontSize: 11, color: "var(--body)" } }, pa.note)
+            );
+          })
+        )
+      ),
+
+      // Watch-outs (always-open if non-empty — these are reviewer call-to-actions)
+      watchOuts.length > 0 && e("div", { style: { marginTop: 10 } },
+        e("div", { className: "muted", style: { fontSize: 11, fontFamily: "var(--mono)", marginBottom: 4 } },
+          "WATCH-OUTS (" + watchOuts.length + ")"),
+        watchOuts.map((w, i) => e("div", { key: i, className: "watch-out" }, w))
+      ),
+
+      // Next step
+      nextStep && e("div", { style: { marginTop: 8, fontSize: 12, padding: "6px 8px", background: "var(--surface-soft)", borderRadius: 5 } },
+        e("span", { className: "muted", style: { fontFamily: "var(--mono)", fontSize: 10, marginRight: 6 } }, "NEXT STEP"),
+        nextStep
+      ),
+
+      // Tagged reasoning sections (collapsed by default — for deep-dive)
+      reasonSecs && e("details", { style: { marginTop: 10 } },
+        e("summary", null, "Reasoning sections"),
+        e("div", { style: { marginTop: 6 } },
+          reasonSecs._full
+            ? e("pre", { style: { whiteSpace: "pre-wrap", fontSize: 11 } }, reasonSecs._full)
+            : ["VISUAL ANALYSIS","TEXT ANALYSIS","PRECEDENT TRIAGE","ATOM TAGGING","CLAIM SIMULATION","VERDICT"]
+                .map(k => reasonSecs[k] && e("details", { key: k, open: k === "VERDICT" || k === "ATOM TAGGING" },
+                  e("summary", null, "[" + k + "]"),
+                  e("pre", { style: { whiteSpace: "pre-wrap", fontSize: 11, marginTop: 4 } }, reasonSecs[k])
+                ))
+        )
+      ),
+
+      // Raw JSON (always available, collapsed)
+      e("details", { style: { marginTop: 10 } },
+        e("summary", null, "Raw verdict JSON"),
+        e("pre", { style: { fontSize: 10 } }, JSON.stringify(parsed, null, 2))
+      )
+    )
+  );
+}
+
 // ---- AtomTagger: top-level pane --------------------------------------------
 function AtomTagger(props) {
   const { corpus } = props;
@@ -2416,6 +2791,10 @@ function AtomTagger(props) {
       payload: payload,
       pendingCase: pendingCase,
       imageMeta: corpus.image_meta
+    }),
+
+    pendingCase && payload && e(ReasonedVerdictPane, {
+      engineSimulation: payload.engine_simulation
     }),
 
     pendingCase && e("details", { open: false },
@@ -2653,10 +3032,10 @@ function App() {
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
     e("div", { className: "sub", style: { marginTop: 24 }},
-      "Phase 5c of 7 — case-review-payload v0.6 (slim, rule-book-in-skill). ",
-      "Two-step send: 1) payload + route preamble · 2) keyframes composite (12-frame 2-col PNG → clipboard). ",
-      "NSA pipeline ready — feed to /nsa-atom-precedent-review. ",
-      "Next: Phase 6 = wire specialist call directly + auto-tag opt-in.")
+      "Phase 6a of 7 — paste-back loop. ",
+      "Three-step workflow: 1) Send payload · 2) Copy keyframes composite · 3) Paste Mira's verdict reply into the new pane. ",
+      "Mira has no public skill-invoke API for plugins, so the human still rides the bus — but the verdict is now parsed, schema-checked, and rendered in-plugin. ",
+      "Next: 6a.1 = optional write-back to Bitable record · 6c = offline QA harness.")
   );
 }
 
