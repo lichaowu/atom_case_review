@@ -90,37 +90,79 @@
   .verdict-APPROVE{background:#e6f3df;color:#3d6b2a;border:1px solid #c8e0bd}
   .verdict-NO_CLAIM_FIRED{background:#ece8e1;color:#6c6a64;border:1px solid #d8d2c4}
   .verdict-ESCALATE{background:#ffe4ef;color:#92265a;border:1px solid #eeb6cf}
-  /* ---- v0.7.0 phase6a: reasoned-verdict (paste-back) styles ---- */
-  .reasoned-card{background:#fff;border:1px solid var(--primary);border-radius:10px;padding:14px;margin:12px 0}
-  .reasoned-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
-  .reasoned-title{font-family:var(--serif,Georgia,serif);font-weight:600;font-size:15px;color:var(--ink)}
-  .reasoned-meta{font-size:11px;color:var(--muted)}
-  .reasoned-paste{width:100%;min-height:84px;font-family:var(--mono);font-size:11px;line-height:1.4;border:1px solid var(--hairline);border-radius:6px;padding:8px;background:var(--surface-soft,#f5f0e8);color:var(--ink);resize:vertical}
-  .reasoned-paste:focus{outline:2px solid var(--primary);outline-offset:-1px}
-  .reasoned-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center}
-  .reasoned-err{background:#fff3f0;border:1px solid #f0c0b8;color:var(--error);padding:6px 8px;border-radius:5px;font-size:11px;margin-top:6px}
-  .reasoned-warn{background:#fcecd6;border:1px solid #ecd2a3;color:#8a5a13;padding:6px 8px;border-radius:5px;font-size:11px;margin-top:6px}
-  .atom-chip{display:inline-block;padding:2px 7px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--surface-soft);color:var(--ink);margin:2px}
-  .atom-chip.rejected{text-decoration:line-through;color:var(--muted);background:#f5f0e8;opacity:.7}
-  .atom-chip.dim-C{background:#e6efff;color:#1f3d6b}
-  .atom-chip.dim-S{background:#ffe6f0;color:#7a1f4a}
-  .atom-chip.dim-P{background:#e6f7f0;color:#1f6b4f}
-  .atom-chip.dim-R{background:#fff3d6;color:#7a5b0a}
-  .atom-chip.dim-E{background:#f3e6ff;color:#4a1f7a}
-  .atom-chip.dim-M{background:#e6efe6;color:#3d6b2a}
-  .atom-chip.dim-X{background:#ffe6e6;color:#a8332a}
-  .dim-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:11px;border-top:1px dashed var(--hairline)}
-  .dim-row:first-child{border-top:none}
-  .dim-label{font-family:var(--mono);font-weight:600;font-size:11px;color:var(--muted);min-width:18px}
-  .dim-cells{flex:1;display:flex;flex-wrap:wrap;align-items:center}
-  .claim-row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;padding:6px 0;border-top:1px solid var(--hairline);font-size:11px}
+  /* ---- v0.7.1 phase6a: reasoned-verdict (paste-back) — Anthropic warm-canvas ----
+     Anchored on cream surfaces (no white card), hairline border, no coral fill
+     except inside the verdict pill (re-uses semantic verdict-* classes).
+     Coral border is reserved for primary-card emphasis when a verdict is rendered. */
+  .reasoned-card{background:var(--surface-soft);border:1px solid var(--hairline);border-radius:12px;padding:16px;margin:12px 0}
+  .reasoned-card.has-verdict{background:var(--canvas);border-color:var(--hairline)}
+  .reasoned-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+  .reasoned-title{font-family:var(--serif);font-weight:500;font-size:18px;color:var(--ink);letter-spacing:-0.2px;line-height:1.3}
+  .reasoned-sub{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.45}
+  .reasoned-paste{width:100%;font-family:var(--mono);font-size:11px;line-height:1.5;border:1px solid var(--hairline);border-radius:8px;padding:10px 12px;background:var(--canvas);color:var(--ink);resize:vertical;display:block;box-sizing:border-box}
+  .reasoned-paste:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(204,120,92,0.15)}
+  .reasoned-summary-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--canvas);border:1px solid var(--hairline);border-radius:8px;font-size:12px;color:var(--muted)}
+  .reasoned-summary-bar .ok-dot{width:6px;height:6px;border-radius:50%;background:var(--success);display:inline-block;flex:0 0 6px}
+  .reasoned-err{background:#fdf0ee;border:1px solid #f0c0b8;color:var(--error);padding:8px 10px;border-radius:8px;font-size:12px;margin-top:8px;line-height:1.5}
+  .reasoned-warn{background:#fdf3e0;border:1px solid #ecd2a3;color:#8a5a13;padding:8px 10px;border-radius:8px;font-size:12px;margin-top:8px;line-height:1.5}
+  /* Atom chip — pill, caption type, dim-tinted backgrounds (warm-toned) */
+  .atom-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:9999px;font-family:var(--sans);font-weight:500;font-size:11px;line-height:1.3;background:var(--surface-card);color:var(--ink);margin:2px;border:1px solid transparent;white-space:nowrap}
+  .atom-chip .chip-dim{font-family:var(--mono);font-weight:600;font-size:10px;opacity:0.65;letter-spacing:0.5px}
+  .atom-chip .chip-name{font-weight:500}
+  .atom-chip.rejected{text-decoration:line-through;color:var(--muted-soft);background:var(--surface-soft);opacity:.85;border-color:var(--hairline-soft)}
+  .atom-chip.unknown{background:#fdf0ee;color:var(--error);border-color:#f0c0b8}
+  .atom-chip.dim-C{background:#ede4d8;color:#3d3d3a}
+  .atom-chip.dim-S{background:#f3dcd0;color:#3d3d3a}
+  .atom-chip.dim-P{background:#e2e6dc;color:#3d3d3a}
+  .atom-chip.dim-R{background:#f1e4cd;color:#3d3d3a}
+  .atom-chip.dim-E{background:#e8dee6;color:#3d3d3a}
+  .atom-chip.dim-M{background:#dee5dc;color:#3d3d3a}
+  .atom-chip.dim-X{background:#f3dcd9;color:#3d3d3a}
+  /* Dim row — labelled cluster, subtle dashed separator */
+  .dim-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;font-size:12px;border-top:1px dashed var(--hairline-soft)}
+  .dim-row:first-child{border-top:none;padding-top:0}
+  .dim-row .dim-bullet{flex:0 0 22px;width:22px;height:22px;border-radius:50%;background:var(--surface-card);color:var(--ink);display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:0;margin-top:1px}
+  .dim-row .dim-bullet.dim-C{background:#ede4d8}
+  .dim-row .dim-bullet.dim-S{background:#f3dcd0}
+  .dim-row .dim-bullet.dim-P{background:#e2e6dc}
+  .dim-row .dim-bullet.dim-R{background:#f1e4cd}
+  .dim-row .dim-bullet.dim-E{background:#e8dee6}
+  .dim-row .dim-bullet.dim-M{background:#dee5dc}
+  .dim-row .dim-bullet.dim-X{background:#f3dcd9}
+  .dim-row .dim-meta{flex:0 0 auto;display:flex;flex-direction:column;gap:1px;min-width:80px}
+  .dim-row .dim-meta .dim-name{font-family:var(--sans);font-weight:500;font-size:12px;color:var(--ink)}
+  .dim-row .dim-meta .dim-count{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  .dim-row .dim-cells{flex:1;display:flex;flex-wrap:wrap;align-items:center;gap:2px}
+  /* Claim chain row — dominant first, highlighted */
+  .claim-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;padding:8px 0;border-top:1px solid var(--hairline-soft);font-size:12px;align-items:center}
   .claim-row:first-child{border-top:none}
-  .claim-id{font-family:var(--mono);font-weight:500;color:var(--ink)}
-  .precedent-pa{padding:6px 8px;background:var(--surface-soft);border-left:3px solid var(--hairline);border-radius:3px;margin:4px 0;font-size:11px}
+  .claim-row.dominant{padding:10px 12px;background:var(--surface-card);border-radius:8px;margin-top:2px;border-top:none}
+  .claim-id{font-family:var(--mono);font-weight:500;color:var(--ink);font-size:12px}
+  /* Precedent applicability cards */
+  .precedent-pa{padding:10px 12px;background:var(--canvas);border:1px solid var(--hairline);border-left:3px solid var(--hairline);border-radius:8px;margin:6px 0;font-size:12px;line-height:1.55}
   .precedent-pa.applicable{border-left-color:var(--success)}
   .precedent-pa.partial{border-left-color:var(--warning)}
-  .precedent-pa.non-applicable{border-left-color:var(--muted-soft,#8e8b82)}
-  .watch-out{padding:4px 8px;background:#fcecd6;border-left:3px solid var(--warning);font-size:11px;margin:3px 0;border-radius:3px}
+  .precedent-pa.non-applicable{border-left-color:var(--muted-soft,#8e8b82);opacity:0.85}
+  .precedent-pa .pa-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .precedent-pa .pa-note{margin-top:4px;color:var(--body)}
+  /* Watch-out callouts */
+  .watch-out{padding:8px 10px;background:#fdf3e0;border-left:3px solid var(--warning);font-size:12px;margin:4px 0;border-radius:6px;line-height:1.5}
+  /* Confidence chip semantics */
+  .conf-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:9999px;font-family:var(--mono);font-weight:600;font-size:11px;line-height:1.3;letter-spacing:0.5px;border:1px solid transparent}
+  .conf-chip.high{background:#e6f3df;color:#3d6b2a;border-color:#c8e0bd}
+  .conf-chip.mid{background:#fdf3e0;color:#8a5a13;border-color:#ecd2a3}
+  .conf-chip.low{background:#fdf0ee;color:var(--error);border-color:#f0c0b8}
+  /* Reasoned card sub-section heads (caption-uppercase) */
+  .reasoned-section-head{font-family:var(--sans);font-weight:500;font-size:11px;line-height:1.4;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+  .reasoned-section-head:first-child{margin-top:0}
+  .reasoned-section-head .count{letter-spacing:0;text-transform:none;font-family:var(--mono);font-size:11px;color:var(--muted-soft);font-weight:400;margin-left:6px}
+  /* Generic small button used inside the pane */
+  .reasoned-card .btn-ghost{font-family:var(--sans);font-size:12px;font-weight:500;padding:5px 10px;border-radius:6px;border:1px solid var(--hairline);background:transparent;color:var(--ink);cursor:pointer}
+  .reasoned-card .btn-ghost:hover{background:var(--surface-card)}
+  .reasoned-card details>summary{font-family:var(--sans);font-weight:500;font-size:12px;color:var(--body);cursor:pointer;list-style:none;padding:6px 0}
+  .reasoned-card details>summary::-webkit-details-marker{display:none}
+  .reasoned-card details>summary::before{content:"▸";display:inline-block;margin-right:6px;color:var(--muted-soft);font-size:10px;transition:transform 0.15s}
+  .reasoned-card details[open]>summary::before{transform:rotate(90deg)}
   .verdict-meta{margin-left:10px;font-size:11px;color:var(--muted);font-family:var(--sans)}
   .hit-row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;padding:7px 0;border-top:1px solid var(--hairline);font-size:12px}
   .hit-row:first-child{border-top:none}
@@ -206,7 +248,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.7.0-phase6a";
+const PLUGIN_VERSION = "atom-mvp v0.7.1-phase6a";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -2335,16 +2377,73 @@ function _splitReason(raw) {
 //   • Watch-outs / next_step / suppressed claims (collapsible)
 //   • Engine alignment delta + tagged reasoning sections (collapsible)
 function ReasonedVerdictPane(props) {
-  const { engineSimulation } = props || {};
+  const { engineSimulation, atomsByDim } = props || {};
   const [raw, setRaw]         = React.useState("");
   const [parsed, setParsed]   = React.useState(null);
   const [check, setCheck]     = React.useState({ ok: true, errors: [], warnings: [] });
-  const [touched, setTouched] = React.useState(false);
+  const [editing, setEditing] = React.useState(true); // textarea expanded by default until first parse
 
+  // ---- Build a flat lookup index from corpus.atomsByDim ----
+  // Map atom_key → { atom_key, atom_name, serial_code, dim }. Used to resolve
+  // any key the skill emits (catalog uses dotted-namespace `atom_key`s; we also
+  // accept serial_code as a fallback in case a skill rev returns "C37"). Tries
+  // case-insensitive matching as a final resort. Returns null when no match.
+  const atomIndex = React.useMemo(() => {
+    const byKey = new Map(), bySerial = new Map(), byKeyLC = new Map();
+    if (atomsByDim) {
+      for (const d of Object.keys(atomsByDim)) {
+        const dim = d; // C / S / P / R / E / M / X
+        for (const a of (atomsByDim[d] || [])) {
+          const rec = {
+            atom_key: a.atom_key,
+            atom_name: a.atom_name || "",
+            serial_code: a.serial_code || "",
+            dim: dim,
+            description: a.description || ""
+          };
+          if (a.atom_key) {
+            byKey.set(a.atom_key, rec);
+            byKeyLC.set(String(a.atom_key).toLowerCase(), rec);
+          }
+          if (a.serial_code) {
+            // serial_code looks like "C37 — Not applicable"; index by leading token too
+            bySerial.set(a.serial_code, rec);
+            const m = String(a.serial_code).match(/^([A-Z]\d+)/);
+            if (m) bySerial.set(m[1], rec);
+          }
+        }
+      }
+    }
+    return { byKey, bySerial, byKeyLC };
+  }, [atomsByDim]);
+
+  // resolveAtom — accepts a raw key + optional dim hint. Returns
+  // { key, dim, serial, name, resolved } where resolved=false means "unknown".
+  const resolveAtom = React.useCallback((rawKey, dimHint) => {
+    if (!rawKey) return { key: rawKey, dim: dimHint || "?", serial: "", name: "", resolved: false };
+    const k = String(rawKey);
+    let r = atomIndex.byKey.get(k) || atomIndex.bySerial.get(k) || atomIndex.byKeyLC.get(k.toLowerCase());
+    if (!r) {
+      // Last resort: if the key starts with a known dim prefix (e.g. "C37" or
+      // "atom.exposure...."), infer the dim. Catalog uses prefixes:
+      //  C → "atom." | S → "subject." | P → "portrayal." | R → "realism."
+      //  E → "explicitness." | M → "modifier." | X → "exception."
+      const prefixDim = { atom: "C", subject: "S", portrayal: "P", realism: "R",
+                          explicitness: "E", modifier: "M", exception: "X" };
+      const head = k.split(".")[0];
+      const m = k.match(/^([A-Z])\d+/);
+      const dim = dimHint || prefixDim[head] || (m ? m[1] : "?");
+      // Build a friendly fallback name from the tail of the key.
+      const tail = k.includes(".") ? k.split(".").slice(1).join(".") : k;
+      return { key: k, dim: dim, serial: "", name: tail || k, resolved: false };
+    }
+    return { key: r.atom_key, dim: r.dim, serial: r.serial_code, name: r.atom_name, resolved: true };
+  }, [atomIndex]);
+
+  // ---- Parse-on-input ----
   const onChange = (ev) => {
     const v = ev.target.value;
     setRaw(v);
-    if (!touched) setTouched(true);
     if (!v.trim()) { setParsed(null); setCheck({ ok: true, errors: [], warnings: [] }); return; }
     const p = tryParseVerdictJson(v);
     if (!p) {
@@ -2357,15 +2456,22 @@ function ReasonedVerdictPane(props) {
     const c = validateAtomVerdict(p);
     setParsed(p);
     setCheck(c);
+    if (c.ok) setEditing(false); // collapse textarea on successful parse
   };
 
-  const onClear = () => { setRaw(""); setParsed(null); setCheck({ ok: true, errors: [], warnings: [] }); setTouched(false); };
+  const onClear = () => {
+    setRaw(""); setParsed(null);
+    setCheck({ ok: true, errors: [], warnings: [] });
+    setEditing(true);
+  };
 
+  // ---- Derived view-model -----
   const verdict    = parsed && parsed.verdict;
   const conf       = parsed && parsed.confidence;
   const grey       = parsed && parsed.grey;
   const pattern    = parsed && parsed.pattern;
   const finalTitle = parsed && parsed.final_policy_title;
+  const showFinalTitle = finalTitle && String(finalTitle).toLowerCase() !== "none" && String(finalTitle).trim() !== "";
   const tags       = (parsed && parsed.proposed_atom_tags) || null;
   const rejected   = (parsed && parsed.rejected_draft_atoms) || [];
   const chain      = (parsed && parsed.simulated_claim_chain) || [];
@@ -2376,37 +2482,107 @@ function ReasonedVerdictPane(props) {
   const nextStep   = parsed && parsed.next_step;
   const reasonSecs = parsed && parsed.reason ? _splitReason(parsed.reason) : null;
 
-  // Build a quick set of rejected-atom keys for strikethrough rendering.
-  const rejectedSet = React.useMemo(() => {
-    const s = new Set();
-    for (const r of rejected) if (r && r.atom_key) s.add((r.dim || "?") + ":" + r.atom_key);
-    return s;
-  }, [rejected]);
-
-  // Engine vs specialist delta detection — surface as a small chip if they
-  // differ. Allows reviewer to spot over- or under-tagging at a glance.
+  // Engine verdict fallback: skill may emit engine_alignment.engine_verdict=null
+  // when it didn't compare. Fall back to the payload's engine_simulation, which
+  // we shipped from the plugin. Only render the chip when the two differ.
   const engineV = (align && align.engine_verdict)
                 || (engineSimulation && engineSimulation.verdict)
                 || null;
+  const showEngineDelta = engineV && verdict && engineV !== verdict;
+  // engine_alignment.delta — show only when it's a real revision string.
   const deltaText = align && align.delta && align.delta !== "none" ? align.delta : null;
 
-  return e("div", { className: "reasoned-card" },
+  // Confidence chip color (legacy plugin's mapping):
+  //   ≥ 7 → success / ≤ 4 → error / mid → warning
+  const confKind = (typeof conf !== "number") ? "" :
+                   conf >= 7 ? "high" : conf <= 4 ? "low" : "mid";
+
+  // Pre-compute one resolved view for proposed atoms, with rejected atoms
+  // grouped per-dim so the renderer can interleave struck-through chips inline.
+  const ATOM_DIMS = ["C","S","P","R","E","M","X"];
+  const DIM_NAMES = { C: "Content", S: "Subject", P: "Portrayal",
+                      R: "Realism", E: "Explicitness", M: "Modifier", X: "Exception" };
+  const tagsByDim = React.useMemo(() => {
+    if (!tags) return null;
+    const out = {};
+    for (const d of ATOM_DIMS) {
+      const proposed = (tags[d] || []).map(k => resolveAtom(k, d));
+      const rej      = rejected.filter(r => (r.dim || "") === d)
+                               .map(r => Object.assign({}, resolveAtom(r.atom_key, d), { reasonText: r.reason }));
+      out[d] = { proposed, rejected: rej };
+    }
+    return out;
+  }, [tags, rejected, resolveAtom]);
+
+  // For shared/conflicting precedent atoms — same lookup, but flat list.
+  const resolveList = (arr, hint) => (arr || []).map(k => resolveAtom(k, hint));
+
+  // ---- Chip helper (exposed as inner React component for clarity) ----
+  const AtomChip = ({ atom, struck }) => {
+    const cls = "atom-chip"
+      + (atom.resolved ? " dim-" + atom.dim : " unknown")
+      + (struck ? " rejected" : "");
+    const label = atom.resolved && atom.serial
+      ? (atom.serial.split(" — ")[0] + " · " + atom.name)
+      : (atom.resolved ? atom.name : atom.name + " (unknown)");
+    return e("span", {
+      className: cls,
+      title: atom.resolved
+        ? (atom.key + (atom.description ? " — " + atom.description : ""))
+        : ("Unknown atom_key — not in the v1.0 catalog: " + atom.key)
+    },
+      e("span", { className: "chip-dim" }, atom.dim || "?"),
+      e("span", { className: "chip-name" }, label)
+    );
+  };
+
+  // ---- Render -----
+  const cardCls = "reasoned-card" + (parsed && check.ok ? " has-verdict" : "");
+
+  return e("div", { className: cardCls },
+    // ---- Head: title + clear/edit buttons ----
     e("div", { className: "reasoned-head" },
       e("div", null,
-        e("div", { className: "reasoned-title" }, "🧠 Reasoned verdict (paste-back)"),
-        e("div", { className: "reasoned-meta" },
-          "Paste Mira's ```json verdict reply below. Parser + schema check run live as you type.")
+        e("div", { className: "reasoned-title" }, "Reasoned verdict"),
+        e("div", { className: "reasoned-sub" },
+          editing
+            ? "Paste Mira's ```json verdict reply below. Parser + schema check run live as you type."
+            : "Parsed and rendered. Edit paste to re-evaluate.")
       ),
-      raw && e("button", { className: "copy-btn ghost", onClick: onClear,
-        title: "Clear the textarea and rendered verdict." }, "clear")
+      e("div", { style: { display: "flex", gap: 6 } },
+        !editing && parsed && e("button", { className: "btn-ghost", onClick: () => setEditing(true),
+          title: "Re-open the textarea to paste a new reply." }, "edit paste"),
+        raw && e("button", { className: "btn-ghost", onClick: onClear,
+          title: "Clear textarea + rendered verdict." }, "clear")
+      )
     ),
-    e("textarea", {
+
+    // ---- Textarea (expanded) OR one-line summary bar (collapsed) ----
+    editing && e("textarea", {
       className: "reasoned-paste",
+      rows: 14,
       value: raw,
       onChange: onChange,
       placeholder: "Paste the entire ```json …``` block (or the bare {…}) from Mira's reply here.",
       spellCheck: false
     }),
+    !editing && parsed && check.ok && e("div", { className: "reasoned-summary-bar" },
+      e("span", { className: "ok-dot", "aria-hidden": true }),
+      "Parsed ",
+      e("span", { className: "mono", style: { fontFamily: "var(--mono)", color: "var(--ink)" } },
+        Math.round(raw.length / 1024 * 10) / 10 + " KB"),
+      " of verdict JSON · ",
+      verdict || "?",
+      (typeof conf === "number") ? " · conf " + conf + "/10" : "",
+      " · ",
+      (tags ? ATOM_DIMS.reduce((n, d) => n + ((tags[d] || []).length), 0) : 0),
+      " atoms across ",
+      (tags ? ATOM_DIMS.filter(d => (tags[d] || []).length).length : 0),
+      " dim",
+      (tags && ATOM_DIMS.filter(d => (tags[d] || []).length).length === 1 ? "" : "s")
+    ),
+
+    // ---- Errors / warnings ----
     !check.ok && check.errors.length > 0 && e("div", { className: "reasoned-err" },
       check.errors.map((er, i) => e("div", { key: i }, "✗ ", er))
     ),
@@ -2414,50 +2590,60 @@ function ReasonedVerdictPane(props) {
       check.warnings.map((w, i) => e("div", { key: i }, "⚠ ", w))
     ),
 
-    // ---- rendered verdict view -------------------------------------------
-    parsed && check.ok && e("div", { style: { marginTop: 10 } },
-      // Header strip: verdict pill + meta chips
-      e("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 8 } },
+    // ---- Rendered verdict view ----
+    parsed && check.ok && e("div", { style: { marginTop: 14 } },
+
+      // Header strip — verdict pill + confidence + meta chips
+      e("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 4 } },
         e("span", { className: "verdict-pill verdict-" + (verdict || "NO_CLAIM_FIRED") },
           verdict || "?"),
-        (typeof conf === "number") && e("span", { className: "payload-stat",
+        confKind && e("span", { className: "conf-chip " + confKind,
           title: "Specialist confidence (1–10)" },
           "conf " + conf + "/10"),
-        grey && e("span", { className: "payload-stat", style: { background: "#fbe4e0", color: "#a8332a" } }, "GREY"),
-        pattern && e("span", { className: "payload-stat" }, pattern),
-        finalTitle && e("span", { className: "payload-stat routing" }, finalTitle),
-        engineV && verdict && engineV !== verdict && e("span", { className: "payload-stat",
-          style: { background: "#fcecd6", color: "#8a5a13" },
-          title: "Specialist revised the engine's verdict" },
-          "engine: " + engineV + " → " + verdict),
-        deltaText && e("span", { className: "payload-stat",
-          style: { background: "var(--surface-soft)", color: "var(--muted)" },
-          title: "engine_alignment.delta" },
-          "Δ " + (deltaText.length > 60 ? deltaText.slice(0, 57) + "…" : deltaText))
+        grey && e("span", { className: "verdict-pill verdict-VIOLATION",
+          style: { fontSize: 11, padding: "4px 10px" } }, "GREY"),
+        pattern && e("span", { className: "atom-chip",
+          style: { background: "var(--surface-card)", color: "var(--body)" } },
+          e("span", { className: "chip-name" }, pattern)),
+        showFinalTitle && e("span", { className: "atom-chip",
+          style: { background: "var(--primary)", color: "#fff" },
+          title: "final_policy_title" },
+          e("span", { className: "chip-name" }, finalTitle)),
+        showEngineDelta && e("span", { className: "atom-chip",
+          style: { background: "#fdf3e0", color: "#8a5a13" },
+          title: deltaText || "engine_alignment delta" },
+          e("span", { className: "chip-name" }, "engine: " + engineV + " → " + verdict))
       ),
 
-      // Proposed atom tags (with rejected drafts struck through inline)
-      tags && e("details", { open: true, style: { marginTop: 6 } },
-        e("summary", null, "Proposed atom tags ",
-          e("span", { className: "muted", style: { fontSize: 11, fontFamily: "var(--mono)" } },
-            "(" + ATOM_DIMS.reduce((n,d) => n + ((tags[d]||[]).length), 0) + " atoms across " +
-            ATOM_DIMS.filter(d => (tags[d]||[]).length).length + " dim" +
-            (ATOM_DIMS.filter(d => (tags[d]||[]).length).length === 1 ? "" : "s") + ")")
+      // engine_alignment.delta as a separate caption row when present (full text in tooltip)
+      deltaText && deltaText.length > 0 && e("div", {
+        className: "reasoned-sub",
+        style: { marginTop: 6, marginBottom: 2 },
+        title: deltaText
+      }, "Δ ", deltaText.length > 110 ? deltaText.slice(0, 107) + "…" : deltaText),
+
+      // Proposed atom tags
+      tagsByDim && e("div", null,
+        e("div", { className: "reasoned-section-head" }, "Proposed atom tags",
+          e("span", { className: "count" },
+            "(" + ATOM_DIMS.reduce((n, d) => n + tagsByDim[d].proposed.length, 0) + " accepted",
+            rejected.length > 0 ? (" · " + rejected.length + " rejected") : "",
+            ")")
         ),
-        e("div", { style: { marginTop: 6 } },
+        e("div", null,
           ATOM_DIMS.map(d => {
-            const list = (tags[d] || []);
-            const dimRejected = rejected.filter(r => (r.dim || "") === d);
-            if (!list.length && !dimRejected.length) return null;
+            const cell = tagsByDim[d];
+            if (!cell.proposed.length && !cell.rejected.length) return null;
             return e("div", { key: d, className: "dim-row" },
-              e("span", { className: "dim-label" }, d),
+              e("span", { className: "dim-bullet dim-" + d, "aria-hidden": true }, d),
+              e("div", { className: "dim-meta" },
+                e("span", { className: "dim-name" }, DIM_NAMES[d]),
+                e("span", { className: "dim-count" },
+                  cell.proposed.length + (cell.rejected.length ? " · " + cell.rejected.length + " rej" : ""))
+              ),
               e("div", { className: "dim-cells" },
-                list.map(k => e("span", { key: k, className: "atom-chip dim-" + d, title: k }, k)),
-                dimRejected.map((r, i) => e("span", {
-                  key: "r" + i,
-                  className: "atom-chip rejected",
-                  title: r.reason || "rejected by specialist"
-                }, r.atom_key))
+                cell.proposed.map((a, i) => e(AtomChip, { key: "p" + i, atom: a, struck: false })),
+                cell.rejected.map((a, i) => e(AtomChip, { key: "r" + i, atom: a, struck: true }))
               )
             );
           })
@@ -2465,15 +2651,13 @@ function ReasonedVerdictPane(props) {
       ),
 
       // Simulated claim chain
-      chain.length > 0 && e("details", { open: true, style: { marginTop: 8 } },
-        e("summary", null, "Simulated claim chain ",
-          e("span", { className: "muted", style: { fontSize: 11, fontFamily: "var(--mono)" } },
-            "(" + chain.length + " fired, dominant first)")
-        ),
-        e("div", { style: { marginTop: 4 } },
-          chain.map((c, i) => e("div", { key: i, className: "claim-row" },
+      chain.length > 0 && e("div", null,
+        e("div", { className: "reasoned-section-head" }, "Simulated claim chain",
+          e("span", { className: "count" }, "(" + chain.length + " fired, dominant first)")),
+        e("div", null,
+          chain.map((c, i) => e("div", { key: i, className: "claim-row" + (i === 0 ? " dominant" : "") },
             e("span", { className: "claim-id" }, c.claim_id || "—"),
-            e("div", null,
+            e("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" } },
               c.outcome_base && e("span", { className: "ev-pill" }, c.outcome_base),
               c.outcome_after_lifts && c.outcome_after_lifts !== c.outcome_base &&
                 e("span", { className: "lift-pill", style: { marginLeft: 4 } },
@@ -2483,93 +2667,103 @@ function ReasonedVerdictPane(props) {
               c.routing && c.routing.cross_title_redirect && e("span", { className: "routing-pill", style: { marginLeft: 4 } },
                 "→ " + c.routing.cross_title_redirect)
             ),
-            i === 0 && e("span", { className: "payload-stat",
-              style: { background: "var(--primary)", color: "#fff" } }, "dominant")
+            i === 0 && e("span", { className: "atom-chip",
+              style: { background: "var(--primary)", color: "#fff", fontSize: 10 } },
+              e("span", { className: "chip-name" }, "dominant"))
           ))
         )
       ),
 
-      // Suppressed claims (collapsible, secondary detail)
-      suppressed.length > 0 && e("details", null,
-        e("summary", null, "Suppressed claims (" + suppressed.length + ")"),
-        e("div", { style: { marginTop: 4 } },
-          suppressed.slice(0, 12).map((s, i) => e("div", { key: i, className: "claim-row" },
-            e("span", { className: "claim-id" }, s.claim_id || "—"),
-            e("span", { className: "muted", style: { fontSize: 11 } }, s.suppress_reason || "—")
-          )),
-          suppressed.length > 12 && e("div", { className: "muted", style: { fontSize: 11, marginTop: 4 } },
-            "… and " + (suppressed.length - 12) + " more")
-        )
+      // Watch-outs (always visible — these are the reviewer's call-to-action)
+      watchOuts.length > 0 && e("div", null,
+        e("div", { className: "reasoned-section-head" }, "Watch-outs",
+          e("span", { className: "count" }, "(" + watchOuts.length + ")")),
+        watchOuts.map((w, i) => e("div", { key: i, className: "watch-out" }, w))
       ),
 
-      // Precedent analysis (one card per precedent)
-      precs.length > 0 && e("details", { open: true, style: { marginTop: 8 } },
+      // Next step — small callout
+      nextStep && e("div", null,
+        e("div", { className: "reasoned-section-head" }, "Next step"),
+        e("div", { style: { fontSize: 12, padding: "8px 10px",
+                            background: "var(--surface-card)", borderRadius: 8,
+                            color: "var(--body)", lineHeight: 1.55 } },
+          nextStep)
+      ),
+
+      // Precedent analysis (collapsed by default — secondary detail)
+      precs.length > 0 && e("details", { open: false, style: { marginTop: 14 } },
         e("summary", null, "Precedent analysis (" + precs.length + ")"),
-        e("div", { style: { marginTop: 4 } },
+        e("div", { style: { marginTop: 6 } },
           precs.map((pa, i) => {
             const ap = (pa.applicability || "").toUpperCase();
             const cls = "precedent-pa " +
               (ap === "APPLICABLE" ? "applicable" :
-               ap === "PARTIAL" ? "partial" : "non-applicable");
+               ap === "PARTIAL"    ? "partial" : "non-applicable");
+            const apKind = ap === "APPLICABLE" ? "high" : ap === "PARTIAL" ? "mid" : "low";
             return e("div", { key: i, className: cls },
-              e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" } },
-                e("span", { className: "payload-stat",
-                  style: ap === "APPLICABLE" ? { background: "var(--success)", color: "#fff" }
-                       : ap === "PARTIAL"    ? { background: "var(--warning)", color: "#fff" }
-                       : { background: "var(--surface-soft)", color: "var(--muted)" } },
-                  ap || "?"),
-                pa.case_id && e("span", { style: { fontFamily: "var(--mono)", fontSize: 11 } }, pa.case_id),
-                typeof pa.rank === "number" && e("span", { className: "muted", style: { fontSize: 11 } },
+              e("div", { className: "pa-row" },
+                e("span", { className: "conf-chip " + apKind,
+                  style: { letterSpacing: 1, fontSize: 10 } }, ap || "?"),
+                pa.case_id && e("span", { style: { fontFamily: "var(--mono)", fontSize: 11, color: "var(--body-strong)" } }, pa.case_id),
+                typeof pa.rank === "number" && e("span", { className: "muted", style: { fontSize: 11, color: "var(--muted)" } },
                   "#" + pa.rank),
-                pa.decision && e("span", { className: "payload-stat" }, pa.decision),
-                pa.decision_alignment && e("span", { className: "muted", style: { fontSize: 11 } },
+                pa.decision && e("span", { className: "atom-chip" },
+                  e("span", { className: "chip-name" }, pa.decision)),
+                pa.decision_alignment && e("span", { style: { fontSize: 11, color: "var(--muted)" } },
                   "→ " + pa.decision_alignment)
               ),
-              Array.isArray(pa.shared_atoms) && pa.shared_atoms.length > 0 && e("div", { style: { marginTop: 3 } },
-                e("span", { className: "muted", style: { fontSize: 10 } }, "shared: "),
-                pa.shared_atoms.map(a => e("span", { key: a, className: "atom-chip", style: { fontSize: 9, padding: "1px 5px" } }, a))
+              Array.isArray(pa.shared_atoms) && pa.shared_atoms.length > 0 && e("div", { style: { marginTop: 6 } },
+                e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", letterSpacing: 0.5, marginRight: 4 } }, "SHARED"),
+                resolveList(pa.shared_atoms).map((a, j) => e(AtomChip, { key: "s" + j, atom: a, struck: false }))
               ),
-              Array.isArray(pa.conflicting_atoms) && pa.conflicting_atoms.length > 0 && e("div", { style: { marginTop: 3 } },
-                e("span", { className: "muted", style: { fontSize: 10 } }, "conflict: "),
-                pa.conflicting_atoms.map(a => e("span", { key: a, className: "atom-chip rejected", style: { fontSize: 9, padding: "1px 5px" } }, a))
+              Array.isArray(pa.conflicting_atoms) && pa.conflicting_atoms.length > 0 && e("div", { style: { marginTop: 4 } },
+                e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", letterSpacing: 0.5, marginRight: 4 } }, "CONFLICT"),
+                resolveList(pa.conflicting_atoms).map((a, j) => e(AtomChip, { key: "c" + j, atom: a, struck: true }))
               ),
-              pa.note && e("div", { style: { marginTop: 3, fontSize: 11, color: "var(--body)" } }, pa.note)
+              pa.note && e("div", { className: "pa-note" }, pa.note)
             );
           })
         )
       ),
 
-      // Watch-outs (always-open if non-empty — these are reviewer call-to-actions)
-      watchOuts.length > 0 && e("div", { style: { marginTop: 10 } },
-        e("div", { className: "muted", style: { fontSize: 11, fontFamily: "var(--mono)", marginBottom: 4 } },
-          "WATCH-OUTS (" + watchOuts.length + ")"),
-        watchOuts.map((w, i) => e("div", { key: i, className: "watch-out" }, w))
+      // Suppressed claims (collapsed)
+      suppressed.length > 0 && e("details", null,
+        e("summary", null, "Suppressed claims (" + suppressed.length + ")"),
+        e("div", { style: { marginTop: 4 } },
+          suppressed.slice(0, 12).map((s, i) => e("div", { key: i, className: "claim-row" },
+            e("span", { className: "claim-id" }, s.claim_id || "—"),
+            e("span", { style: { fontSize: 12, color: "var(--muted)" } }, s.suppress_reason || "—")
+          )),
+          suppressed.length > 12 && e("div", { style: { fontSize: 11, marginTop: 4, color: "var(--muted)" } },
+            "… and " + (suppressed.length - 12) + " more")
+        )
       ),
 
-      // Next step
-      nextStep && e("div", { style: { marginTop: 8, fontSize: 12, padding: "6px 8px", background: "var(--surface-soft)", borderRadius: 5 } },
-        e("span", { className: "muted", style: { fontFamily: "var(--mono)", fontSize: 10, marginRight: 6 } }, "NEXT STEP"),
-        nextStep
-      ),
-
-      // Tagged reasoning sections (collapsed by default — for deep-dive)
-      reasonSecs && e("details", { style: { marginTop: 10 } },
+      // Reasoning sections (collapsed)
+      reasonSecs && e("details", { style: { marginTop: 4 } },
         e("summary", null, "Reasoning sections"),
         e("div", { style: { marginTop: 6 } },
           reasonSecs._full
-            ? e("pre", { style: { whiteSpace: "pre-wrap", fontSize: 11 } }, reasonSecs._full)
+            ? e("pre", { style: { whiteSpace: "pre-wrap", fontSize: 11, fontFamily: "var(--mono)",
+                                  color: "var(--body)", padding: 8, background: "var(--surface-soft)",
+                                  borderRadius: 6 } }, reasonSecs._full)
             : ["VISUAL ANALYSIS","TEXT ANALYSIS","PRECEDENT TRIAGE","ATOM TAGGING","CLAIM SIMULATION","VERDICT"]
                 .map(k => reasonSecs[k] && e("details", { key: k, open: k === "VERDICT" || k === "ATOM TAGGING" },
                   e("summary", null, "[" + k + "]"),
-                  e("pre", { style: { whiteSpace: "pre-wrap", fontSize: 11, marginTop: 4 } }, reasonSecs[k])
+                  e("pre", { style: { whiteSpace: "pre-wrap", fontSize: 11, marginTop: 4, fontFamily: "var(--mono)",
+                                      color: "var(--body)", padding: 8, background: "var(--surface-soft)",
+                                      borderRadius: 6 } }, reasonSecs[k])
                 ))
         )
       ),
 
-      // Raw JSON (always available, collapsed)
-      e("details", { style: { marginTop: 10 } },
+      // Raw JSON (collapsed)
+      e("details", { style: { marginTop: 4 } },
         e("summary", null, "Raw verdict JSON"),
-        e("pre", { style: { fontSize: 10 } }, JSON.stringify(parsed, null, 2))
+        e("pre", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--body)",
+                            padding: 8, background: "var(--surface-soft)", borderRadius: 6,
+                            whiteSpace: "pre-wrap" } },
+          JSON.stringify(parsed, null, 2))
       )
     )
   );
@@ -2794,7 +2988,8 @@ function AtomTagger(props) {
     }),
 
     pendingCase && payload && e(ReasonedVerdictPane, {
-      engineSimulation: payload.engine_simulation
+      engineSimulation: payload.engine_simulation,
+      atomsByDim: corpus.atomsByDim
     }),
 
     pendingCase && e("details", { open: false },
