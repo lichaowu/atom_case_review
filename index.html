@@ -156,7 +156,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.4.2-phase4";
+const PLUGIN_VERSION = "atom-mvp v0.4.3-phase4";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -391,14 +391,23 @@ const DIM_NAMES = {
     var topK = opts.topK || 5;
     var mix  = opts.mix  || { text: 0.6, atom: 0.4 };
     var scopeByTitle = opts.scopeByTitle !== false;
+    var scopeByIssue = opts.scopeByIssue !== false;
 
+    // Title scope takes precedence; if title is empty, fall back to issue scope.
     var pool = cases.slice();
+    var scope = { kind: "none", value: null };
     if (scopeByTitle && candidate.policy_title) {
       pool = pool.filter(function (c) {
         return !c.policy_title || c.policy_title === candidate.policy_title;
       });
+      scope = { kind: "policy_title", value: candidate.policy_title };
+    } else if (scopeByIssue && candidate.issue) {
+      pool = pool.filter(function (c) {
+        return !c.issue || c.issue === candidate.issue;
+      });
+      scope = { kind: "issue", value: candidate.issue };
     }
-    if (!pool.length) return { results: [], pool_size: 0 };
+    if (!pool.length) return { results: [], pool_size: 0, scope: scope };
 
     var idx = buildBm25Index(pool);
     var qTextSrc = [candidate.visual_summary, candidate.asr_text, candidate.ocr_text, candidate.caption_text]
@@ -440,7 +449,7 @@ const DIM_NAMES = {
       if (b._bm25 !== a._bm25) return b._bm25 - a._bm25;
       return (a.case_id || "").localeCompare(b.case_id || "");
     });
-    return { results: scored.slice(0, topK), pool_size: pool.length, total_scored: scored.length, mix: mix };
+    return { results: scored.slice(0, topK), pool_size: pool.length, total_scored: scored.length, mix: mix, scope: scope };
   }
 
   root.AtomRetriever = {
@@ -856,13 +865,16 @@ function VerdictPane(props) {
 function PrecedentsPane(props) {
   const { result, imageMeta } = props;
   if (!result) return null;
-  const { results, pool_size, total_scored, mix } = result;
+  const { results, pool_size, total_scored, mix, scope } = result;
+  const scopeLabel = scope && scope.kind && scope.kind !== "none"
+    ? scope.kind + "=" + scope.value
+    : "no scope";
 
   if (!results || !results.length) {
     return e("div", { className: "tag-card" },
       e("strong", { style: { fontSize: 13 }}, "Top precedents"),
       e("div", { className: "muted", style: { fontSize: 11, padding: "8px 0" }},
-        "No precedents in scope. Pool size: " + (pool_size || 0) + "."));
+        "No precedents in scope (" + scopeLabel + "). Pool size: " + (pool_size || 0) + "."));
   }
 
   const fmt = (n) => (n == null ? "—" : (Math.round(n * 1000) / 1000).toFixed(2));
@@ -880,7 +892,8 @@ function PrecedentsPane(props) {
     e("div", { className: "row", style: { justifyContent: "space-between", marginBottom: 4 }},
       e("strong", { style: { fontSize: 13 }}, "Top precedents (" + results.length + ")"),
       e("span", { className: "muted", style: { fontSize: 11 }},
-        "pool=" + pool_size + " · scored=" + total_scored +
+        "scope " + scopeLabel +
+        " · pool=" + pool_size + " · scored=" + total_scored +
         " · mix " + Math.round(mix.text*100) + "/" + Math.round(mix.atom*100) + " (text/atom)")
     ),
     e("div", null,
@@ -940,29 +953,60 @@ function PrecedentsPane(props) {
 function ImagesPane(props) {
   const { images, recordId, fieldId, tableId, label } = props;
   const [resolved, setResolved] = React.useState({}); // token -> url
+  const [failed,   setFailed]   = React.useState({}); // token -> reason string
+  const [pending,  setPending]  = React.useState({}); // token -> bool (initial true)
   const [error, setError] = React.useState("");
 
   React.useEffect(() => {
     let cancelled = false;
     setError("");
     setResolved({});
-    if (!images || !images.length) return;
-    (async () => {
-      const out = {};
-      for (const img of images) {
-        // Prefer fresh signed URL when we have all coords.
-        if (window.bitable && window.bitable.base && fieldId && tableId && recordId && img.token) {
-          try {
-            const u = await window.bitable.base.getAttachmentUrl(img.token, recordId, fieldId, tableId);
-            if (u) { out[img.token] = u; continue; }
-          } catch (e) {
-            // fall through to embedded url
-          }
+    setFailed({});
+    if (!images || !images.length) { setPending({}); return; }
+    // Mark all tokens as pending until each individual resolution settles.
+    const initPending = {};
+    for (const img of images) initPending[img.token] = true;
+    setPending(initPending);
+
+    const canSdk = !!(window.bitable && window.bitable.base && fieldId && tableId && recordId);
+
+    const resolveOne = async (img) => {
+      // 1) Try fresh signed URL via SDK if all coords present.
+      if (canSdk && img.token) {
+        try {
+          const u = await window.bitable.base.getAttachmentUrl(img.token, recordId, fieldId, tableId);
+          if (u) return { token: img.token, url: u };
+        } catch (e) {
+          // fall through to embedded url
         }
-        if (img.url) out[img.token] = img.url;
       }
-      if (!cancelled) setResolved(out);
-    })().catch(e => { if (!cancelled) setError(String(e && e.message || e)); });
+      // 2) Fallback to embedded url (may be expired but worth trying).
+      if (img.url) return { token: img.token, url: img.url, stale: true };
+      // 3) Both failed.
+      return { token: img.token, error: "no signed url and no embedded url" };
+    };
+
+    Promise.allSettled(images.map(resolveOne)).then(settled => {
+      if (cancelled) return;
+      const ok = {};
+      const bad = {};
+      const stillPending = {};
+      for (const s of settled) {
+        if (s.status === "fulfilled") {
+          const v = s.value;
+          if (v.url) ok[v.token] = v.url;
+          else bad[v.token] = v.error || "unresolved";
+        } else {
+          // Promise itself rejected — record reason against an unknown slot.
+          // We can't map back to a token reliably here, so surface in top error.
+          setError(prev => prev || String(s.reason && s.reason.message || s.reason));
+        }
+      }
+      setResolved(ok);
+      setFailed(bad);
+      setPending(stillPending); // empty: nothing pending anymore
+    }).catch(e => { if (!cancelled) setError(String(e && e.message || e)); });
+
     return () => { cancelled = true; };
   }, [images, recordId, fieldId, tableId]);
 
@@ -974,23 +1018,42 @@ function ImagesPane(props) {
   return e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, padding: "4px 0" }},
     ...images.map((img, i) => {
       const url = resolved[img.token];
+      const failReason = failed[img.token];
+      const isPending  = pending[img.token];
       const isImg = !img.type || /^image\//i.test(img.type) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(img.name || "");
+      let body;
+      if (url && isImg) {
+        body = e("a", { href: url, target: "_blank", rel: "noreferrer" },
+          e("img", {
+            src: url,
+            alt: img.name || ("attachment " + (i+1)),
+            style: { width: "100%", height: 100, objectFit: "cover", display: "block" },
+            onError: (ev) => {
+              // Image element couldn't load the URL — likely expired or network error.
+              // Mark as failed so we re-render the unavailable tile.
+              setResolved(prev => { const n = { ...prev }; delete n[img.token]; return n; });
+              setFailed(prev => ({ ...prev, [img.token]: "img element failed to load" }));
+            }
+          }));
+      } else if (url) {
+        body = e("a", { href: url, target: "_blank", rel: "noreferrer",
+          style: { display: "block", padding: 6, fontSize: 10, textDecoration: "none" }},
+          "📎 " + (img.name || "attachment"));
+      } else if (failReason) {
+        body = e("div", {
+          style: { padding: 6, fontSize: 10, color: "#a00", lineHeight: 1.3 },
+          title: failReason + " · token=" + (img.token || "?")
+        }, "image unavailable");
+      } else if (isPending) {
+        body = e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "loading…");
+      } else {
+        body = e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "no source");
+      }
       return e("div", {
         key: img.token + "_" + i,
         style: { width: 140, border: "1px solid var(--hairline)", borderRadius: 4, overflow: "hidden", background: "#0001" }
       },
-        url && isImg
-          ? e("a", { href: url, target: "_blank", rel: "noreferrer" },
-              e("img", {
-                src: url,
-                alt: img.name || ("attachment " + (i+1)),
-                style: { width: "100%", height: 100, objectFit: "cover", display: "block" }
-              }))
-          : url
-            ? e("a", { href: url, target: "_blank", rel: "noreferrer",
-                style: { display: "block", padding: 6, fontSize: 10, textDecoration: "none" }},
-                "📎 " + (img.name || "attachment"))
-            : e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "loading…"),
+        body,
         e("div", { style: { padding: "2px 4px", fontSize: 9, color: "var(--muted)",
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }},
           img.name || ("attachment " + (i+1)))
@@ -1175,6 +1238,7 @@ function AtomTagger(props) {
     if (!pendingCase) return null;
     const candidate = {
       policy_title: pendingCase.policy_title,
+      issue:        pendingCase.issue,
       atoms: tags,
       visual_summary: pendingCase.visual_summary,
       asr_text:       pendingCase.asr_text,
