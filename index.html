@@ -156,7 +156,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.4.4-phase4";
+const PLUGIN_VERSION = "atom-mvp v0.4.6-phase4";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -311,8 +311,13 @@ const DIM_NAMES = {
 
 <script>
 // =============================================================================
-// RETRIEVER (Phase 4) — inlined verbatim from retriever.js
-// Hybrid: 0.6 * BM25(text) + 0.4 * AtomJaccard(atoms, dim-weighted)
+// RETRIEVER (Phase 4.5) — Dual-channel hybrid
+// Channels:
+//   visual = BM25(visual_summary)               + AtomJaccard
+//   text   = BM25(asr_text + ocr_text + caption) + AtomJaccard
+// Returns top-5 from each channel, deduped by record_id, with channel badges.
+// Tokenizer adds bigrams; IDF floor drops corpus-common tokens.
+// Atom share scales with how many atoms the candidate has tagged.
 // =============================================================================
 (function (root) {
   "use strict";
@@ -322,38 +327,60 @@ const DIM_NAMES = {
     "is","it","its","of","on","or","that","the","this","to","was","were","will","with",
     "she","they","them","their","there","these","those","but","not","no","so","if",
     "i","you","we","our","us","me","my","your","do","does","did","just","can","could",
-    "would","should","also","into","over","under","up","down","out","then","than"
+    "would","should","also","into","over","under","up","down","out","then","than",
+    // Domain-common boilerplate that BM25 should still tolerate, but no value as queries:
+    "video","scene","shows","show","appears","appearing","visible","setting","background"
   ]);
-  function tokenize(text) {
+  function uniTokens(text) {
     if (!text) return [];
     return String(text).toLowerCase()
       .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .split(/\s+/)
       .filter(function (t) { return t && t.length > 1 && !STOPWORDS.has(t); });
   }
-  function caseText(c) {
-    return [c.visual_summary, c.asr_text, c.ocr_text, c.caption_text].filter(Boolean).join(" \n ");
+  // Unigrams + adjacent bigrams (joined with "_") give phrase-level signal
+  // ("split_screen", "red_hair", "white_nightstand") on top of bag-of-words.
+  function tokenize(text) {
+    var uni = uniTokens(text);
+    if (uni.length < 2) return uni;
+    var out = uni.slice();
+    for (var i = 0; i < uni.length - 1; i++) {
+      out.push(uni[i] + "_" + uni[i+1]);
+    }
+    return out;
   }
 
+  // ---- BM25 ----------------------------------------------------------------
   var BM25_K1 = 1.5, BM25_B = 0.75;
-  function buildBm25Index(cases) {
+  // IDF floor: ignore tokens that appear in > IDF_FLOOR_RATIO of pool docs.
+  var IDF_FLOOR_RATIO = 0.5;
+
+  function buildBm25IndexFromTexts(textsArr) {
+    // textsArr: array<string>, parallel to pool.
     var docs = [], docLens = [], df = Object.create(null), totalLen = 0;
-    for (var i = 0; i < cases.length; i++) {
-      var toks = tokenize(caseText(cases[i]));
+    for (var i = 0; i < textsArr.length; i++) {
+      var toks = tokenize(textsArr[i] || "");
       var tf = Object.create(null);
       for (var j = 0; j < toks.length; j++) tf[toks[j]] = (tf[toks[j]] || 0) + 1;
       var seen = Object.create(null);
       for (var t in tf) if (!seen[t]) { df[t] = (df[t] || 0) + 1; seen[t] = 1; }
       docs.push(tf); docLens.push(toks.length); totalLen += toks.length;
     }
-    return { docs: docs, docLens: docLens, df: df, N: cases.length, avgdl: cases.length ? totalLen / cases.length : 0 };
+    return {
+      docs: docs, docLens: docLens, df: df,
+      N: textsArr.length,
+      avgdl: textsArr.length ? totalLen / textsArr.length : 0,
+      idf_floor: Math.max(1, Math.floor(IDF_FLOOR_RATIO * textsArr.length))
+    };
   }
   function bm25Score(idx, qTokens, docIdx) {
     if (!idx.N || !qTokens.length) return 0;
     var tf = idx.docs[docIdx], dl = idx.docLens[docIdx] || 0, avgdl = idx.avgdl || 1, s = 0;
     for (var i = 0; i < qTokens.length; i++) {
-      var f = tf[qTokens[i]] || 0; if (!f) continue;
-      var n = idx.df[qTokens[i]] || 0;
+      var q = qTokens[i];
+      var f = tf[q] || 0; if (!f) continue;
+      var n = idx.df[q] || 0;
+      if (n >= idx.idf_floor) continue; // skip too-common tokens
       var idf = Math.log(1 + (idx.N - n + 0.5) / (n + 0.5));
       var num = f * (BM25_K1 + 1);
       var den = f + BM25_K1 * (1 - BM25_B + BM25_B * (dl / avgdl));
@@ -362,6 +389,7 @@ const DIM_NAMES = {
     return s;
   }
 
+  // ---- Atoms ---------------------------------------------------------------
   var DIM_WEIGHTS = { C: 1.0, S: 1.0, P: 1.0, R: 0.7, E: 0.7, M: 0.5, X: 0.5 };
   var DIMS = ["C","S","P","R","E","M","X"];
   function jaccard(a, b) {
@@ -380,20 +408,34 @@ const DIM_NAMES = {
       var j = jaccard(qAtoms[d] || [], cAtoms[d] || []);
       perDim[d] = j;
       if (j === null) continue;
-      var w = DIM_WEIGHTS[d];
-      acc += j * w; sumW += w;
+      acc += j * DIM_WEIGHTS[d]; sumW += DIM_WEIGHTS[d];
     }
     return { score: sumW ? acc / sumW : 0, per_dim: perDim };
   }
+  // Adaptive atom share: 0 atoms → 0.0 (pure BM25), 1–2 → 0.3, ≥3 → 0.5.
+  // Empty selection mustn't dilute BM25 with a useless 0.
+  function atomShare(qAtoms) {
+    var n = 0;
+    for (var i = 0; i < DIMS.length; i++) {
+      var arr = (qAtoms || {})[DIMS[i]] || [];
+      n += arr.length;
+    }
+    if (n === 0) return 0;
+    if (n <= 2) return 0.3;
+    return 0.5;
+  }
 
+  // ---- Top-level dual-channel retrieve -------------------------------------
+  // candidate: { policy_title?, issue?, atoms, visual_summary?, asr_text?, ocr_text?, caption_text? }
+  // opts:      { topPerChannel?: 5, totalK?: 10 }
   function retrieve(candidate, cases, opts) {
     opts = opts || {};
-    var topK = opts.topK || 5;
-    var mix  = opts.mix  || { text: 0.6, atom: 0.4 };
+    var topPer = opts.topPerChannel || 5;
+    var totalK = opts.totalK || (topPer * 2);
     var scopeByTitle = opts.scopeByTitle !== false;
     var scopeByIssue = opts.scopeByIssue !== false;
 
-    // Title scope takes precedence; if title is empty, fall back to issue scope.
+    // 1. Scope: title → issue → none
     var pool = cases.slice();
     var scope = { kind: "none", value: null };
     if (scopeByTitle && candidate.policy_title) {
@@ -407,24 +449,35 @@ const DIM_NAMES = {
       });
       scope = { kind: "issue", value: candidate.issue };
     }
-    if (!pool.length) return { results: [], pool_size: 0, scope: scope };
-
-    var idx = buildBm25Index(pool);
-    var qTextSrc = [candidate.visual_summary, candidate.asr_text, candidate.ocr_text, candidate.caption_text]
-      .filter(Boolean).join(" \n ");
-    var qTokens = tokenize(qTextSrc);
-    if (!qTokens.length) {
-      var atomKeys = [];
-      for (var i = 0; i < DIMS.length; i++) {
-        var arr = (candidate.atoms || {})[DIMS[i]] || [];
-        for (var j = 0; j < arr.length; j++) atomKeys.push(arr[j]);
-      }
-      qTokens = atomKeys.flatMap(function (k) { return tokenize(k.replace(/[._]/g, " ")); });
+    if (!pool.length) {
+      return { results: [], pool_size: 0, scope: scope, channels: { visual: [], text: [] } };
     }
 
+    // 2. Two indices over the scoped pool.
+    var visualTexts = pool.map(function (c) { return c.visual_summary || ""; });
+    var textualTexts = pool.map(function (c) {
+      return [c.asr_text, c.ocr_text, c.caption_text].filter(Boolean).join(" \n ");
+    });
+    var visualIdx  = buildBm25IndexFromTexts(visualTexts);
+    var textualIdx = buildBm25IndexFromTexts(textualTexts);
+
+    // 3. Queries per channel.
+    var qVisual  = tokenize(candidate.visual_summary || "");
+    var qTextual = tokenize([candidate.asr_text, candidate.ocr_text, candidate.caption_text]
+      .filter(Boolean).join(" \n "));
+
+    // If a channel's query is empty, optionally fall back to the OTHER channel's tokens
+    // so we still surface 5 candidates per channel rather than zero.
+    if (!qVisual.length && qTextual.length)  qVisual  = qTextual;
+    if (!qTextual.length && qVisual.length)  qTextual = qVisual;
+
+    // 4. Score every doc on both channels.
+    var aShare = atomShare(candidate.atoms || {});
+    var bmShare = 1 - aShare;
     var scored = pool.map(function (c, k) {
-      var bm = bm25Score(idx, qTokens, k);
-      var aj = atomScore(candidate.atoms || {}, c.atoms || {});
+      var bmV = bm25Score(visualIdx,  qVisual,  k);
+      var bmT = bm25Score(textualIdx, qTextual, k);
+      var aj  = atomScore(candidate.atoms || {}, c.atoms || {});
       return {
         case_id: c.case_id, record_id: c.record_id,
         source_video_id: c.source_video_id, policy_title: c.policy_title,
@@ -432,29 +485,100 @@ const DIM_NAMES = {
         visual_summary: c.visual_summary, asr_text: c.asr_text,
         ocr_text: c.ocr_text, caption_text: c.caption_text,
         rationale: c.rationale, atoms: c.atoms, images: c.images,
-        _bm25: bm, _atom: aj.score, _atom_per_dim: aj.per_dim
+        _bmV: bmV, _bmT: bmT,
+        _atom: aj.score, _atom_per_dim: aj.per_dim
       };
     });
 
-    var maxBm = 0;
-    for (var i = 0; i < scored.length; i++) if (scored[i]._bm25 > maxBm) maxBm = scored[i]._bm25;
-    var inv = maxBm > 0 ? 1 / maxBm : 0;
+    // 5. Max-norm BM25 per channel, then blend with atom score.
+    var maxV = 0, maxT = 0;
     for (var i = 0; i < scored.length; i++) {
-      scored[i].bm25_norm = scored[i]._bm25 * inv;
-      scored[i].score = mix.text * scored[i].bm25_norm + mix.atom * scored[i]._atom;
+      if (scored[i]._bmV > maxV) maxV = scored[i]._bmV;
+      if (scored[i]._bmT > maxT) maxT = scored[i]._bmT;
     }
-    scored.sort(function (a, b) {
+    var invV = maxV > 0 ? 1 / maxV : 0;
+    var invT = maxT > 0 ? 1 / maxT : 0;
+    for (var i = 0; i < scored.length; i++) {
+      scored[i].visual_norm = scored[i]._bmV * invV;
+      scored[i].text_norm   = scored[i]._bmT * invT;
+      scored[i].visual_score = bmShare * scored[i].visual_norm + aShare * scored[i]._atom;
+      scored[i].text_score   = bmShare * scored[i].text_norm   + aShare * scored[i]._atom;
+    }
+
+    // 6. Sort + slice per channel.
+    function tieBreak(a, b, primary) {
+      if (b[primary] !== a[primary]) return b[primary] - a[primary];
+      if (b._atom !== a._atom) return b._atom - a._atom;
+      return (a.case_id || "").localeCompare(b.case_id || "");
+    }
+    var byVisual = scored.slice().sort(function (a, b) { return tieBreak(a, b, "visual_score"); });
+    var byText   = scored.slice().sort(function (a, b) { return tieBreak(a, b, "text_score"); });
+
+    var topV = byVisual.slice(0, topPer);
+    var topT = byText.slice(0,   topPer);
+
+    // 7. Merge with channel tags + dedupe by record_id.
+    var seen = Object.create(null);
+    var merged = [];
+    function addOne(item, channels) {
+      var key = item.record_id || item.case_id || (item.source_video_id + ":" + (item.policy_title || ""));
+      if (seen[key] != null) {
+        // Already added — augment channels.
+        var idx = seen[key];
+        merged[idx].channels = Array.from(new Set(merged[idx].channels.concat(channels)));
+        // Keep the higher of the two channel-rank scores as the displayed primary.
+        merged[idx].score = Math.max(merged[idx].score, Math.max(item.visual_score, item.text_score));
+        return;
+      }
+      var primaryScore = channels.indexOf("vis") >= 0 ? item.visual_score : item.text_score;
+      var clone = Object.assign({}, item, {
+        channels: channels.slice(),
+        score: primaryScore
+      });
+      seen[key] = merged.length;
+      merged.push(clone);
+    }
+    for (var i = 0; i < topV.length; i++) addOne(topV[i], ["vis"]);
+    for (var i = 0; i < topT.length; i++) addOne(topT[i], ["txt"]);
+
+    // 8. Backfill if dedupe pulled below totalK: take next-best from union pool.
+    if (merged.length < totalK) {
+      var combined = byVisual.concat(byText).sort(function (a, b) {
+        return Math.max(b.visual_score, b.text_score) - Math.max(a.visual_score, a.text_score);
+      });
+      for (var i = 0; i < combined.length && merged.length < totalK; i++) {
+        var c = combined[i];
+        var k = c.record_id || c.case_id || (c.source_video_id + ":" + (c.policy_title || ""));
+        if (seen[k] != null) continue;
+        seen[k] = merged.length;
+        merged.push(Object.assign({}, c, {
+          channels: ["bf"],
+          score: Math.max(c.visual_score, c.text_score)
+        }));
+      }
+    }
+
+    // 9. Final sort by max-channel score desc.
+    merged.sort(function (a, b) {
       if (b.score !== a.score) return b.score - a.score;
       if (b._atom !== a._atom) return b._atom - a._atom;
-      if (b._bm25 !== a._bm25) return b._bm25 - a._bm25;
       return (a.case_id || "").localeCompare(b.case_id || "");
     });
-    return { results: scored.slice(0, topK), pool_size: pool.length, total_scored: scored.length, mix: mix, scope: scope };
+
+    return {
+      results: merged.slice(0, totalK),
+      pool_size: pool.length,
+      total_scored: scored.length,
+      scope: scope,
+      atom_share: aShare,
+      channels: { visual: topV, text: topT },
+      mix: { bm: bmShare, atom: aShare }
+    };
   }
 
   root.AtomRetriever = {
     retrieve: retrieve, tokenize: tokenize,
-    buildBm25Index: buildBm25Index, bm25Score: bm25Score,
+    buildBm25Index: buildBm25IndexFromTexts, bm25Score: bm25Score,
     atomScore: atomScore, DIM_WEIGHTS: DIM_WEIGHTS
   };
 })(window);
@@ -934,14 +1058,22 @@ function VerdictPane(props) {
   );
 }
 
-// ---- PrecedentsPane: hybrid retriever output --------------------------------
+// ---- PrecedentsPane: dual-channel hybrid retriever output -------------------
+// `showDiagnostics` (default false) gates all scoring chips, channel badges,
+// per-dim cells, and the noisy meta header line. Diagnostic data stays in the
+// retriever output for the JSON debug pane / payload — only the visual surface
+// is hidden on the main panel.
 function PrecedentsPane(props) {
   const { result, imageMeta } = props;
+  const [showDiag, setShowDiag] = React.useState(false);
   if (!result) return null;
-  const { results, pool_size, total_scored, mix, scope } = result;
+  const { results, pool_size, total_scored, mix, scope, atom_share } = result;
   const scopeLabel = scope && scope.kind && scope.kind !== "none"
     ? scope.kind + "=" + scope.value
     : "no scope";
+  const mixLabel = mix
+    ? "mix bm/atom " + Math.round((mix.bm || 0)*100) + "/" + Math.round((mix.atom || 0)*100)
+    : "";
 
   if (!results || !results.length) {
     return e("div", { className: "tag-card" },
@@ -960,20 +1092,46 @@ function PrecedentsPane(props) {
     if (x.indexOf("not_for_feed") >= 0 || x.indexOf("nff") >= 0) return "nff";
     return "";
   };
+  const channelLabel = (chs) => {
+    if (!chs || !chs.length) return "";
+    if (chs.indexOf("vis") >= 0 && chs.indexOf("txt") >= 0) return "vis+txt";
+    if (chs.indexOf("vis") >= 0) return "vis";
+    if (chs.indexOf("txt") >= 0) return "txt";
+    if (chs.indexOf("bf")  >= 0) return "backfill";
+    return chs.join("+");
+  };
 
   return e("div", { className: "tag-card" },
-    e("div", { className: "row", style: { justifyContent: "space-between", marginBottom: 4 }},
+    e("div", { className: "row", style: { justifyContent: "space-between", marginBottom: 4, alignItems: "center" }},
       e("strong", { style: { fontSize: 13 }}, "Top precedents (" + results.length + ")"),
-      e("span", { className: "muted", style: { fontSize: 11 }},
-        "scope " + scopeLabel +
-        " · pool=" + pool_size + " · scored=" + total_scored +
-        " · mix " + Math.round(mix.text*100) + "/" + Math.round(mix.atom*100) + " (text/atom)")
+      e("div", { className: "row", style: { gap: 8, alignItems: "center" }},
+        showDiag && e("span", { className: "muted", style: { fontSize: 11 }},
+          "scope " + scopeLabel +
+          " · pool=" + pool_size + " · scored=" + total_scored +
+          " · " + mixLabel +
+          " · 5 visual + 5 text (deduped)"),
+        e("button", {
+          className: "btn-ghost",
+          style: { fontSize: 10, padding: "2px 8px", border: "1px solid var(--hairline)",
+                   borderRadius: 4, background: "transparent", cursor: "pointer",
+                   color: "var(--muted)" },
+          onClick: () => setShowDiag(v => !v),
+          title: "Toggle ranking diagnostics (scores, channel badges, per-dim atom cells)"
+        }, showDiag ? "hide diagnostics" : "show diagnostics")
+      )
     ),
     e("div", null,
       ...results.map((r, i) => e("div", { key: r.record_id || i, className: "prec-card" },
-        // ── Left column: meta + scores ─────────────────────────────────
+        // ── Left column: meta (+ optional diagnostics) ─────────────────
         e("div", { className: "prec-meta" },
-          e("div", { className: "prec-rank" }, "#" + (i+1)),
+          e("div", { className: "prec-rank" },
+            "#" + (i+1),
+            showDiag && r.channels && e("span", {
+              className: "ev-pill",
+              style: { marginLeft: 6, fontSize: 9, background: "#0001" },
+              title: "Channel(s) where this precedent ranked top-5"
+            }, channelLabel(r.channels))
+          ),
           e("div", { className: "prec-id" },
             r.case_id || r.source_video_id || r.record_id || "—"),
           e("div", { className: "prec-pills" },
@@ -982,19 +1140,29 @@ function PrecedentsPane(props) {
             r.policy_title && e("span", { className: "ev-pill" }, r.policy_title),
             r.issue && r.issue !== r.policy_title && e("span", { className: "ev-pill" }, r.issue)
           ),
-          e("div", { className: "prec-scores" },
-            e("span", { className: "prec-score primary" }, "score " + fmt(r.score)),
-            e("span", { className: "prec-score" }, "txt " + fmt(r.bm25_norm)),
-            e("span", { className: "prec-score" }, "atm " + fmt(r._atom))
+          showDiag && e("div", { className: "prec-scores" },
+            e("span", { className: "prec-score primary",
+              title: "max(visual_score, text_score)" }, "score " + fmt(r.score)),
+            e("span", { className: "prec-score",
+              title: "BM25 over visual_summary, normalized 0–1" },
+              "vis " + fmt(r.visual_norm)),
+            e("span", { className: "prec-score",
+              title: "BM25 over asr+ocr+caption, normalized 0–1" },
+              "txt " + fmt(r.text_norm)),
+            e("span", { className: "prec-score",
+              title: "Atom-Jaccard, dim-weighted (C/S/P=1.0, R/E=0.7, M/X=0.5)" },
+              "atm " + fmt(r._atom))
           ),
-          r._atom_per_dim && e("div", { className: "prec-dim-grid", style: { marginTop: 4 }},
+          showDiag && r._atom_per_dim && e("div", { className: "prec-dim-grid", style: { marginTop: 4 }},
             ...["C","S","P","R","E","M","X"].map(d => {
               const v = r._atom_per_dim[d];
               const isHit = v != null && v > 0;
               return e("span", {
                 key: d,
                 className: "prec-dim-cell" + (isHit ? " hit" : ""),
-                title: "atom Jaccard for dim " + d + ": " + (v == null ? "—" : v.toFixed(2))
+                title: v == null
+                  ? "dim " + d + ": no atoms tagged on either side (excluded from atm)"
+                  : "dim " + d + " atom Jaccard: " + v.toFixed(2)
               }, d + ":" + (v == null ? "—" : fmt(v)));
             }))
         ),
@@ -1281,7 +1449,7 @@ function AtomTagger(props) {
       ocr_text:       pendingCase.ocr_text,
       caption_text:   pendingCase.caption_text
     };
-    return window.AtomRetriever.retrieve(candidate, corpus.cases, { topK: 5 });
+    return window.AtomRetriever.retrieve(candidate, corpus.cases, { topPerChannel: 5, totalK: 10 });
   }, [tags, pendingCase, corpus.cases]);
 
   // Suggested atoms per dim = union of atoms from top-5 precedents.
