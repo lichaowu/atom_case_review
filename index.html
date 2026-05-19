@@ -171,7 +171,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.6.2-phase5b";
+const PLUGIN_VERSION = "atom-mvp v0.6.3-phase5b";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -1460,8 +1460,119 @@ function atomKeysReferencedByClaim(c) {
   return acc;
 }
 
-function buildAtomRulesBlock(corpus, policyArea) {
+// Pick atoms_catalog entries restricted to dims the candidate touched +
+// atoms referenced by the relevant claim slice. Drastically reduces
+// per-payload size while preserving every audit_rule the specialist needs.
+function sliceAtomsCatalog(corpus, fullCatalog, relevantClaims, tags) {
+  const keepKeys = new Set();
+
+  // (a) Every atom_key referenced by the relevant claims (gates + modifiers + exceptions).
+  for (const c of relevantClaims) {
+    atomKeysReferencedByClaim(c).forEach(k => { if (k) keepKeys.add(String(k).trim()); });
+  }
+  // (b) Every atom the reviewer drafted on the candidate.
+  if (tags) {
+    for (const d of ["C","S","P","R","E","M","X"]) {
+      const arr = tags[d] || [];
+      arr.forEach(k => { if (k) keepKeys.add(String(k).trim()); });
+    }
+  }
+
+  const out = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+  for (const d of Object.keys(fullCatalog)) {
+    for (const a of fullCatalog[d]) {
+      if (keepKeys.has(String(a.atom_key).trim())) out[d].push(a);
+    }
+  }
+  return out;
+}
+
+// Pick a relevant slice of NSA claims for the candidate.
+//   - Always include claims that the engine flagged as gate_hit OR suppressed
+//     (these are the engine's universe of "fired or nearly fired").
+//   - Always include claims for the candidate's policy_title.
+//   - Include any claim whose gate intersects with the candidate's tagged atoms.
+//   - Include any claim referenced by precedent decisions (rationale anchors).
+//   - Cap with a hard limit; if everything is in scope, fall back to all NSA
+//     claims (with an explicit `claim_slice_mode = "full"` flag so the
+//     specialist knows the slice was not narrowed).
+function sliceRelevantClaims(allIssueClaims, opts) {
+  const { engineResult, candidatePolicyTitle, tags, precedents, hardCap } = opts;
+  const cap = hardCap || 60;
+
+  const keepIds = new Set();
+  // (a) Engine-considered claims
+  if (engineResult) {
+    for (const h of (engineResult.gate_hits || []))   if (h.claim_id) keepIds.add(h.claim_id);
+    for (const s of (engineResult.suppressed  || []))  if (s.claim_id) keepIds.add(s.claim_id);
+    for (const cl of (engineResult.applied_claim_chain || [])) if (cl) keepIds.add(cl);
+  }
+
+  // (b) Candidate policy_title match
+  const titleNorm = String(candidatePolicyTitle || "").trim().toLowerCase();
+  if (titleNorm) {
+    for (const c of allIssueClaims) {
+      const titles = (c.policy_titles || []).map(t => String(t).trim().toLowerCase());
+      if (titles.includes(titleNorm)) keepIds.add(c.claim_id);
+    }
+  }
+
+  // (c) Atom intersection (any gate atom in tagged set)
+  const tagSet = new Set();
+  if (tags) {
+    for (const d of ["C","S","P","R","E","M","X"]) {
+      (tags[d] || []).forEach(k => k && tagSet.add(String(k).trim()));
+    }
+  }
+  if (tagSet.size) {
+    for (const c of allIssueClaims) {
+      const g = c.gates || {};
+      let hit = false;
+      for (const d of ["C","S","P","R","E"]) {
+        for (const k of (g[d] || [])) {
+          if (tagSet.has(String(k).trim())) { hit = true; break; }
+        }
+        if (hit) break;
+      }
+      if (hit) keepIds.add(c.claim_id);
+    }
+  }
+
+  // (d) Precedent policy_titles → also pull those claims (precedents anchor analogy)
+  const precTitles = new Set();
+  for (const p of (precedents || [])) {
+    if (p && p.policy_title) precTitles.add(String(p.policy_title).trim().toLowerCase());
+  }
+  if (precTitles.size) {
+    for (const c of allIssueClaims) {
+      const titles = (c.policy_titles || []).map(t => String(t).trim().toLowerCase());
+      for (const t of titles) {
+        if (precTitles.has(t)) { keepIds.add(c.claim_id); break; }
+      }
+    }
+  }
+
+  let mode = "slice";
+  let kept = allIssueClaims.filter(c => keepIds.has(c.claim_id));
+
+  // If we somehow narrowed below 1 (no signal at all), fall back to first
+  // `cap` claims so the specialist still sees the rule book shape.
+  if (kept.length === 0) {
+    kept = allIssueClaims.slice(0, cap);
+    mode = "fallback_top_n";
+  }
+  // If slice exceeds cap, keep the cap-sized prefix (deterministic order).
+  if (kept.length > cap) {
+    kept = kept.slice(0, cap);
+    mode = "slice_capped";
+  }
+
+  return { claims: kept, mode: mode, kept_ids: Array.from(keepIds), all_count: allIssueClaims.length };
+}
+
+function buildAtomRulesBlock(corpus, policyArea, opts) {
   if (!policyArea || !corpus || !corpus.claims || !corpus.atoms) return null;
+  opts = opts || {};
 
   // 1. Filter claims to ones whose `issue` matches the policy area.
   const issueClaims = corpus.claims.filter(c => {
@@ -1469,28 +1580,25 @@ function buildAtomRulesBlock(corpus, policyArea) {
     return ci === policyArea;
   });
 
-  // 2. Collect referenced atom_keys (normalized: trim only — atom_keys are case-sensitive).
+  // 2. Build full NSA atoms_catalog (used for slicing; not all of it ships).
   const referenced = new Set();
   for (const c of issueClaims) {
     const keys = atomKeysReferencedByClaim(c);
     keys.forEach(k => { if (k) referenced.add(String(k).trim()); });
   }
-
-  // 3. Build NSA-scoped atoms_catalog. Group by dimension.
-  // Index corpus.atoms by trimmed atom_key for resilient lookup.
   const atomByKey = {};
   for (const a of corpus.atoms) {
     const k = String(a.atom_key || "").trim();
     if (k) atomByKey[k] = a;
   }
-  const catalog = { C: [], S: [], P: [], R: [], E: [], M: [], X: [] };
+  const fullCatalog = { C: [], S: [], P: [], R: [], E: [], M: [], X: [] };
   let unresolved = 0;
   for (const k of referenced) {
     const a = atomByKey[k];
     if (!a) { unresolved++; continue; }
     const d = (a.dimension || "X").toString().trim().toUpperCase().charAt(0);
-    if (!catalog[d]) catalog[d] = [];
-    catalog[d].push({
+    if (!fullCatalog[d]) fullCatalog[d] = [];
+    fullCatalog[d].push({
       atom_key:    a.atom_key,
       atom_name:   a.atom_name,
       dimension:   a.dimension,
@@ -1499,49 +1607,63 @@ function buildAtomRulesBlock(corpus, policyArea) {
       audit_rule:  a.audit_rule
     });
   }
-  // Sort each dim by serial_code for stable, readable ordering.
-  for (const d of Object.keys(catalog)) {
-    catalog[d].sort((x, y) => String(x.serial_code || "").localeCompare(String(y.serial_code || "")));
+  for (const d of Object.keys(fullCatalog)) {
+    fullCatalog[d].sort((x, y) => String(x.serial_code || "").localeCompare(String(y.serial_code || "")));
   }
+
+  // 3. Slice claims relevant to this candidate
+  const sliced = sliceRelevantClaims(issueClaims, {
+    engineResult:        opts.engineResult,
+    candidatePolicyTitle: opts.candidatePolicyTitle,
+    tags:                opts.tags,
+    precedents:          opts.precedents,
+    hardCap:             opts.hardCap || 60
+  });
+
+  // 4. Slim atoms_catalog to entries the relevant claims actually need.
+  const slicedCatalog = sliceAtomsCatalog(corpus, fullCatalog, sliced.claims, opts.tags);
+
+  // 5. Emit slimmed claim list — strip empty arrays / objects to save bytes.
+  const claimsOut = sliced.claims.map(c => {
+    const out = {
+      claim_id: c.claim_id,
+      issue:    c.issue,
+      outcome:  c.outcome,
+      gates:    c.gates || {}
+    };
+    if (c.policy_titles && c.policy_titles.length) out.policy_titles = c.policy_titles;
+    if (c.modifiers_required && c.modifiers_required.length) out.modifiers_required = c.modifiers_required;
+    if (c.modifiers_excluded && c.modifiers_excluded.length) out.modifiers_excluded = c.modifiers_excluded;
+    if (c.modifiers_lift_to_approve && c.modifiers_lift_to_approve.length) out.modifiers_lift_to_approve = c.modifiers_lift_to_approve;
+    if (c.modifiers_lift_dnf && c.modifiers_lift_dnf.length) out.modifiers_lift_dnf = c.modifiers_lift_dnf;
+    if (c.exceptions_required && c.exceptions_required.length) out.exceptions_required = c.exceptions_required;
+    if (c.exceptions_lift_to_approve) out.exceptions_lift_to_approve = true;
+    if (c.exception_qualifiers && Object.keys(c.exception_qualifiers).length) out.exception_qualifiers = c.exception_qualifiers;
+    if (c.exception_qualifier_modifiers && Object.keys(c.exception_qualifier_modifiers).length) out.exception_qualifier_modifiers = c.exception_qualifier_modifiers;
+    if (c.requires_exception_context) out.requires_exception_context = true;
+    if (c.routing && (c.routing.non_realistic_routes_to || c.routing.cross_title_redirect)) out.routing = c.routing;
+    if (c.notes) out.notes = c.notes;
+    return out;
+  });
+
+  // Stats for header
+  const catCounts = {};
+  let total = 0;
+  for (const d of ["C","S","P","R","E","M","X"]) {
+    catCounts[d] = (slicedCatalog[d] || []).length;
+    total += catCounts[d];
+  }
+
   if (unresolved > 0) {
     try { console.warn("[AtomConsole] buildAtomRulesBlock:",
       unresolved, "/", referenced.size, "referenced atom_keys did not resolve in corpus.atoms"); } catch(_) {}
   }
   try { console.info("[AtomConsole] atom_rules built:",
     "policy=" + policyArea,
-    "claims=" + issueClaims.length,
-    "referenced=" + referenced.size,
-    "resolved=" + (referenced.size - unresolved),
+    "claims_all=" + issueClaims.length,
+    "claims_kept=" + claimsOut.length + " (mode=" + sliced.mode + ")",
+    "atoms_in_slice=" + total,
     "corpus.atoms=" + corpus.atoms.length); } catch(_) {}
-
-  // 4. Emit claim list (full structure — specialist needs gates+modifiers+lifts+routing).
-  const claimsOut = issueClaims.map(c => ({
-    claim_id:               c.claim_id,
-    policy_titles:          c.policy_titles || [],
-    issue:                  c.issue,
-    outcome:                c.outcome,
-    gates:                  c.gates || {},
-    modifiers_required:     c.modifiers_required || [],
-    modifiers_excluded:     c.modifiers_excluded || [],
-    modifiers_lift_to_approve: c.modifiers_lift_to_approve || [],
-    modifiers_lift_dnf:     c.modifiers_lift_dnf || [],
-    exceptions_required:    c.exceptions_required || [],
-    exceptions_lift_to_approve: !!c.exceptions_lift_to_approve,
-    exception_qualifiers:   c.exception_qualifiers || {},
-    exception_qualifier_modifiers: c.exception_qualifier_modifiers || {},
-    requires_exception_context: !!c.requires_exception_context,
-    routing:                c.routing || {},
-    molecule_ids:           c.molecule_ids || [],
-    notes:                  c.notes || ""
-  }));
-
-  // Stats for header
-  const catCounts = {};
-  let total = 0;
-  for (const d of ["C","S","P","R","E","M","X"]) {
-    catCounts[d] = catalog[d].length;
-    total += catalog[d].length;
-  }
 
   return {
     policy_area: policyArea,
@@ -1564,11 +1686,16 @@ function buildAtomRulesBlock(corpus, policyArea) {
       routing_logic: "non_realistic_routes_to: when realism atoms imply non-realistic content, " +
                      "re-route to a different claim chain. cross_title_redirect: rebind verdict to a different policy_title."
     },
-    atoms_catalog: catalog,        // grouped by dim, NSA-only
-    atoms_total:   total,
-    atoms_per_dim: catCounts,
-    claims:        claimsOut,
-    claims_total:  claimsOut.length
+    atoms_catalog:    slicedCatalog,    // sliced: only atoms referenced by claims_in_scope or tagged on candidate
+    atoms_in_scope:   total,
+    atoms_per_dim:    catCounts,
+    claims:           claimsOut,
+    claims_in_scope:  claimsOut.length,
+    claims_total_for_policy_area: issueClaims.length,
+    claim_slice_mode: sliced.mode,        // "slice" | "slice_capped" | "fallback_top_n"
+    note:             "atom_rules is a CASE-SCOPED SLICE. The full NSA atom rule book lives in the skill body. " +
+                      "claims_in_scope = " + claimsOut.length + " of " + issueClaims.length + " total NSA claims. " +
+                      "atoms_catalog only includes atoms referenced by these claims or tagged on the candidate."
   };
 }
 
@@ -1642,18 +1769,29 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
           "Specialist may revise the tags after reading precedents and re-derive the verdict."
   } : null;
 
-  // Atom rule book — NSA-only when policy_area=NSA.
-  const atom_rules = buildAtomRulesBlock(corpus, policy_area);
+  // The full atom rule book (catalog + all NSA claims) is baked into the
+  // specialist skill (`nsa-atom-precedent-review`). Payload no longer ships
+  // it. We only emit a tiny `rule_book_ref` pointer so the specialist can
+  // verify version alignment.
+  const rule_book_ref = {
+    schema: "atom-rule-book",
+    version: "v1.0",            // matches what's baked into the skill
+    policy_area: policy_area,
+    note: "Full catalog + claim list lives in the specialist skill body. " +
+          "If the rule book version drifts, the reviewer should re-export " +
+          "from the Atom Console plugin (Loader → Admin → Export " +
+          (policy_area || "NSA") + ") and re-bake the skill."
+  };
 
   return {
     schema:           "case-review-payload",
-    version:          "v0.5",
+    version:          "v0.6",
     policy_area:      policy_area,
     generated_at:     new Date().toISOString(),
     generator:        PLUGIN_VERSION,
     candidate:        candidate,
     precedents:       precedents,
-    atom_rules:       atom_rules,
+    rule_book_ref:    rule_book_ref,
     engine_simulation: engine_simulation
   };
 }
@@ -1671,9 +1809,8 @@ function PayloadPane(props) {
   const precCount = (payload.precedents || []).length;
   const policyArea = payload.policy_area || "—";
   const verdict = payload.engine_simulation ? payload.engine_simulation.verdict : "(no atoms tagged)";
-  const ar = payload.atom_rules || null;
-  const atomsTotal = ar ? ar.atoms_total : 0;
-  const claimsTotal = ar ? ar.claims_total : 0;
+  const rbr = payload.rule_book_ref || null;
+  const rbVersion = rbr ? rbr.version : null;
 
   const onCopy = async () => {
     // Bitable iframes often disable both Clipboard API and execCommand via
@@ -1760,14 +1897,10 @@ function PayloadPane(props) {
       e("span", { className: "payload-stat",
         title: "Atom-engine suggested verdict (specialist may revise tags and override)" },
         "engine: " + verdict),
-      ar && e("span", { className: "payload-stat",
-        title: "Atom rule book embedded for this policy area: " + atomsTotal +
-               " atoms (referenced by any " + policyArea + " claim) across " +
-               claimsTotal + " active claims" },
-        "atom_rules: " + atomsTotal + " atoms · " + claimsTotal + " claims"),
-      !ar && policyArea && e("span", { className: "payload-stat",
-        title: "No atom rules found for this policy area — specialist will lack the rule book" },
-        "⚠ atom_rules: empty")
+      rbr && e("span", { className: "payload-stat",
+        title: "Atom rule book is BAKED into the specialist skill (constant context). " +
+               "Payload no longer ships the catalog or claims — only this version pointer for alignment." },
+        "rule_book: " + (rbr.policy_area || "—") + " " + rbVersion + " (in skill)")
     ),
     !policyArea && e("div", { className: "muted",
       style: { fontSize: 11, padding: "4px 0", color: "var(--error)" }},
@@ -2068,6 +2201,96 @@ function LoaderPane(props) {
   const dimCounts = Object.keys(corpus.atomsByDim).map(d => ({ d, n: corpus.atomsByDim[d].length }));
   const outcomeCounts = {};
   for (const cl of corpus.claims) outcomeCounts[cl.outcome] = (outcomeCounts[cl.outcome]||0) + 1;
+
+  // Export the full per-policy-area atom rule book (catalog + claims) as a
+  // single .json file. Used to bake the constant rule book into the skill body
+  // so it does not need to be re-shipped on every payload.
+  const exportRuleBook = (policyArea) => {
+    const issueClaims = corpus.claims.filter(c =>
+      String(c.issue || "").toUpperCase().trim() === policyArea);
+    const referenced = new Set();
+    for (const c of issueClaims) {
+      atomKeysReferencedByClaim(c).forEach(k => k && referenced.add(String(k).trim()));
+    }
+    const atomByKey = {};
+    for (const a of corpus.atoms) {
+      const k = String(a.atom_key || "").trim();
+      if (k) atomByKey[k] = a;
+    }
+    const catalog = { C: [], S: [], P: [], R: [], E: [], M: [], X: [] };
+    for (const k of referenced) {
+      const a = atomByKey[k];
+      if (!a) continue;
+      const d = (a.dimension || "X").toString().trim().toUpperCase().charAt(0);
+      if (!catalog[d]) catalog[d] = [];
+      catalog[d].push({
+        atom_key: a.atom_key, atom_name: a.atom_name, dimension: a.dimension,
+        serial_code: a.serial_code, description: a.description, audit_rule: a.audit_rule
+      });
+    }
+    for (const d of Object.keys(catalog)) {
+      catalog[d].sort((x, y) => String(x.serial_code || "").localeCompare(String(y.serial_code || "")));
+    }
+    const claimsOut = issueClaims.map(c => {
+      const o = { claim_id: c.claim_id, outcome: c.outcome, gates: c.gates || {} };
+      if (c.policy_titles && c.policy_titles.length) o.policy_titles = c.policy_titles;
+      if (c.modifiers_required && c.modifiers_required.length) o.modifiers_required = c.modifiers_required;
+      if (c.modifiers_excluded && c.modifiers_excluded.length) o.modifiers_excluded = c.modifiers_excluded;
+      if (c.modifiers_lift_to_approve && c.modifiers_lift_to_approve.length) o.modifiers_lift_to_approve = c.modifiers_lift_to_approve;
+      if (c.modifiers_lift_dnf && c.modifiers_lift_dnf.length) o.modifiers_lift_dnf = c.modifiers_lift_dnf;
+      if (c.exceptions_required && c.exceptions_required.length) o.exceptions_required = c.exceptions_required;
+      if (c.exceptions_lift_to_approve) o.exceptions_lift_to_approve = true;
+      if (c.exception_qualifiers && Object.keys(c.exception_qualifiers).length) o.exception_qualifiers = c.exception_qualifiers;
+      if (c.exception_qualifier_modifiers && Object.keys(c.exception_qualifier_modifiers).length) o.exception_qualifier_modifiers = c.exception_qualifier_modifiers;
+      if (c.requires_exception_context) o.requires_exception_context = true;
+      if (c.routing && (c.routing.non_realistic_routes_to || c.routing.cross_title_redirect)) o.routing = c.routing;
+      if (c.notes) o.notes = c.notes;
+      return o;
+    });
+    const totalAtoms = ["C","S","P","R","E","M","X"].reduce((s,d)=>s+catalog[d].length,0);
+    const book = {
+      schema: "atom-rule-book",
+      version: "v1.0",
+      policy_area: policyArea,
+      generated_at: new Date().toISOString(),
+      generator: PLUGIN_VERSION,
+      dimensions: {
+        C: { name: "Content",      weight: 1.0, role: "primary gate" },
+        S: { name: "Subject",      weight: 1.0, role: "primary gate" },
+        P: { name: "Portrayal",    weight: 1.0, role: "primary gate" },
+        R: { name: "Realism",      weight: 0.7, role: "secondary gate; affects routing" },
+        E: { name: "Explicitness", weight: 0.7, role: "secondary gate" },
+        M: { name: "Modifier",     weight: 0.5, role: "lift / suppress claim outcome" },
+        X: { name: "Exception",    weight: 0.5, role: "lift / context-required" }
+      },
+      semantics: {
+        gate_logic: "AND across dimensions (C,S,P,R,E); OR within each dimension. Empty dimension = wildcard.",
+        verdict_priority: ["VIOLATION","NOT_RECOMMEND","NOT_FOR_FEED","APPROVE","NO_CLAIM_FIRED"],
+        lift_logic: "modifiers_lift_to_approve atoms tagged → outcome upgraded to APPROVE. " +
+                    "modifiers_lift_dnf atoms apply per-claim partial lifts. " +
+                    "exceptions_required atoms must all be tagged when requires_exception_context=true.",
+        routing_logic: "non_realistic_routes_to: when realism atoms imply non-realistic content, " +
+                       "re-route to a different claim chain. cross_title_redirect: rebind verdict to a different policy_title."
+      },
+      atoms_catalog: catalog,
+      atoms_total: totalAtoms,
+      atoms_per_dim: ["C","S","P","R","E","M","X"].reduce((m,d)=>{m[d]=catalog[d].length;return m;}, {}),
+      claims: claimsOut,
+      claims_total: claimsOut.length
+    };
+    const json = JSON.stringify(book, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "atom-rule-book-" + policyArea + "-v1.0.json";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    try { console.info("[AtomConsole] exported rule book:",
+      policyArea, "atoms=" + totalAtoms, "claims=" + claimsOut.length,
+      "size=" + (json.length / 1024).toFixed(1) + " KB"); } catch(_) {}
+  };
+
   return e("div", null,
     e("div", { className: "stat-grid" },
       e(StatCard, { n: corpus.atoms.length, label: "ATLAS atoms" }),
@@ -2085,6 +2308,18 @@ function LoaderPane(props) {
       e("div", { className: "stat-grid" },
         ...Object.keys(outcomeCounts).map(o =>
           e(StatCard, { key: o, n: outcomeCounts[o], label: o })))
+    ),
+    e("details", null,
+      e("summary", null, "Admin: Export atom rule book (bakes into specialist skill)"),
+      e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
+        "Run once after taxonomy/claim changes. Downloads the full per-policy-area atom catalog + claim list as JSON. ",
+        "The constant rule book lives inside the specialist skill — payloads only ship the case-specific slice."),
+      e("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", padding: "4px 0" }},
+        ...["NSA","HHB","HRA","SGC","VBDA"].map(pa =>
+          e("button", { key: pa, className: "copy-btn secondary",
+            onClick: () => exportRuleBook(pa),
+            title: "Download " + pa + " atom rule book as .json" },
+            "Export " + pa)))
     )
   );
 }
@@ -2128,7 +2363,7 @@ function App() {
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
     e("div", { className: "sub", style: { marginTop: 24 }},
-      "Phase 5b of 7 — case-review-payload v0.5 (atom-rule-grounded). ",
+      "Phase 5c of 7 — case-review-payload v0.6 (slim, rule-book-in-skill). ",
       "NSA pipeline ready — feed to /nsa-atom-precedent-review. ",
       "Next: Phase 6 = wire specialist call directly + auto-tag opt-in.")
   );
