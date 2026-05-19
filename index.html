@@ -174,7 +174,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.6.5-phase5c";
+const PLUGIN_VERSION = "atom-mvp v0.6.6-phase5c";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -1426,6 +1426,114 @@ function resolvePolicyArea(issue) {
   return null;
 }
 
+// ---- copyKeyframesComposite: load N images, draw 2-col grid onto a canvas,
+// copy the resulting PNG to clipboard via ClipboardItem. Ported from the
+// legacy case_review_mvp plugin (V3.1.0) — proven pattern for shipping
+// keyframes into a Mira chat as a multimodal attachment.
+//
+//   • Slices to first 12 keyframes (matches model attention budget).
+//   • Loads with crossOrigin=anonymous + referrerPolicy=no-referrer so the
+//     Bitable signed urls render to canvas without taint errors.
+//   • 2-col grid, 400×300 cells, 4px gap, dark bg, "#N" frame badge top-left.
+//   • Returns { ok, mode, count, dataUrl? }
+//        mode = "clipboard"  → PNG written via ClipboardItem.
+//        mode = "newtab"     → ClipboardItem blocked; opened a tab with the
+//                              dataURL so the reviewer can right-click → Copy.
+//        mode = "fail"       → no images loaded.
+async function copyKeyframesComposite(urls) {
+  const out = { ok: false, mode: "fail", count: 0 };
+  if (!urls || !urls.length) return out;
+  try {
+    // Load up to 12, cross-origin so canvas isn't tainted
+    const imgs = await Promise.all(urls.slice(0, 12).map(url => new Promise(resolve => {
+      const img = new Image();
+      img.crossOrigin   = "anonymous";
+      img.referrerPolicy = "no-referrer";
+      img.onload  = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    })));
+    const loaded = imgs.filter(Boolean);
+    if (!loaded.length) {
+      console.warn("[AtomConsole] copyKeyframesComposite: no images loaded");
+      return out;
+    }
+    out.count = loaded.length;
+
+    // 2-col grid, fixed cell, dark bg, frame number badge
+    const cols = Math.min(2, loaded.length);
+    const rows = Math.ceil(loaded.length / cols);
+    const cellW = 400, cellH = 300, gap = 4;
+    const W = cols * cellW + (cols - 1) * gap;
+    const H = rows * cellH + (rows - 1) * gap;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#181715";
+    ctx.fillRect(0, 0, W, H);
+
+    loaded.forEach((img, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = col * (cellW + gap);
+      const y = row * (cellH + gap);
+      const scale = Math.min(cellW / img.naturalWidth, cellH / img.naturalHeight);
+      const dw = img.naturalWidth * scale;
+      const dh = img.naturalHeight * scale;
+      ctx.drawImage(img, x + (cellW - dw) / 2, y + (cellH - dh) / 2, dw, dh);
+      // Frame number badge
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(x, y, 28, 20);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 11px Inter, sans-serif";
+      ctx.fillText("#" + (i + 1), x + 4, y + 14);
+    });
+
+    // Try modern clipboard API first
+    const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
+    if (!blob) return out;
+    try {
+      if (typeof ClipboardItem === "function" &&
+          navigator.clipboard && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        out.ok = true; out.mode = "clipboard";
+        return out;
+      }
+      throw new Error("ClipboardItem unavailable");
+    } catch (clipErr) {
+      // Fallback: open in a new tab so the reviewer can right-click → Copy.
+      // Bitable iframe usually blocks ClipboardItem; this fallback lets the
+      // reviewer ship the PNG anyway without leaving the table.
+      console.warn("[AtomConsole] ClipboardItem blocked → opening composite in tab:",
+        clipErr && clipErr.message);
+      const dataUrl = canvas.toDataURL("image/png");
+      try {
+        const w = window.open("");
+        if (w) {
+          w.document.write(
+            "<title>Keyframes composite — copy this image</title>" +
+            "<body style=\"margin:0;background:#181715;color:#fff;font:13px sans-serif\">" +
+              "<p style=\"padding:8px 12px;margin:0\">Right-click the image → <b>Copy image</b>, then paste into the specialist chat.</p>" +
+              "<img src=\"" + dataUrl + "\" style=\"max-width:100%;display:block\">" +
+            "</body>");
+        }
+        out.mode = "newtab";
+        // We didn't write to clipboard, but we did surface the image — call it ok.
+        out.ok = true;
+        out.dataUrl = dataUrl;
+        return out;
+      } catch (e2) {
+        console.error("[AtomConsole] keyframe newtab fallback failed:", e2);
+        return out;
+      }
+    }
+  } catch (e) {
+    console.error("[AtomConsole] copyKeyframesComposite error:", e);
+    return out;
+  }
+}
+
 function imagesAttachedSummary(images) {
   if (!images || !images.length) return { count: 0, note: "no images attached" };
   const types = {};
@@ -1434,7 +1542,18 @@ function imagesAttachedSummary(images) {
     types[t] = (types[t] || 0) + 1;
   }
   const parts = Object.keys(types).map(k => k + "×" + types[k]).join(", ");
-  return { count: images.length, note: parts };
+  // Following the legacy plugin's V3.1.0 pattern: this note tells the specialist
+  // skill that the reviewer is expected to paste a composite keyframes image
+  // alongside the JSON payload. The skill reads images_note as a hint to look
+  // for the multimodal attachment in the same chat turn.
+  const cap = Math.min(images.length, 12);
+  const note =
+      images.length + " keyframe(s) (" + parts + "). " +
+      "If the reviewer pasted a composite keyframes image in this chat turn " +
+      "(top " + cap + " frames in a 2-col grid, frame numbers labeled top-left), " +
+      "analyze it visually as primary evidence for atom tagging. " +
+      "Trust pixels over visual_summary on conflict.";
+  return { count: images.length, note: note };
 }
 
 // Collect every atom_key referenced by a claim's gates/modifiers/exceptions.
@@ -1855,18 +1974,21 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
 }
 
 // ---- PayloadPane: emit + copy + JSON preview -------------------------------
-// Single-action UX (v0.6.5):
-//   • Primary button "Send to specialist" copies the payload (with route preamble)
-//     to the clipboard. If the iframe blocks Clipboard API, it falls through to
-//     a download of payload.json.
-//   • Secondary button "Copy keyframes" copies the resolved attachment URLs
-//     (one per line) so the reviewer can paste them into the specialist chat
-//     alongside the JSON. If the case has no images, the button is hidden.
-//   • Download remains available as a quiet "save .json" link for offline use.
+// Two-step UX (v0.6.6, ported from legacy case_review_mvp V3.1.0):
+//   1. "Send payload"     — copies payload (with route preamble) to clipboard.
+//                           Falls back to .json download if the iframe blocks
+//                           Clipboard API.
+//   2. "Copy keyframes (N)" — builds a single PNG composite of up to 12 frames
+//                           in a 2-col grid and writes it to the clipboard via
+//                           ClipboardItem. Pasting that PNG gives the specialist
+//                           a real multimodal attachment (pixels), not URLs the
+//                           agent can't fetch. Falls back to opening a new tab
+//                           where the reviewer can right-click → Copy image.
+//   • "↓ .json" remains as a quiet ghost link for offline / drag-into-chat.
 function PayloadPane(props) {
   const { payload, pendingCase, imageMeta } = props;
   const [copyState, setCopyState]       = React.useState("idle"); // idle | ok | err
-  const [imgState,  setImgState]        = React.useState("idle"); // idle | resolving | ok | err
+  const [imgState,  setImgState]        = React.useState("idle"); // idle | resolving | ok | newtab | err
   const [resolvedImgUrls, setResolvedImgUrls] = React.useState([]);
   const [open, setOpen] = React.useState(false);
 
@@ -1957,7 +2079,10 @@ function PayloadPane(props) {
     }
   };
 
-  // ---- "Copy keyframes" — resolve to fresh signed URLs and copy as text -----
+  // ---- "Copy keyframes" — resolve attachment urls then build a 2-col PNG
+  // composite of up to 12 frames and write it to the clipboard. Pasting that
+  // single PNG into Mira chat gives the specialist skill a real multimodal
+  // attachment to reason over (vs URL strings the agent can't fetch).
   const onCopyKeyframes = async () => {
     if (!hasImages) return;
     setImgState("resolving");
@@ -1967,7 +2092,6 @@ function PayloadPane(props) {
         urls = await imageMeta.resolve("pending", pendingCase.record_id, pendingCase.images);
       }
       if (!Array.isArray(urls) || urls.length === 0) {
-        // Fallback to embedded urls if resolver missing or returned nothing
         urls = pendingCase.images.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
       }
     } catch (e) {
@@ -1981,24 +2105,33 @@ function PayloadPane(props) {
       setTimeout(() => setImgState("idle"), 3000);
       return;
     }
-    // Copy as one URL per line — easiest for the reviewer to paste into the
-    // chat before/after the payload JSON. Mira chats render image URLs inline.
-    const text = urls.join("\n");
-    const ok = await copyText(text);
-    setImgState(ok ? "ok" : "err");
-    setTimeout(() => setImgState("idle"), ok ? 1800 : 4000);
+    // Build composite + clipboard write (or new-tab fallback).
+    const r = await copyKeyframesComposite(urls);
+    if (r.ok && r.mode === "clipboard") {
+      setImgState("ok");
+      setTimeout(() => setImgState("idle"), 1800);
+    } else if (r.ok && r.mode === "newtab") {
+      setImgState("newtab");
+      setTimeout(() => setImgState("idle"), 6000);
+    } else {
+      setImgState("err");
+      setTimeout(() => setImgState("idle"), 4000);
+    }
   };
 
   // ---- UI labels ------------------------------------------------------------
-  const sendLabel = copyState === "ok"  ? "✓ copied — paste into chat"
+  // Two explicitly numbered steps mirror the legacy plugin's "1. Copy JSON /
+  // 2. Copy keyframes" UX so reviewers know to paste both into the chat.
+  const sendLabel = copyState === "ok"  ? "✓ payload copied — paste into chat"
                   : copyState === "err" ? "⤓ saved as .json (clipboard blocked)"
-                  : "Send to specialist";
+                  : "1. Send payload";
   const sendClass = "copy-btn" + (copyState === "ok" ? " ok"
                                 : copyState === "err" ? " err" : "");
   const kfLabel   = imgState === "resolving" ? "resolving urls…"
-                  : imgState === "ok"   ? "✓ " + resolvedImgUrls.length + " urls copied"
-                  : imgState === "err"  ? "✗ failed"
-                  : "Copy " + imgCount + " keyframe" + (imgCount===1?"":"s");
+                  : imgState === "ok"     ? "✓ composite copied — paste into chat"
+                  : imgState === "newtab" ? "↗ opened in tab — right-click → Copy image"
+                  : imgState === "err"    ? "✗ failed"
+                  : "2. Copy keyframes (" + imgCount + ")";
 
   return e("div", { className: "payload-card" },
     e("div", { className: "payload-head" },
@@ -2012,13 +2145,13 @@ function PayloadPane(props) {
       ),
       e("div", { className: "payload-actions" },
         e("button", { className: sendClass, onClick: onSend,
-          title: "Copy payload + route preamble to clipboard. Falls back to .json download if the iframe blocks clipboard." },
+          title: "Step 1 — copy payload + route preamble to clipboard. Falls back to .json download if the iframe blocks clipboard." },
           sendLabel),
         hasImages && e("button", {
           className: "copy-btn secondary",
           onClick: onCopyKeyframes,
           disabled: imgState === "resolving",
-          title: "Resolve fresh signed urls for keyframes and copy them (one per line) so you can paste alongside the payload."
+          title: "Step 2 — build a 2-col PNG composite of up to 12 keyframes and copy it to the clipboard. Paste into the same chat AFTER the payload so the specialist can analyze the pixels."
         }, kfLabel),
         e("button", {
           className: "copy-btn ghost",
@@ -2030,9 +2163,15 @@ function PayloadPane(props) {
     copyState === "err" && e("div", {
       style: { fontSize: 11, color: "var(--muted)", marginBottom: 6 }
     }, "Clipboard blocked by Bitable — payload was downloaded as .json instead. Drag the file into the specialist chat."),
+    imgState === "newtab" && e("div", {
+      style: { fontSize: 11, color: "var(--muted)", marginBottom: 6 }
+    }, "Composite opened in a new tab (clipboard image write blocked). Right-click the image → Copy image, then paste into the chat after the payload."),
     imgState === "err" && e("div", {
       style: { fontSize: 11, color: "var(--error, #c00)", marginBottom: 6 }
-    }, "Could not resolve keyframe urls. Re-pick the case or refresh the table."),
+    }, "Could not build keyframe composite. Re-pick the case or refresh the table to refresh signed urls."),
+    hasImages && (imgState === "idle" || imgState === "resolving" || imgState === "ok") && e("div", {
+      style: { fontSize: 11, color: "var(--muted)", marginBottom: 6 }
+    }, "Workflow: send payload first, then composite keyframes — both pasted into the same chat turn."),
     e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }},
       e("span", { className: "payload-stat routing",
         title: "Routes to which specialist skill" },
@@ -2515,7 +2654,7 @@ function App() {
 
     e("div", { className: "sub", style: { marginTop: 24 }},
       "Phase 5c of 7 — case-review-payload v0.6 (slim, rule-book-in-skill). ",
-      "Single-action send + keyframe copy + route preamble. ",
+      "Two-step send: 1) payload + route preamble · 2) keyframes composite (12-frame 2-col PNG → clipboard). ",
       "NSA pipeline ready — feed to /nsa-atom-precedent-review. ",
       "Next: Phase 6 = wire specialist call directly + auto-tag opt-in.")
   );
