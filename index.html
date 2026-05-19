@@ -135,6 +135,9 @@
   .copy-btn.err{background:var(--error);border-color:var(--error)}
   .copy-btn.secondary{background:#fff;color:var(--ink)}
   .copy-btn.secondary:hover{background:var(--surface-soft)}
+  .copy-btn.ghost{background:transparent;color:var(--muted);border-color:var(--hairline)}
+  .copy-btn.ghost:hover{background:var(--surface-soft);color:var(--ink)}
+  .copy-btn:disabled{opacity:0.55;cursor:not-allowed}
 </style>
 </head>
 <body>
@@ -171,7 +174,7 @@ window.ATOM_CONSOLE_CONFIG = {
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
   issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.6.3-phase5b";
+const PLUGIN_VERSION = "atom-mvp v0.6.5-phase5c";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -1769,18 +1772,67 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
           "Specialist may revise the tags after reading precedents and re-derive the verdict."
   } : null;
 
-  // The full atom rule book (catalog + all NSA claims) is baked into the
-  // specialist skill (`nsa-atom-precedent-review`). Payload no longer ships
-  // it. We only emit a tiny `rule_book_ref` pointer so the specialist can
-  // verify version alignment.
+  // The atoms_catalog (constant interpretation knowledge — atom audit_rules)
+  // is baked into the specialist skill. Payload only ships the claims SLICE
+  // relevant to this case (anchored by candidate.policy_title + precedents +
+  // tagged atoms + engine-considered claims). Typical slice: 30–150 claims.
+  const claimsSlice = (function buildClaimsSlice() {
+    if (!corpus || !corpus.claims) return null;
+    const issueClaims = corpus.claims.filter(c =>
+      String(c.issue || "").toUpperCase().trim() === policy_area);
+    const sliced = sliceRelevantClaims(issueClaims, {
+      engineResult:        engineResult,
+      candidatePolicyTitle: pendingCase.policy_title,
+      tags:                tags,
+      precedents:          precedents,
+      hardCap:             200            // generous cap; per-title typically <160
+    });
+    // Compact each claim (drop empty arrays / objects).
+    const out = sliced.claims.map(c => {
+      const o = { claim_id: c.claim_id, outcome: c.outcome, gates: c.gates || {} };
+      if (c.policy_titles && c.policy_titles.length) o.policy_titles = c.policy_titles;
+      if (c.modifiers_required && c.modifiers_required.length) o.modifiers_required = c.modifiers_required;
+      if (c.modifiers_excluded && c.modifiers_excluded.length) o.modifiers_excluded = c.modifiers_excluded;
+      if (c.modifiers_lift_to_approve && c.modifiers_lift_to_approve.length) o.modifiers_lift_to_approve = c.modifiers_lift_to_approve;
+      if (c.modifiers_lift_dnf && c.modifiers_lift_dnf.length) o.modifiers_lift_dnf = c.modifiers_lift_dnf;
+      if (c.exceptions_required && c.exceptions_required.length) o.exceptions_required = c.exceptions_required;
+      if (c.exceptions_lift_to_approve) o.exceptions_lift_to_approve = true;
+      if (c.exception_qualifiers && Object.keys(c.exception_qualifiers).length) o.exception_qualifiers = c.exception_qualifiers;
+      if (c.exception_qualifier_modifiers && Object.keys(c.exception_qualifier_modifiers).length) o.exception_qualifier_modifiers = c.exception_qualifier_modifiers;
+      if (c.requires_exception_context) o.requires_exception_context = true;
+      if (c.routing && (c.routing.non_realistic_routes_to || c.routing.cross_title_redirect)) o.routing = c.routing;
+      if (c.notes) o.notes = c.notes;
+      return o;
+    });
+    try { console.info("[AtomConsole] claims_slice:",
+      "policy=" + policy_area,
+      "kept=" + out.length + " of " + issueClaims.length,
+      "mode=" + sliced.mode); } catch(_) {}
+    return {
+      mode:                 sliced.mode,                 // "slice" | "slice_capped" | "fallback_top_n"
+      claims:               out,
+      claims_in_scope:      out.length,
+      claims_total_for_policy_area: issueClaims.length,
+      anchored_by: {
+        policy_title:       pendingCase.policy_title || null,
+        tagged_atom_count:  Object.keys(tags || {}).reduce((s,d)=>s+(tags[d]||[]).length,0),
+        precedent_count:    precedents.length
+      },
+      note: "This is a CASE-SCOPED slice. The full NSA atoms_catalog (with " +
+            "audit_rule per atom) is baked into the specialist skill. The " +
+            "specialist may walk these claims directly OR re-derive a slice " +
+            "if its proposed_atom_tags differ materially from the draft tags."
+    };
+  })();
+
+  // Tiny version pointer so the specialist can verify rule book alignment.
   const rule_book_ref = {
-    schema: "atom-rule-book",
-    version: "v1.0",            // matches what's baked into the skill
+    schema: "atom-catalog",
+    version: "v1.0",
     policy_area: policy_area,
-    note: "Full catalog + claim list lives in the specialist skill body. " +
-          "If the rule book version drifts, the reviewer should re-export " +
-          "from the Atom Console plugin (Loader → Admin → Export " +
-          (policy_area || "NSA") + ") and re-bake the skill."
+    note: "Full atoms_catalog (with audit_rule) is baked into the specialist skill. " +
+          "If catalog or claim shapes drift, reviewer re-exports via Atom Console " +
+          "(Loader → Admin → Export " + (policy_area || "NSA") + ") and re-bakes the skill."
   };
 
   return {
@@ -1789,17 +1841,33 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
     policy_area:      policy_area,
     generated_at:     new Date().toISOString(),
     generator:        PLUGIN_VERSION,
+    // Strong, version-locked discriminator so the agent picks the atom skill
+    // unambiguously even if the legacy nsa-precedent-review skill description
+    // also matches `schema=case-review-payload`. The atom skill description
+    // pins on `version=v0.6` AND on `_route_hint`.
+    _route_hint:      (policy_area ? policy_area.toLowerCase() : "nsa") + "-atom-precedent-review",
     candidate:        candidate,
     precedents:       precedents,
+    claims_slice:     claimsSlice,
     rule_book_ref:    rule_book_ref,
     engine_simulation: engine_simulation
   };
 }
 
 // ---- PayloadPane: emit + copy + JSON preview -------------------------------
+// Single-action UX (v0.6.5):
+//   • Primary button "Send to specialist" copies the payload (with route preamble)
+//     to the clipboard. If the iframe blocks Clipboard API, it falls through to
+//     a download of payload.json.
+//   • Secondary button "Copy keyframes" copies the resolved attachment URLs
+//     (one per line) so the reviewer can paste them into the specialist chat
+//     alongside the JSON. If the case has no images, the button is hidden.
+//   • Download remains available as a quiet "save .json" link for offline use.
 function PayloadPane(props) {
-  const { payload } = props;
-  const [copyState, setCopyState] = React.useState("idle"); // idle | ok | err
+  const { payload, pendingCase, imageMeta } = props;
+  const [copyState, setCopyState]       = React.useState("idle"); // idle | ok | err
+  const [imgState,  setImgState]        = React.useState("idle"); // idle | resolving | ok | err
+  const [resolvedImgUrls, setResolvedImgUrls] = React.useState([]);
   const [open, setOpen] = React.useState(false);
 
   if (!payload) return null;
@@ -1811,45 +1879,52 @@ function PayloadPane(props) {
   const verdict = payload.engine_simulation ? payload.engine_simulation.verdict : "(no atoms tagged)";
   const rbr = payload.rule_book_ref || null;
   const rbVersion = rbr ? rbr.version : null;
+  const cs = payload.claims_slice || null;
+  const claimsKept = cs ? cs.claims_in_scope : 0;
+  const claimsAll  = cs ? cs.claims_total_for_policy_area : 0;
+  const routeHint  = payload._route_hint || "nsa-atom-precedent-review";
 
-  const onCopy = async () => {
-    // Bitable iframes often disable both Clipboard API and execCommand via
-    // Permissions-Policy. We try both, then surface a clear "use Download" hint
-    // on failure so the reviewer knows the workaround.
+  // Compose payload-with-preamble: gives the agent an unambiguous routing cue
+  // even if the (older) legacy nsa-precedent-review skill description also
+  // matches schema=case-review-payload. The preamble is plain text the user
+  // would type, so it doesn't break the JSON parser on the receiving side.
+  const payloadWithPreamble =
+      "Run /" + routeHint + " on this case-review-payload (v0.6, NSA atom-rule-grounded):\n\n" +
+      json;
+
+  const hasImages = !!(pendingCase && pendingCase.images && pendingCase.images.length);
+  const imgCount  = hasImages ? pendingCase.images.length : 0;
+
+  // ---- helpers --------------------------------------------------------------
+
+  const copyText = async (text) => {
     let ok = false;
     try {
       if (navigator.clipboard && navigator.clipboard.writeText &&
           window.isSecureContext !== false) {
-        await navigator.clipboard.writeText(json);
+        await navigator.clipboard.writeText(text);
         ok = true;
       }
-    } catch (e) { /* fall through to execCommand */ }
+    } catch (e) { /* fall through */ }
     if (!ok) {
       try {
         const ta = document.createElement("textarea");
-        ta.value = json;
+        ta.value = text;
         ta.setAttribute("readonly", "");
         ta.style.position = "fixed"; ta.style.left = "-1000px"; ta.style.top = "0";
         document.body.appendChild(ta);
         ta.select();
-        ta.setSelectionRange(0, json.length);
+        ta.setSelectionRange(0, text.length);
         ok = !!document.execCommand("copy");
         document.body.removeChild(ta);
       } catch (e) { ok = false; }
     }
-    if (ok) {
-      setCopyState("ok");
-      setTimeout(() => setCopyState("idle"), 1800);
-    } else {
-      console.warn("[AtomConsole] clipboard write blocked by iframe policy — use Download instead");
-      setCopyState("err");
-      setTimeout(() => setCopyState("idle"), 4000);
-    }
+    return ok;
   };
 
-  const onDownload = () => {
+  const downloadJson = () => {
     try {
-      const blob = new Blob([json], { type: "application/json" });
+      const blob = new Blob([payloadWithPreamble], { type: "application/json" });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
       const itemId = (payload.candidate && payload.candidate.item_id) || "case";
@@ -1864,11 +1939,66 @@ function PayloadPane(props) {
     }
   };
 
-  const copyLabel = copyState === "ok"  ? "✓ copied"
-                  : copyState === "err" ? "✗ failed"
-                  : "Copy payload";
-  const copyClass = "copy-btn" + (copyState === "ok" ? " ok"
+  // ---- single-step "Send to specialist" -------------------------------------
+  // Tries clipboard first. On failure, auto-downloads .json so the reviewer is
+  // never stuck. Either path leaves the payload routed via the preamble line.
+  const onSend = async () => {
+    const ok = await copyText(payloadWithPreamble);
+    if (ok) {
+      setCopyState("ok");
+      setTimeout(() => setCopyState("idle"), 1800);
+    } else {
+      // Clipboard blocked → fall back to download. Keep err state visible for
+      // the reviewer so they know the .json was saved instead of copied.
+      console.warn("[AtomConsole] clipboard blocked → falling back to download");
+      downloadJson();
+      setCopyState("err");
+      setTimeout(() => setCopyState("idle"), 4000);
+    }
+  };
+
+  // ---- "Copy keyframes" — resolve to fresh signed URLs and copy as text -----
+  const onCopyKeyframes = async () => {
+    if (!hasImages) return;
+    setImgState("resolving");
+    let urls = [];
+    try {
+      if (imageMeta && typeof imageMeta.resolve === "function") {
+        urls = await imageMeta.resolve("pending", pendingCase.record_id, pendingCase.images);
+      }
+      if (!Array.isArray(urls) || urls.length === 0) {
+        // Fallback to embedded urls if resolver missing or returned nothing
+        urls = pendingCase.images.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
+      }
+    } catch (e) {
+      console.error("[AtomConsole] keyframe resolve failed:", e);
+      urls = pendingCase.images.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
+    }
+    urls = urls.filter(u => !!u);
+    setResolvedImgUrls(urls);
+    if (urls.length === 0) {
+      setImgState("err");
+      setTimeout(() => setImgState("idle"), 3000);
+      return;
+    }
+    // Copy as one URL per line — easiest for the reviewer to paste into the
+    // chat before/after the payload JSON. Mira chats render image URLs inline.
+    const text = urls.join("\n");
+    const ok = await copyText(text);
+    setImgState(ok ? "ok" : "err");
+    setTimeout(() => setImgState("idle"), ok ? 1800 : 4000);
+  };
+
+  // ---- UI labels ------------------------------------------------------------
+  const sendLabel = copyState === "ok"  ? "✓ copied — paste into chat"
+                  : copyState === "err" ? "⤓ saved as .json (clipboard blocked)"
+                  : "Send to specialist";
+  const sendClass = "copy-btn" + (copyState === "ok" ? " ok"
                                 : copyState === "err" ? " err" : "");
+  const kfLabel   = imgState === "resolving" ? "resolving urls…"
+                  : imgState === "ok"   ? "✓ " + resolvedImgUrls.length + " urls copied"
+                  : imgState === "err"  ? "✗ failed"
+                  : "Copy " + imgCount + " keyframe" + (imgCount===1?"":"s");
 
   return e("div", { className: "payload-card" },
     e("div", { className: "payload-head" },
@@ -1876,31 +2006,48 @@ function PayloadPane(props) {
         e("div", { className: "payload-title" }, "Specialist payload"),
         e("div", { className: "payload-meta" },
           payload.schema, " · ", payload.version, " · ", sizeKb, " KB · ",
-          precCount, " precedent", precCount===1?"":"s"
+          precCount, " precedent", precCount===1?"":"s",
+          hasImages ? " · " + imgCount + " keyframe" + (imgCount===1?"":"s") : ""
         )
       ),
       e("div", { className: "payload-actions" },
-        e("button", { className: copyClass, onClick: onCopy, title: "Copy JSON to clipboard" },
-          copyLabel),
-        e("button", { className: "copy-btn secondary", onClick: onDownload,
-          title: "Download as .json file (use this if Copy is blocked by iframe policy)" }, "Download")
+        e("button", { className: sendClass, onClick: onSend,
+          title: "Copy payload + route preamble to clipboard. Falls back to .json download if the iframe blocks clipboard." },
+          sendLabel),
+        hasImages && e("button", {
+          className: "copy-btn secondary",
+          onClick: onCopyKeyframes,
+          disabled: imgState === "resolving",
+          title: "Resolve fresh signed urls for keyframes and copy them (one per line) so you can paste alongside the payload."
+        }, kfLabel),
+        e("button", {
+          className: "copy-btn ghost",
+          onClick: downloadJson,
+          title: "Save the payload as a .json file (offline / drag-into-chat workflow)."
+        }, "↓ .json")
       )
     ),
     copyState === "err" && e("div", {
+      style: { fontSize: 11, color: "var(--muted)", marginBottom: 6 }
+    }, "Clipboard blocked by Bitable — payload was downloaded as .json instead. Drag the file into the specialist chat."),
+    imgState === "err" && e("div", {
       style: { fontSize: 11, color: "var(--error, #c00)", marginBottom: 6 }
-    }, "⚠ Clipboard blocked by Bitable iframe permissions policy. Use ", e("b", null, "Download"),
-       " → drag the .json file into the chat instead."),
+    }, "Could not resolve keyframe urls. Re-pick the case or refresh the table."),
     e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }},
       e("span", { className: "payload-stat routing",
         title: "Routes to which specialist skill" },
-        "→ " + (policyArea ? policyArea.toLowerCase() + "-atom-precedent-review" : "no-route (set issue)")),
+        "→ /" + routeHint),
       e("span", { className: "payload-stat",
         title: "Atom-engine suggested verdict (specialist may revise tags and override)" },
         "engine: " + verdict),
+      cs && e("span", { className: "payload-stat",
+        title: "Claim slice anchored by candidate.policy_title + draft tags + precedents. " +
+               "Mode: " + cs.mode + ". Full atoms_catalog (interpretation knowledge) lives in the skill." },
+        "claims_slice: " + claimsKept + " / " + claimsAll + " (" + (cs.mode || "?") + ")"),
       rbr && e("span", { className: "payload-stat",
-        title: "Atom rule book is BAKED into the specialist skill (constant context). " +
-               "Payload no longer ships the catalog or claims — only this version pointer for alignment." },
-        "rule_book: " + (rbr.policy_area || "—") + " " + rbVersion + " (in skill)")
+        title: "atoms_catalog (with audit_rule) is BAKED into the specialist skill. " +
+               "Payload only ships this version pointer for alignment." },
+        "catalog: " + (rbr.policy_area || "—") + " " + rbVersion + " (in skill)")
     ),
     !policyArea && e("div", { className: "muted",
       style: { fontSize: 11, padding: "4px 0", color: "var(--error)" }},
@@ -2126,7 +2273,11 @@ function AtomTagger(props) {
       imageMeta: corpus.image_meta
     }),
 
-    pendingCase && payload && e(PayloadPane, { payload: payload }),
+    pendingCase && payload && e(PayloadPane, {
+      payload: payload,
+      pendingCase: pendingCase,
+      imageMeta: corpus.image_meta
+    }),
 
     pendingCase && e("details", { open: false },
       e("summary", null, "Engine I/O JSON (debug)"),
@@ -2364,6 +2515,7 @@ function App() {
 
     e("div", { className: "sub", style: { marginTop: 24 }},
       "Phase 5c of 7 — case-review-payload v0.6 (slim, rule-book-in-skill). ",
+      "Single-action send + keyframe copy + route preamble. ",
       "NSA pipeline ready — feed to /nsa-atom-precedent-review. ",
       "Next: Phase 6 = wire specialist call directly + auto-tag opt-in.")
   );
