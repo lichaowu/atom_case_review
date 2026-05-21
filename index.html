@@ -2991,6 +2991,19 @@ function AtomTagger(props) {
       )
     ),
 
+    pendingCase && payload && e(PayloadPane, {
+      payload: payload,
+      pendingCase: pendingCase,
+      imageMeta: corpus.image_meta
+    }),
+
+    pendingCase && payload && e(ReasonedVerdictPane, {
+      engineSimulation: payload.engine_simulation,
+      atomsByDim: corpus.atomsByDim,
+      onVerdictParsed: onVerdictParsed,
+      onVerdictCleared: onVerdictCleared
+    }),
+
     pendingCase && e("div", { className: "tag-card" },
       e("div", { className: "row", style: { justifyContent: "space-between" }},
         e("strong", { style: { fontSize: 13 }}, "Atom tags"),
@@ -3016,19 +3029,6 @@ function AtomTagger(props) {
         onChange: setDim(d),
       }))
     ),
-
-    pendingCase && payload && e(PayloadPane, {
-      payload: payload,
-      pendingCase: pendingCase,
-      imageMeta: corpus.image_meta
-    }),
-
-    pendingCase && payload && e(ReasonedVerdictPane, {
-      engineSimulation: payload.engine_simulation,
-      atomsByDim: corpus.atomsByDim,
-      onVerdictParsed: onVerdictParsed,
-      onVerdictCleared: onVerdictCleared
-    }),
 
     pendingCase && e(VerdictPane, { result: engineResult }),
 
