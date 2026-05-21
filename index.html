@@ -824,7 +824,7 @@ async function loadAtomCorpus() {
     const f = r.fields || {};
     return {
       record_id: r.recordId || r.record_id,
-      atom_key: get(f, atomsIdx, "atom_key"),
+      atom_key: get(f, atomsIdx, "atom_key") || get(f, atomsIdx, "atom_code"),
       atom_name: get(f, atomsIdx, "atom_name"),
       dimension: get(f, atomsIdx, "dimension"),
       description: get(f, atomsIdx, "description"),
