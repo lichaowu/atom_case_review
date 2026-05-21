@@ -213,6 +213,17 @@
   .copy-btn.ghost{background:transparent;color:var(--muted);border-color:var(--hairline)}
   .copy-btn.ghost:hover{background:var(--surface-soft);color:var(--ink)}
   .copy-btn:disabled{opacity:0.55;cursor:not-allowed}
+
+/* Skill-first chip states */
+.chip.skill-src { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.chip.reviewer-src { border-color: #6b7; background: color-mix(in srgb, #6b7 8%, transparent); }
+.chip.skill-proposed { border: 1.5px dashed var(--primary); opacity: 0.85; }
+.chip.rejected-by-skill {
+  text-decoration: line-through; opacity: 0.5;
+  border-color: #c66; background: color-mix(in srgb, #c66 5%, transparent);
+  cursor: pointer;
+}
+.chip.rejected-by-skill:hover { opacity: 0.8; text-decoration: none; }
 </style>
 </head>
 <body>
@@ -248,7 +259,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.7.5-multi-vertical";
+const PLUGIN_VERSION = "atom-mvp v0.8.0-skill-first";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -1379,13 +1390,15 @@ function ImagesPane(props) {
 //   - User can toggle "show all" or start typing to search the full atom set.
 //   - Chip label = serial_code only (atom_key + atom_name in tooltip).
 function DimRow(props) {
-  const { dim, atoms, selected, onChange, suggested } = props;
+  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected } = props;
   const [filter, setFilter] = React.useState("");
   const [showAll, setShowAll] = React.useState(false);
   const f = filter.trim().toLowerCase();
   const sel = new Set(selected || []);
   const sugSet = new Set(suggested || []);
   const hasSuggestions = sugSet.size > 0;
+  const skillSet = new Set(skillProposed || []);
+  const rejKeys = new Set((skillRejected || []).map(r => r.atom_key));
 
   // Decide candidate pool:
   // 1. If filter text typed -> search ALL atoms
@@ -1439,11 +1452,24 @@ function DimRow(props) {
         ...Array.from(sel).map(k => {
           const a = atoms.find(x => x.atom_key === k);
           const label = (a && a.serial_code) ? a.serial_code : k;
+          const isSkill = skillSet.has(k);
           return e("span", {
-            key: k, className: "chip selected",
-            title: a ? (a.atom_key + " · " + a.atom_name + " — " + (a.description||"").slice(0,200)) : k,
+            key: k, className: "chip selected" + (isSkill ? " skill-src" : " reviewer-src"),
+            title: (isSkill ? "[skill-proposed] " : "[reviewer-added] ") +
+              (a ? (a.atom_key + " · " + a.atom_name + " — " + (a.description||"").slice(0,200)) : k),
             onClick: () => toggle(k)
-          }, label, " ✕");
+          }, label, isSkill ? " ·s ✕" : " ✕");
+        }),
+        // Skill-rejected atoms (struck-through, click to override and add)
+        ...(skillRejected || []).filter(r => !sel.has(r.atom_key)).map(r => {
+          const a = atoms.find(x => x.atom_key === r.atom_key);
+          const label = (a && a.serial_code) ? a.serial_code : r.atom_key;
+          return e("span", {
+            key: "rej-" + r.atom_key,
+            className: "chip rejected-by-skill",
+            title: "[skill-rejected] " + (r.reason || "no reason") + " — click to override",
+            onClick: () => toggle(r.atom_key)
+          }, label, " ✗");
         })
       ),
       // Search input (typing here always searches the full set)
@@ -1455,12 +1481,14 @@ function DimRow(props) {
       }),
       // Available chips (excludes selected). Suggested atoms get a subtle highlight.
       e("div", { className: "chips" },
-        ...pool.filter(a => !sel.has(a.atom_key)).map(a => {
+        ...pool.filter(a => !sel.has(a.atom_key) && !rejKeys.has(a.atom_key)).map(a => {
           const isSug = sugSet.has(a.atom_key);
+          const isSkillProp = skillSet.has(a.atom_key);
           return e("span", {
             key: a.atom_key,
-            className: "chip" + (isSug ? " suggested" : ""),
-            title: a.atom_key + (a.atom_name ? " · " + a.atom_name : "") + (a.description ? " — " + a.description.slice(0,200) : ""),
+            className: "chip" + (isSkillProp ? " skill-proposed" : (isSug ? " suggested" : "")),
+            title: (isSkillProp ? "[skill-proposed — click to accept] " : "") +
+              a.atom_key + (a.atom_name ? " · " + a.atom_name : "") + (a.description ? " — " + a.description.slice(0,200) : ""),
             onClick: () => toggle(a.atom_key)
           }, (a.serial_code || a.atom_key));
         }),
@@ -2395,7 +2423,7 @@ function _splitReason(raw) {
 //   • Watch-outs / next_step / suppressed claims (collapsible)
 //   • Engine alignment delta + tagged reasoning sections (collapsible)
 function ReasonedVerdictPane(props) {
-  const { engineSimulation, atomsByDim } = props || {};
+  const { engineSimulation, atomsByDim, onVerdictParsed, onVerdictCleared } = props || {};
   const [raw, setRaw]         = React.useState("");
   const [parsed, setParsed]   = React.useState(null);
   const [check, setCheck]     = React.useState({ ok: true, errors: [], warnings: [] });
@@ -2474,13 +2502,17 @@ function ReasonedVerdictPane(props) {
     const c = validateAtomVerdict(p);
     setParsed(p);
     setCheck(c);
-    if (c.ok) setEditing(false); // collapse textarea on successful parse
+    if (c.ok) {
+      setEditing(false); // collapse textarea on successful parse
+      if (onVerdictParsed) onVerdictParsed(p);
+    }
   };
 
   const onClear = () => {
     setRaw(""); setParsed(null);
     setCheck({ ok: true, errors: [], warnings: [] });
     setEditing(true);
+    if (onVerdictCleared) onVerdictCleared();
   };
 
   // ---- Derived view-model -----
@@ -2641,31 +2673,13 @@ function ReasonedVerdictPane(props) {
         title: deltaText
       }, "Δ ", deltaText.length > 110 ? deltaText.slice(0, 107) + "…" : deltaText),
 
-      // Proposed atom tags
-      tagsByDim && e("div", null,
-        e("div", { className: "reasoned-section-head" }, "Proposed atom tags",
-          e("span", { className: "count" },
-            "(" + activeDims.reduce((n, d) => n + tagsByDim[d].proposed.length, 0) + " accepted",
-            rejected.length > 0 ? (" · " + rejected.length + " rejected") : "",
-            ")")
-        ),
-        e("div", null,
-          activeDims.map(d => {
-            const cell = tagsByDim[d];
-            if (!cell.proposed.length && !cell.rejected.length) return null;
-            return e("div", { key: d, className: "dim-row" },
-              e("span", { className: "dim-bullet dim-" + d, "aria-hidden": true }, d),
-              e("div", { className: "dim-meta" },
-                e("span", { className: "dim-name" }, DIM_NAMES[d]),
-                e("span", { className: "dim-count" },
-                  cell.proposed.length + (cell.rejected.length ? " · " + cell.rejected.length + " rej" : ""))
-              ),
-              e("div", { className: "dim-cells" },
-                cell.proposed.map((a, i) => e(AtomChip, { key: "p" + i, atom: a, struck: false })),
-                cell.rejected.map((a, i) => e(AtomChip, { key: "r" + i, atom: a, struck: true }))
-              )
-            );
-          })
+      // Proposed atom tags — compact summary (full interactive view is in Atom Tags below)
+      tagsByDim && e("div", { className: "reasoned-section-head", style: { marginBottom: 8 } },
+        "Proposed atoms: ",
+        e("span", { className: "count" },
+          activeDims.reduce((n, d) => n + tagsByDim[d].proposed.length, 0) + " accepted",
+          rejected.length > 0 ? (" · " + rejected.length + " rejected") : "",
+          " — pre-filled in Atom Tags below"
         )
       ),
 
@@ -2790,12 +2804,20 @@ function ReasonedVerdictPane(props) {
 
 // ---- AtomTagger: top-level pane --------------------------------------------
 function AtomTagger(props) {
-  const { corpus } = props;
-  const [pendingRid, setPendingRid] = React.useState("");
-  const [tags, setTags] = React.useState({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
+  const { corpus, tags, setTags, verdictData, pendingRid, setPendingRid, onVerdictParsed, onVerdictCleared } = props;
   const [caseFilter, setCaseFilter] = React.useState("");
   const [titleFilter, setTitleFilter] = React.useState("");
   const [issueFilter, setIssueFilter] = React.useState("");
+
+  // Derive which atoms came from the skill verdict vs reviewer manual adds
+  const skillProposed = React.useMemo(() => {
+    if (!verdictData || !verdictData.proposed_atom_tags) return {};
+    return verdictData.proposed_atom_tags;
+  }, [verdictData]);
+  const skillRejected = React.useMemo(() => {
+    if (!verdictData || !verdictData.rejected_draft_atoms) return [];
+    return verdictData.rejected_draft_atoms;
+  }, [verdictData]);
 
   // Distinct policy_titles for the filter <select>, sorted
   const titleOptions = React.useMemo(() => {
@@ -2841,10 +2863,6 @@ function AtomTagger(props) {
       setPendingRid("");
     }
   }, [filteredPending, pendingRid]);
-
-  React.useEffect(() => {
-    setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
-  }, [pendingRid]);
 
   const setDim = (dim) => (next) => setTags(prev => Object.assign({}, prev, { [dim]: next }));
   const totalSelected = DIMENSIONS.reduce((s,d) => s + (tags[d]||[]).length, 0);
@@ -2975,10 +2993,14 @@ function AtomTagger(props) {
 
     pendingCase && e("div", { className: "tag-card" },
       e("div", { className: "row", style: { justifyContent: "space-between" }},
-        e("strong", { style: { fontSize: 13 }}, "Atom tagging"),
-        e("div", null,
-          e("button", { className: "ghost", disabled: true, title: "Auto-tagger lands in Phase 6" }, "Auto-tag (off)"),
-          " ",
+        e("strong", { style: { fontSize: 13 }}, "Atom tags"),
+        e("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+          verdictData && verdictData.proposed_atom_tags && e("span", {
+            className: "pill", style: { fontSize: 10, background: "var(--primary)", color: "#fff" }
+          }, "skill-proposed"),
+          !verdictData && e("span", {
+            className: "muted", style: { fontSize: 10 }
+          }, "manual mode — paste verdict above to pre-fill"),
           e("span", { className: "muted", style: { fontSize: 11 }},
             totalSelected + " atom" + (totalSelected===1?"":"s") + " selected")
         )
@@ -2989,16 +3011,11 @@ function AtomTagger(props) {
         atoms: corpus.atomsByDim[d] || [],
         selected: tags[d] || [],
         suggested: (suggestedByDim && suggestedByDim[d]) || [],
+        skillProposed: (skillProposed[d] || []),
+        skillRejected: skillRejected.filter(r => (r.dim || "") === d),
         onChange: setDim(d),
       }))
     ),
-
-    pendingCase && e(VerdictPane, { result: engineResult }),
-
-    pendingCase && precedentsResult && e(PrecedentsPane, {
-      result: precedentsResult,
-      imageMeta: corpus.image_meta
-    }),
 
     pendingCase && payload && e(PayloadPane, {
       payload: payload,
@@ -3008,7 +3025,16 @@ function AtomTagger(props) {
 
     pendingCase && payload && e(ReasonedVerdictPane, {
       engineSimulation: payload.engine_simulation,
-      atomsByDim: corpus.atomsByDim
+      atomsByDim: corpus.atomsByDim,
+      onVerdictParsed: onVerdictParsed,
+      onVerdictCleared: onVerdictCleared
+    }),
+
+    pendingCase && e(VerdictPane, { result: engineResult }),
+
+    pendingCase && precedentsResult && e(PrecedentsPane, {
+      result: precedentsResult,
+      imageMeta: corpus.image_meta
     }),
 
     pendingCase && e("details", { open: false },
@@ -3212,6 +3238,36 @@ function App() {
   const [state, setState] = React.useState({ phase: "idle", err: null, corpus: null });
   const [tab, setTab] = React.useState("tagger");
 
+  // Lifted state: tags + case selection + verdict overlay
+  const [pendingRid, setPendingRid] = React.useState("");
+  const [tags, setTags] = React.useState({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
+  const [verdictData, setVerdictData] = React.useState(null);
+
+  // Reset tags + verdict when case changes
+  React.useEffect(() => {
+    setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
+    setVerdictData(null);
+  }, [pendingRid]);
+
+  // Callback: skill verdict parsed → pre-fill tags
+  const onVerdictParsed = React.useCallback((v) => {
+    setVerdictData(v);
+    if (v && v.proposed_atom_tags) {
+      const next = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+      for (const d of Object.keys(v.proposed_atom_tags)) {
+        if (next[d] !== undefined) {
+          next[d] = [...(v.proposed_atom_tags[d] || [])];
+        }
+      }
+      setTags(next);
+    }
+  }, []);
+
+  const onVerdictCleared = React.useCallback(() => {
+    setVerdictData(null);
+    // Don’t clear tags — reviewer may have further edited them
+  }, []);
+
   const load = React.useCallback(async () => {
     setState({ phase: "loading", err: null, corpus: null });
     try {
@@ -3230,10 +3286,10 @@ function App() {
     e("h1", null, "Atom Console"),
     e("div", { className: "sub" },
       e("span", { className: "pill" }, PLUGIN_VERSION),
-      e("span", null, "atom-rules-only — Rule Book NOT loaded")
+      e("span", null, "skill-first — paste verdict to pre-fill atoms")
     ),
     e("div", { className: "row", style: { gap: 0, borderBottom: "1px solid var(--hairline)" }},
-      e("button", { className: "tab " + (tab==="tagger"?"active":""), onClick: () => setTab("tagger") }, "Tagger"),
+      e("button", { className: "tab " + (tab==="tagger"?"active":""), onClick: () => setTab("tagger") }, "Review"),
       e("button", { className: "tab " + (tab==="loader"?"active":""), onClick: () => setTab("loader") }, "Loader stats"),
       e("div", { style: { flex: 1 }}),
       e("button", { className: "ghost", onClick: load, disabled: state.phase === "loading" },
@@ -3242,14 +3298,17 @@ function App() {
     state.phase === "error" && e("div", { className: "err" },
       e("strong", null, "Load error: "), state.err),
     state.phase === "loading" && e("div", { className: "muted", style: { padding: 20 }}, "Loading corpus…"),
-    state.phase === "loaded" && tab === "tagger" && c && e(AtomTagger, { corpus: c }),
+    state.phase === "loaded" && tab === "tagger" && c && e(AtomTagger, {
+      corpus: c, tags, setTags, verdictData, pendingRid, setPendingRid,
+      onVerdictParsed, onVerdictCleared
+    }),
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
     e("div", { className: "sub", style: { marginTop: 24 }},
-      "Phase 6a of 7 — paste-back loop. ",
-      "Three-step workflow: 1) Send payload · 2) Copy keyframes composite · 3) Paste Mira's verdict reply into the new pane. ",
-      "Mira has no public skill-invoke API for plugins, so the human still rides the bus — but the verdict is now parsed, schema-checked, and rendered in-plugin. ",
-      "Next: 6a.1 = optional write-back to Bitable record · 6c = offline QA harness.")
+      "Phase 7 — skill-first workflow. ",
+      "Flow: 1) Pick case · 2) Send payload to Mira · 3) Paste verdict → atoms pre-fill · 4) Confirm/adjust. ",
+      "Mira has no public skill-invoke API for plugins, so the human still rides the bus — but atoms pre-fill from the skill's proposal. ",
+      "Next: write-back to Bitable · offline QA harness.")
   );
 }
 
