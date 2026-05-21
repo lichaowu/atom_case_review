@@ -247,9 +247,8 @@ window.ATOM_CONSOLE_CONFIG = {
   claimsTableNames:  ["ATLAS Atom Rules", "Atom Rules"],
   casesTableNames:   ["Case Notes", "Cases", "case_notes"],
   pendingTableNames: ["Pending Cases", "pending_cases", "Pending"],
-  issue: "NSA",
 };
-const PLUGIN_VERSION = "atom-mvp v0.7.4-phase6a";
+const PLUGIN_VERSION = "atom-mvp v0.7.5-multi-vertical";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -537,8 +536,12 @@ const DIM_NAMES = {
       });
       scope = { kind: "policy_title", value: candidate.policy_title };
     } else if (scopeByIssue && candidate.issue) {
+      // Match same issue OR sibling sub-verticals (e.g. HSS/BPI both match HHB cases)
+      var SIBLING_ISSUES = { HHB:["HHB","HSS","BPI"], HSS:["HHB","HSS","BPI"], BPI:["HHB","HSS","BPI"] };
+      var siblings = SIBLING_ISSUES[candidate.issue.toUpperCase()] || [candidate.issue.toUpperCase()];
       pool = pool.filter(function (c) {
-        return !c.issue || c.issue === candidate.issue;
+        if (!c.issue) return true;
+        return siblings.indexOf(c.issue.toUpperCase().trim()) >= 0;
       });
       scope = { kind: "issue", value: candidate.issue };
     }
@@ -1485,6 +1488,8 @@ function DimRow(props) {
 // for the candidate's issue (NSA-relevant atoms). `claims` is all claims for
 // candidate.issue (preserves cross-title routing).
 const POLICY_AREA_MAP = {
+  HSS:  "HHB",
+  BPI:  "HHB",
   NSA:  "NSA",
   HHB:  "HHB",
   HRA:  "HRA",
@@ -1499,6 +1504,14 @@ function resolvePolicyArea(issue) {
     if (k.indexOf(key) >= 0) return key;
   }
   return null;
+}
+// Sub-vertical inclusion: HHB claims live as issue=HSS or issue=BPI in the table.
+const POLICY_AREA_INCLUDES = { HHB: ["HHB","HSS","BPI"] };
+function matchesPolicyArea(claimIssue, policyArea) {
+  const ci = String(claimIssue || "").toUpperCase().trim();
+  const includes = POLICY_AREA_INCLUDES[policyArea];
+  if (includes) return includes.indexOf(ci) >= 0;
+  return ci === policyArea;
 }
 
 // ---- copyKeyframesComposite: load N images, draw 2-col grid onto a canvas,
@@ -1772,12 +1785,9 @@ function buildAtomRulesBlock(corpus, policyArea, opts) {
   opts = opts || {};
 
   // 1. Filter claims to ones whose `issue` matches the policy area.
-  const issueClaims = corpus.claims.filter(c => {
-    const ci = String(c.issue || "").toUpperCase().trim();
-    return ci === policyArea;
-  });
+  const issueClaims = corpus.claims.filter(c => matchesPolicyArea(c.issue, policyArea));
 
-  // 2. Build full NSA atoms_catalog (used for slicing; not all of it ships).
+  // 2. Build atoms_catalog for this policy area (used for slicing; not all of it ships).
   const referenced = new Set();
   for (const c of issueClaims) {
     const keys = atomKeysReferencedByClaim(c);
@@ -1890,8 +1900,8 @@ function buildAtomRulesBlock(corpus, policyArea, opts) {
     claims_in_scope:  claimsOut.length,
     claims_total_for_policy_area: issueClaims.length,
     claim_slice_mode: sliced.mode,        // "slice" | "slice_capped" | "fallback_top_n"
-    note:             "atom_rules is a CASE-SCOPED SLICE. The full NSA atom rule book lives in the skill body. " +
-                      "claims_in_scope = " + claimsOut.length + " of " + issueClaims.length + " total NSA claims. " +
+    note:             "atom_rules is a CASE-SCOPED SLICE. The full atom rule book lives in the skill body. " +
+                      "claims_in_scope = " + claimsOut.length + " of " + issueClaims.length + " total " + policyArea + " claims. " +
                       "atoms_catalog only includes atoms referenced by these claims or tagged on the candidate."
   };
 }
@@ -1980,7 +1990,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
   const claimsSlice = (function buildClaimsSlice() {
     if (!corpus || !corpus.claims) return null;
     const issueClaims = corpus.claims.filter(c =>
-      String(c.issue || "").toUpperCase().trim() === policy_area);
+      matchesPolicyArea(c.issue, policy_area));
     const sliced = sliceRelevantClaims(issueClaims, {
       engineResult:        engineResult,
       candidatePolicyTitle: pendingCase.policy_title,
@@ -2310,6 +2320,8 @@ function tryParseVerdictJson(raw) {
 // shape mismatch). Permissive on extra fields so downstream skill rev-bumps
 // don't break the plugin.
 const VERDICT_ENUM = ["VIOLATION","NOT_RECOMMEND","NOT_FOR_FEED","APPROVE","ESCALATE"];
+const ATOM_DIMS_BY_VERTICAL = {NSA:["C","S","P","R","E","M","X"],HHB:["S","C","P","R","M","X"],HSS:["S","C","P","R","M","X"],BPI:["S","C","P","R","M","X"],HRA:["C","S","P","R","E","M","X"],VBDA:["C","S","P","R","E","M","X"],SGC:["C","S","P","R","E","M","X"]};
+const KNOWN_VERTICALS = Object.keys(ATOM_DIMS_BY_VERTICAL);
 const ATOM_DIMS = ["C","S","P","R","E","M","X"];
 function validateAtomVerdict(v) {
   const errors = [], warnings = [];
@@ -2319,8 +2331,8 @@ function validateAtomVerdict(v) {
   if (v.schema && v.schema !== "atom-verdict") {
     warnings.push("schema is \"" + v.schema + "\", expected \"atom-verdict\"");
   }
-  if (v.vertical && v.vertical !== "NSA") {
-    warnings.push("vertical is \"" + v.vertical + "\", expected \"NSA\" for this plugin");
+  if (v.vertical && KNOWN_VERTICALS.indexOf(v.vertical) === -1) {
+    warnings.push("vertical is \"" + v.vertical + "\", not a known vertical (" + KNOWN_VERTICALS.join(", ") + ")");
   }
   if (!v.verdict || VERDICT_ENUM.indexOf(v.verdict) === -1) {
     errors.push("verdict must be one of " + VERDICT_ENUM.join(" / "));
@@ -2331,7 +2343,8 @@ function validateAtomVerdict(v) {
   if (!v.proposed_atom_tags || typeof v.proposed_atom_tags !== "object") {
     errors.push("proposed_atom_tags missing or not an object");
   } else {
-    const missing = ATOM_DIMS.filter(d => !Array.isArray(v.proposed_atom_tags[d]));
+    const expectedDims = (v.vertical && ATOM_DIMS_BY_VERTICAL[v.vertical]) || ATOM_DIMS;
+    const missing = expectedDims.filter(d => !Array.isArray(v.proposed_atom_tags[d]));
     if (missing.length) warnings.push("proposed_atom_tags missing dim(s): " + missing.join(","));
   }
   if (v.simulated_claim_chain && !Array.isArray(v.simulated_claim_chain)) {
@@ -2480,6 +2493,8 @@ function ReasonedVerdictPane(props) {
   const align      = parsed && parsed.engine_alignment;
   const precs      = (parsed && parsed.precedent_analysis) || [];
   const watchOuts  = (parsed && parsed.watch_outs) || [];
+  const verdictVertical = parsed && parsed.vertical;
+  const activeDims = (verdictVertical && ATOM_DIMS_BY_VERTICAL[verdictVertical]) || ATOM_DIMS;
   const nextStep   = parsed && parsed.next_step;
   const reasonSecs = parsed && parsed.reason ? _splitReason(parsed.reason) : null;
 
@@ -2500,20 +2515,19 @@ function ReasonedVerdictPane(props) {
 
   // Pre-compute one resolved view for proposed atoms, with rejected atoms
   // grouped per-dim so the renderer can interleave struck-through chips inline.
-  const ATOM_DIMS = ["C","S","P","R","E","M","X"];
   const DIM_NAMES = { C: "Content", S: "Subject", P: "Portrayal",
                       R: "Realism", E: "Explicitness", M: "Modifier", X: "Exception" };
   const tagsByDim = React.useMemo(() => {
     if (!tags) return null;
     const out = {};
-    for (const d of ATOM_DIMS) {
+    for (const d of activeDims) {
       const proposed = (tags[d] || []).map(k => resolveAtom(k, d));
       const rej      = rejected.filter(r => (r.dim || "") === d)
                                .map(r => Object.assign({}, resolveAtom(r.atom_key, d), { reasonText: r.reason }));
       out[d] = { proposed, rejected: rej };
     }
     return out;
-  }, [tags, rejected, resolveAtom]);
+  }, [tags, rejected, resolveAtom, activeDims]);
 
   // For shared/conflicting precedent atoms — same lookup, but flat list.
   const resolveList = (arr, hint) => (arr || []).map(k => resolveAtom(k, hint));
@@ -2576,11 +2590,11 @@ function ReasonedVerdictPane(props) {
       verdict || "?",
       (typeof conf === "number") ? " · conf " + conf + "/10" : "",
       " · ",
-      (tags ? ATOM_DIMS.reduce((n, d) => n + ((tags[d] || []).length), 0) : 0),
+      (tags ? activeDims.reduce((n, d) => n + ((tags[d] || []).length), 0) : 0),
       " atoms across ",
-      (tags ? ATOM_DIMS.filter(d => (tags[d] || []).length).length : 0),
+      (tags ? activeDims.filter(d => (tags[d] || []).length).length : 0),
       " dim",
-      (tags && ATOM_DIMS.filter(d => (tags[d] || []).length).length === 1 ? "" : "s")
+      (tags && activeDims.filter(d => (tags[d] || []).length).length === 1 ? "" : "s")
     ),
 
     // ---- Errors / warnings ----
@@ -2627,12 +2641,12 @@ function ReasonedVerdictPane(props) {
       tagsByDim && e("div", null,
         e("div", { className: "reasoned-section-head" }, "Proposed atom tags",
           e("span", { className: "count" },
-            "(" + ATOM_DIMS.reduce((n, d) => n + tagsByDim[d].proposed.length, 0) + " accepted",
+            "(" + activeDims.reduce((n, d) => n + tagsByDim[d].proposed.length, 0) + " accepted",
             rejected.length > 0 ? (" · " + rejected.length + " rejected") : "",
             ")")
         ),
         e("div", null,
-          ATOM_DIMS.map(d => {
+          activeDims.map(d => {
             const cell = tagsByDim[d];
             if (!cell.proposed.length && !cell.rejected.length) return null;
             return e("div", { key: d, className: "dim-row" },
@@ -3072,7 +3086,7 @@ function LoaderPane(props) {
   // so it does not need to be re-shipped on every payload.
   const exportRuleBook = (policyArea) => {
     const issueClaims = corpus.claims.filter(c =>
-      String(c.issue || "").toUpperCase().trim() === policyArea);
+      matchesPolicyArea(c.issue, policyArea));
     const referenced = new Set();
     for (const c of issueClaims) {
       atomKeysReferencedByClaim(c).forEach(k => k && referenced.add(String(k).trim()));
