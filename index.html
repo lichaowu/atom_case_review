@@ -923,7 +923,11 @@ async function loadAtomCorpus() {
         M: ridsToKeys(getLnk(f, casesIdx, "modifier_atoms")),
         X: ridsToKeys(getLnk(f, casesIdx, "exception_atoms")),
       },
+      reference_weight: get(f, casesIdx, "reference_weight"),
     };
+  }).filter(c => {
+    const w = (c.reference_weight || "").toLowerCase();
+    return w !== "incomplete" && w !== "outdated";
   });
 
   const pending = pendingRecs.map(r => {
