@@ -2563,9 +2563,9 @@ function ReasonedVerdictPane(props) {
     const cls = "atom-chip"
       + (atom.resolved ? " dim-" + atom.dim : " unknown")
       + (struck ? " rejected" : "");
-    const label = atom.resolved && atom.serial
-      ? (atom.serial.split(" — ")[0] + " · " + atom.name)
-      : (atom.resolved ? atom.name : atom.name + " (unknown)");
+    const label = atom.resolved
+      ? atom.name
+      : (atom.name + " (unknown)");
     return e("span", {
       className: cls,
       title: atom.resolved
@@ -2713,41 +2713,66 @@ function ReasonedVerdictPane(props) {
           nextStep)
       ),
 
-      // Precedent analysis (collapsed by default — secondary detail)
-      precs.length > 0 && e("details", { open: false, style: { marginTop: 14 } },
-        e("summary", null, "Precedent analysis (" + precs.length + ")"),
-        e("div", { style: { marginTop: 6 } },
-          precs.map((pa, i) => {
-            const ap = (pa.applicability || "").toUpperCase();
-            const cls = "precedent-pa " +
-              (ap === "APPLICABLE" ? "applicable" :
-               ap === "PARTIAL"    ? "partial" : "non-applicable");
-            const apKind = ap === "APPLICABLE" ? "high" : ap === "PARTIAL" ? "mid" : "low";
-            return e("div", { key: i, className: cls },
-              e("div", { className: "pa-row" },
-                e("span", { className: "conf-chip " + apKind,
-                  style: { letterSpacing: 1, fontSize: 10 } }, ap || "?"),
-                pa.case_id && e("span", { style: { fontFamily: "var(--mono)", fontSize: 11, color: "var(--body-strong)" } }, pa.case_id),
-                typeof pa.rank === "number" && e("span", { className: "muted", style: { fontSize: 11, color: "var(--muted)" } },
-                  "#" + pa.rank),
-                pa.decision && e("span", { className: "atom-chip" },
-                  e("span", { className: "chip-name" }, pa.decision)),
-                pa.decision_alignment && e("span", { style: { fontSize: 11, color: "var(--muted)" } },
-                  "→ " + pa.decision_alignment)
-              ),
-              Array.isArray(pa.shared_atoms) && pa.shared_atoms.length > 0 && e("div", { style: { marginTop: 6 } },
-                e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", letterSpacing: 0.5, marginRight: 4 } }, "SHARED"),
-                resolveList(pa.shared_atoms).map((a, j) => e(AtomChip, { key: "s" + j, atom: a, struck: false }))
-              ),
-              Array.isArray(pa.conflicting_atoms) && pa.conflicting_atoms.length > 0 && e("div", { style: { marginTop: 4 } },
-                e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", letterSpacing: 0.5, marginRight: 4 } }, "CONFLICT"),
-                resolveList(pa.conflicting_atoms).map((a, j) => e(AtomChip, { key: "c" + j, atom: a, struck: true }))
-              ),
-              pa.note && e("div", { className: "pa-note" }, pa.note)
-            );
-          })
-        )
-      ),
+      // Precedent analysis — sorted by applicability tier, NON-APPLICABLE collapsed
+      precs.length > 0 && (function() {
+        var _tierOrder = { "APPLICABLE": 0, "PARTIAL": 1, "NON-APPLICABLE": 2 };
+        var _sorted = precs.slice().sort(function(a, b) {
+          var ta = _tierOrder[(a.applicability || "").toUpperCase()];
+          var tb = _tierOrder[(b.applicability || "").toUpperCase()];
+          if (ta == null) ta = 2;
+          if (tb == null) tb = 2;
+          return ta - tb;
+        });
+        var _applicable = _sorted.filter(function(p) { return (p.applicability || "").toUpperCase() === "APPLICABLE"; });
+        var _partial    = _sorted.filter(function(p) { return (p.applicability || "").toUpperCase() === "PARTIAL"; });
+        var _nonappl    = _sorted.filter(function(p) { var a = (p.applicability || "").toUpperCase(); return a !== "APPLICABLE" && a !== "PARTIAL"; });
+
+        function _renderPrecCard(pa, i) {
+          var ap = (pa.applicability || "").toUpperCase();
+          var cls = "precedent-pa " +
+            (ap === "APPLICABLE" ? "applicable" :
+             ap === "PARTIAL"    ? "partial" : "non-applicable");
+          var apKind = ap === "APPLICABLE" ? "high" : ap === "PARTIAL" ? "mid" : "low";
+          return e("div", { key: "pa" + i, className: cls },
+            e("div", { className: "pa-row" },
+              e("span", { className: "conf-chip " + apKind,
+                style: { letterSpacing: 1, fontSize: 10 } }, ap || "?"),
+              pa.case_id && e("span", { style: { fontFamily: "var(--mono)", fontSize: 11, color: "var(--body-strong)" } }, pa.case_id),
+              typeof pa.rank === "number" && e("span", { className: "muted", style: { fontSize: 11, color: "var(--muted)" } },
+                "#" + pa.rank),
+              pa.decision && e("span", { className: "atom-chip" },
+                e("span", { className: "chip-name" }, pa.decision)),
+              pa.decision_alignment && e("span", { style: { fontSize: 11, color: "var(--muted)" } },
+                "\u2192 " + pa.decision_alignment)
+            ),
+            Array.isArray(pa.shared_atoms) && pa.shared_atoms.length > 0 && e("div", { style: { marginTop: 6 } },
+              e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", letterSpacing: 0.5, marginRight: 4 } }, "SHARED"),
+              resolveList(pa.shared_atoms).map(function(a, j) { return e(AtomChip, { key: "s" + j, atom: a, struck: false }); })
+            ),
+            Array.isArray(pa.conflicting_atoms) && pa.conflicting_atoms.length > 0 && e("div", { style: { marginTop: 4 } },
+              e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", letterSpacing: 0.5, marginRight: 4 } }, "CONFLICT"),
+              resolveList(pa.conflicting_atoms).map(function(a, j) { return e(AtomChip, { key: "c" + j, atom: a, struck: true }); })
+            ),
+            pa.note && e("div", { className: "pa-note" }, pa.note)
+          );
+        }
+
+        var _applicableCount = _applicable.length + _partial.length;
+        return e("details", { open: false, style: { marginTop: 14 } },
+          e("summary", null, "Precedent analysis (" + precs.length + ")"),
+          e("div", { style: { marginTop: 6 } },
+            _applicable.map(function(pa, i) { return _renderPrecCard(pa, i); }),
+            _partial.map(function(pa, i) { return _renderPrecCard(pa, _applicable.length + i); }),
+            _nonappl.length > 0 && e("details", { open: false, style: { marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 8 } },
+              e("summary", { style: { fontSize: 11, color: "var(--muted)", cursor: "pointer" } },
+                "Non-applicable (" + _nonappl.length + ")"),
+              e("div", { style: { marginTop: 6 } },
+                _nonappl.map(function(pa, i) { return _renderPrecCard(pa, _applicableCount + i); })
+              )
+            )
+          )
+        );
+      })(),
 
       // Suppressed claims (collapsed)
       suppressed.length > 0 && e("details", null,
@@ -3038,65 +3063,67 @@ function AtomTagger(props) {
       imageMeta: corpus.image_meta
     }),
 
-    pendingCase && e("details", { open: false },
-      e("summary", null, "Engine I/O JSON (debug)"),
-      e("pre", null, JSON.stringify({
-        candidate: {
-          id: pendingCase.record_id,
-          source_video_id: pendingCase.source_video_id,
-          policy_title: pendingCase.policy_title,
-          atoms: tags
-        },
-        engine_result: engineResult,
-        precedents: precedentsResult ? {
-          pool_size: precedentsResult.pool_size,
-          total_scored: precedentsResult.total_scored,
-          mix: precedentsResult.mix,
-          results: (precedentsResult.results || []).map(r => ({
-            case_id: r.case_id, source_video_id: r.source_video_id,
-            policy_title: r.policy_title, decision: r.decision,
-            score: r.score, bm25_norm: r.bm25_norm, atom: r._atom,
-            atom_per_dim: r._atom_per_dim
-          }))
-        } : null
-      }, null, 2))
-    ),
-
-    pendingCase && e("details", { open: false },
-      e("summary", null, "Claim gate diagnostics (why didn't a claim fire?)"),
-      e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
-        "Per-claim per-dim hit/miss against current selection. Useful when verdict is NO_CLAIM_FIRED."),
-      e("pre", null, (function(){
-        const out = corpus.claims.map(c => {
-          const dimReport = {};
-          let any = false;
-          ["C","S","P","R","E"].forEach(d => {
-            const need = (c.gates && c.gates[d]) || [];
-            const got  = tags[d] || [];
-            if (!need.length) { dimReport[d] = "wildcard"; return; }
-            const hit = need.filter(k => got.indexOf(k) >= 0);
-            const miss = need.filter(k => got.indexOf(k) < 0);
-            dimReport[d] = (hit.length ? "HIT[" + hit.join(",") + "]" : "MISS")
-                         + (miss.length ? " need=[" + miss.join(",") + "]" : "");
-            if (!hit.length) any = true;
-          });
-          return {
-            claim_id: c.claim_id,
-            policy_titles: c.policy_titles,
-            outcome: c.outcome,
-            gate_status: any ? "BLOCKED" : "WOULD_FIRE",
-            dims: dimReport
-          };
-        });
-        // Sort: WOULD_FIRE first, then partial hits, then full miss
-        out.sort((a,b) => (a.gate_status === "WOULD_FIRE" ? -1 : 1));
-        return JSON.stringify(out.slice(0, 25), null, 2);
-      })())
-    ),
-
-    pendingCase && e("details", { open: false },
-      e("summary", null, "Selected atom_keys (raw, what the engine sees)"),
-      e("pre", null, JSON.stringify(tags, null, 2))
+    pendingCase && e("details", { open: false, style: { marginTop: 16, fontSize: 11, color: "var(--muted)" } },
+      e("summary", { style: { cursor: "pointer" } }, "Debug tools"),
+      e("div", { style: { marginTop: 8 } },
+        e("details", { open: false },
+          e("summary", null, "Engine I/O JSON"),
+          e("pre", null, JSON.stringify({
+            candidate: {
+              id: pendingCase.record_id,
+              source_video_id: pendingCase.source_video_id,
+              policy_title: pendingCase.policy_title,
+              atoms: tags
+            },
+            engine_result: engineResult,
+            precedents: precedentsResult ? {
+              pool_size: precedentsResult.pool_size,
+              total_scored: precedentsResult.total_scored,
+              mix: precedentsResult.mix,
+              results: (precedentsResult.results || []).map(r => ({
+                case_id: r.case_id, source_video_id: r.source_video_id,
+                policy_title: r.policy_title, decision: r.decision,
+                score: r.score, bm25_norm: r.bm25_norm, atom: r._atom,
+                atom_per_dim: r._atom_per_dim
+              }))
+            } : null
+          }, null, 2))
+        ),
+        e("details", { open: false, style: { marginTop: 8 } },
+          e("summary", null, "Claim gate diagnostics"),
+          e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
+            "Per-claim per-dim hit/miss against current selection."),
+          e("pre", null, (function(){
+            const out = corpus.claims.map(c => {
+              const dimReport = {};
+              let any = false;
+              ["C","S","P","R","E"].forEach(d => {
+                const need = (c.gates && c.gates[d]) || [];
+                const got  = tags[d] || [];
+                if (!need.length) { dimReport[d] = "wildcard"; return; }
+                const hit = need.filter(k => got.indexOf(k) >= 0);
+                const miss = need.filter(k => got.indexOf(k) < 0);
+                dimReport[d] = (hit.length ? "HIT[" + hit.join(",") + "]" : "MISS")
+                             + (miss.length ? " need=[" + miss.join(",") + "]" : "");
+                if (!hit.length) any = true;
+              });
+              return {
+                claim_id: c.claim_id,
+                policy_titles: c.policy_titles,
+                outcome: c.outcome,
+                gate_status: any ? "BLOCKED" : "WOULD_FIRE",
+                dims: dimReport
+              };
+            });
+            out.sort((a,b) => (a.gate_status === "WOULD_FIRE" ? -1 : 1));
+            return JSON.stringify(out.slice(0, 25), null, 2);
+          })())
+        ),
+        e("details", { open: false, style: { marginTop: 8 } },
+          e("summary", null, "Selected atom_keys (raw)"),
+          e("pre", null, JSON.stringify(tags, null, 2))
+        )
+      )
     ),
 
     !pendingCase && e("div", { className: "muted", style: { padding: 20, textAlign: "center" }},
@@ -3286,8 +3313,7 @@ function App() {
   return e("div", { className: "shell" },
     e("h1", null, "Atom Console"),
     e("div", { className: "sub" },
-      e("span", { className: "pill" }, PLUGIN_VERSION),
-      e("span", null, "skill-first — paste verdict to pre-fill atoms")
+      e("span", { className: "pill" }, PLUGIN_VERSION)
     ),
     e("div", { className: "row", style: { gap: 0, borderBottom: "1px solid var(--hairline)" }},
       e("button", { className: "tab " + (tab==="tagger"?"active":""), onClick: () => setTab("tagger") }, "Review"),
@@ -3305,11 +3331,17 @@ function App() {
     }),
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
-    e("div", { className: "sub", style: { marginTop: 24 }},
-      "Phase 7 — skill-first workflow. ",
-      "Flow: 1) Pick case · 2) Send payload to Mira · 3) Paste verdict → atoms pre-fill · 4) Confirm/adjust. ",
-      "Mira has no public skill-invoke API for plugins, so the human still rides the bus — but atoms pre-fill from the skill's proposal. ",
-      "Next: write-back to Bitable · offline QA harness.")
+    e("details", { open: false, className: "debug-section", style: { marginTop: 24, fontSize: 11, color: "var(--muted)" } },
+      e("summary", { style: { cursor: "pointer" } }, "Debug & Info"),
+      e("div", { style: { padding: "8px 0" } },
+        e("div", { style: { marginBottom: 8 } },
+          e("strong", null, PLUGIN_VERSION), " — skill-first workflow. ",
+          "Flow: 1) Pick case · 2) Send payload to Mira · 3) Paste verdict → atoms pre-fill · 4) Confirm/adjust."
+        ),
+        e("div", { style: { color: "var(--muted)", fontSize: 10 } },
+          "Next: write-back to Bitable · offline QA harness.")
+      )
+    )
   );
 }
 
