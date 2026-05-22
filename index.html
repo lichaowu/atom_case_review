@@ -215,8 +215,8 @@
   .copy-btn:disabled{opacity:0.55;cursor:not-allowed}
 
 /* Skill-first chip states */
-.chip.skill-src { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, transparent); }
-.chip.reviewer-src { border-color: #6b7; background: color-mix(in srgb, #6b7 8%, transparent); }
+.chip.skill-src { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, #fff); color: var(--primary); font-weight: 600; }
+.chip.reviewer-src { border-color: #6b7; background: color-mix(in srgb, #6b7 12%, #fff); color: #2a7a2a; font-weight: 600; }
 .chip.skill-proposed { border: 1.5px dashed var(--primary); opacity: 0.85; }
 .chip.rejected-by-skill {
   text-decoration: line-through; opacity: 0.5;
@@ -259,7 +259,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.8.1-fix-duplex-link";
+const PLUGIN_VERSION = "atom-mvp v0.8.2-full-slice-umbrella";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -1766,8 +1766,18 @@ function sliceAtomsCatalog(corpus, fullCatalog, relevantClaims, tags) {
 //     claims (with an explicit `claim_slice_mode = "full"` flag so the
 //     specialist knows the slice was not narrowed).
 function sliceRelevantClaims(allIssueClaims, opts) {
-  const { engineResult, candidatePolicyTitle, tags, precedents, hardCap } = opts;
+  const { engineResult, candidatePolicyTitle, tags, precedents, hardCap, policyArea } = opts;
   const cap = hardCap || 60;
+
+  // (0) Umbrella policy areas (HHB = HSS+BPI+HHB) or absent draft tags:
+  //     Send ALL issueClaims unsliced. The skill needs the full claim set
+  //     cross-vertically to propose atoms the reviewer hasn't tagged yet.
+  //     This matches the LLM-first flow (no draft atoms at send time).
+  const tagCount = tags ? ["C","S","P","R","E","M","X"].reduce((s,d) => s + (tags[d] || []).length, 0) : 0;
+  const isUmbrella = !!(POLICY_AREA_INCLUDES[policyArea]);
+  if ((isUmbrella || tagCount === 0) && allIssueClaims.length <= 300) {
+    return { claims: allIssueClaims, mode: "full", kept_ids: allIssueClaims.map(c => c.claim_id), all_count: allIssueClaims.length };
+  }
 
   const keepIds = new Set();
   // (a) Engine-considered claims
@@ -1883,7 +1893,8 @@ function buildAtomRulesBlock(corpus, policyArea, opts) {
     candidatePolicyTitle: opts.candidatePolicyTitle,
     tags:                opts.tags,
     precedents:          opts.precedents,
-    hardCap:             opts.hardCap || 60
+    hardCap:             opts.hardCap || 60,
+    policyArea:          policyArea
   });
 
   // 4. Slim atoms_catalog to entries the relevant claims actually need.
@@ -2055,7 +2066,8 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
       candidatePolicyTitle: pendingCase.policy_title,
       tags:                tags,
       precedents:          precedents,
-      hardCap:             200            // generous cap; per-title typically <160
+      hardCap:             200,           // generous cap; per-title typically <160
+      policyArea:          policy_area
     });
     // Compact each claim (drop empty arrays / objects).
     const out = sliced.claims.map(c => {
@@ -2079,7 +2091,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
       "kept=" + out.length + " of " + issueClaims.length,
       "mode=" + sliced.mode); } catch(_) {}
     return {
-      mode:                 sliced.mode,                 // "slice" | "slice_capped" | "fallback_top_n"
+      mode:                 sliced.mode,                 // "full" | "slice" | "slice_capped" | "fallback_top_n"
       claims:               out,
       claims_in_scope:      out.length,
       claims_total_for_policy_area: issueClaims.length,
