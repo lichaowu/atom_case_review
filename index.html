@@ -259,7 +259,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.8.0-skill-first";
+const PLUGIN_VERSION = "atom-mvp v0.8.1-fix-duplex-link";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -713,7 +713,22 @@ function cellArr(v) {
 }
 function cellLinkRecordIds(v) {
   if (v == null) return [];
-  if (Array.isArray(v)) return v.map(x => (typeof x === "string" ? x : (x.recordId || x.record_id || ""))).filter(Boolean);
+  if (Array.isArray(v)) {
+    var out = [];
+    for (var i = 0; i < v.length; i++) {
+      var x = v[i];
+      if (typeof x === "string") { out.push(x); continue; }
+      if (typeof x === "object" && x) {
+        // DuplexLink element: { recordIds: [...] } or { record_ids: [...] }
+        if (Array.isArray(x.recordIds)) { for (var j = 0; j < x.recordIds.length; j++) out.push(x.recordIds[j]); continue; }
+        if (Array.isArray(x.record_ids)) { for (var j = 0; j < x.record_ids.length; j++) out.push(x.record_ids[j]); continue; }
+        // Single-record link element: { recordId } or { record_id }
+        if (x.recordId) { out.push(x.recordId); continue; }
+        if (x.record_id) { out.push(x.record_id); continue; }
+      }
+    }
+    return out.filter(Boolean);
+  }
   if (typeof v === "object") {
     if (Array.isArray(v.recordIds)) return v.recordIds;
     if (Array.isArray(v.record_ids)) return v.record_ids;
@@ -897,6 +912,18 @@ async function loadAtomCorpus() {
     const inactive = new Set(["inactive","disabled","off","draft","archived","deprecated","retired","false","0","no"]);
     return !inactive.has(s);
   });
+
+  // DEBUG: log first SLR claim gates for DuplexLink verification
+  const slrSample = claims.filter(c => c.claim_id && c.claim_id.startsWith('SLR')).slice(0, 3);
+  if (slrSample.length) {
+    console.info('[AtomConsole] DuplexLink verification — SLR claims gates:', slrSample.map(c => ({ id: c.claim_id, gates_C: c.gates.C })));
+  }
+  // Also log raw cell value of first claim's content_atoms to verify SDK shape
+  if (claimRecs.length) {
+    const sampleF = claimRecs[0].fields || {};
+    const rawCell = readCell(sampleF, claimsIdx, 'content_atoms');
+    console.info('[AtomConsole] Raw content_atoms cell value (first claim):', JSON.stringify(rawCell));
+  }
 
   // Helper: read attachments from any of the candidate field names. First non-empty wins.
   const IMAGE_FIELD_CANDIDATES = ["image","images","screenshots","attachments","cover","thumbnail","frames","frame_grid","frame_grids","preview","video_frames","video_thumbnails","keyframes"];
@@ -3030,7 +3057,18 @@ function AtomTagger(props) {
       }))
     ),
 
-    pendingCase && e(VerdictPane, { result: engineResult }),
+    // Local engine verdict — only shown when NO skill verdict is pasted (manual mode).
+    // When skill verdict is available, the Reasoned Verdict pane above is authoritative.
+    pendingCase && !verdictData && e(VerdictPane, { result: engineResult }),
+    pendingCase && verdictData && e("div", { className: "verdict-card", style: { opacity: 0.7 } },
+      e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 } },
+        e("span", { className: "verdict-pill verdict-" + (verdictData.verdict || "NO_CLAIM_FIRED") },
+          verdictData.verdict || "?"),
+        e("span", { className: "verdict-meta" },
+          "Skill verdict (see Reasoned Verdict above for full detail). ",
+          "Local engine skipped — skill is authoritative.")
+      )
+    ),
 
     pendingCase && precedentsResult && e(PrecedentsPane, {
       result: precedentsResult,
