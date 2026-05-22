@@ -1531,7 +1531,7 @@ function ImagesPane(props) {
 // Suggestion-first UX:
 //   - Default view shows only `suggested` atoms (from top-5 precedents) + selected.
 //   - User can toggle "show all" or start typing to search the full atom set.
-//   - Chip label = serial_code only (atom_key + atom_name in tooltip).
+//   - Chip label = atom_name (atom_key + serial_code in tooltip).
 function DimRow(props) {
   const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected } = props;
   const [filter, setFilter] = React.useState("");
@@ -1594,23 +1594,25 @@ function DimRow(props) {
       e("div", { className: "selected-strip" },
         ...Array.from(sel).map(k => {
           const a = atoms.find(x => x.atom_key === k);
-          const label = (a && a.serial_code) ? a.serial_code : k;
+          const label = (a && a.atom_name) ? a.atom_name : k;
           const isSkill = skillSet.has(k);
           return e("span", {
             key: k, className: "chip selected" + (isSkill ? " skill-src" : " reviewer-src"),
             title: (isSkill ? "[skill-proposed] " : "[reviewer-added] ") +
-              (a ? (a.atom_key + " · " + a.atom_name + " — " + (a.description||"").slice(0,200)) : k),
+              (a ? (a.atom_key + (a.serial_code ? " · " + a.serial_code : "") + " — " + (a.description||"").slice(0,200)) : k),
             onClick: () => toggle(k)
           }, label, isSkill ? " ·s ✕" : " ✕");
         }),
         // Skill-rejected atoms (struck-through, click to override and add)
         ...(skillRejected || []).filter(r => !sel.has(r.atom_key)).map(r => {
           const a = atoms.find(x => x.atom_key === r.atom_key);
-          const label = (a && a.serial_code) ? a.serial_code : r.atom_key;
+          const label = (a && a.atom_name) ? a.atom_name : r.atom_key;
           return e("span", {
             key: "rej-" + r.atom_key,
             className: "chip rejected-by-skill",
-            title: "[skill-rejected] " + (r.reason || "no reason") + " — click to override",
+            title: "[skill-rejected] " + r.atom_key +
+              (a && a.serial_code ? " · " + a.serial_code : "") +
+              " — " + (r.reason || "no reason") + " — click to override",
             onClick: () => toggle(r.atom_key)
           }, label, " ✗");
         })
@@ -1631,9 +1633,9 @@ function DimRow(props) {
             key: a.atom_key,
             className: "chip" + (isSkillProp ? " skill-proposed" : (isSug ? " suggested" : "")),
             title: (isSkillProp ? "[skill-proposed — click to accept] " : "") +
-              a.atom_key + (a.atom_name ? " · " + a.atom_name : "") + (a.description ? " — " + a.description.slice(0,200) : ""),
+              a.atom_key + (a.serial_code ? " · " + a.serial_code : "") + (a.description ? " — " + a.description.slice(0,200) : ""),
             onClick: () => toggle(a.atom_key)
-          }, (a.serial_code || a.atom_key));
+          }, (a.atom_name || a.atom_key));
         }),
         pool.length === 0 && e("span", { className: "muted", style: { padding: 4, fontSize: 11 }},
           f ? "no atoms match search"
@@ -2950,7 +2952,22 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
       if (v === "APPROVE") setDecision("pass");
       else setDecision("flag");
       setPolicyTitle(verdictData.final_policy_title || pendingCase.policy_title || "");
-      setRationale(verdictData.reason ? verdictData.reason.slice(0, 500) : "");
+      // Preload rationale with the [VERDICT] section of `reason` when present,
+      // so the textarea isn't truncated mid-[VISUAL ANALYSIS]. Fall back to the
+      // first 500 chars of the raw reason when no sections are detected, and
+      // finally to the empty string.
+      let _preloadRationale = "";
+      if (verdictData.reason) {
+        const _secs = _splitReason(verdictData.reason);
+        if (_secs && _secs.VERDICT) {
+          _preloadRationale = _secs.VERDICT;
+        } else if (_secs && _secs._full) {
+          _preloadRationale = _secs._full.slice(0, 500);
+        } else {
+          _preloadRationale = verdictData.reason.slice(0, 500);
+        }
+      }
+      setRationale(_preloadRationale);
     } else {
       setDecision("flag");
       setPolicyTitle(pendingCase.policy_title || "");
@@ -3087,8 +3104,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
       e("textarea", {
         value: rationale,
         onChange: (ev) => setRationale(ev.target.value),
-        rows: 2,
-        style: { width: "100%", fontSize: 11, fontFamily: "var(--mono)", resize: "vertical", padding: 4, border: "1px solid var(--hairline)", borderRadius: 4 }
+        rows: 8,
+        style: { width: "100%", fontSize: 12, lineHeight: 1.45, fontFamily: "var(--mono)", resize: "vertical", padding: "6px 8px", border: "1px solid var(--hairline)", borderRadius: 4, minHeight: 140 }
       })
     ),
 
@@ -3108,7 +3125,6 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
         disabled: saving || !hasAtoms,
         style: { fontSize: 12, padding: "4px 12px" }
       }, saving ? "Saving…" : "Confirm & Save"),
-      e("span", { style: { fontSize: 11, color: "var(--muted)" } }, "as " + analyst),
       !hasAtoms && e("span", { style: { fontSize: 11, color: "var(--error)" } }, "Tag at least 1 atom first"),
       saved && e("span", { style: { fontSize: 11, color: saved.ok ? "var(--success)" : "var(--error)" } }, saved.msg)
     )
