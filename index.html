@@ -259,7 +259,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.8.2-full-slice-umbrella";
+const PLUGIN_VERSION = "atom-mvp v0.9.0-claims-baked";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
@@ -2053,55 +2053,10 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
     }))
   } : null;
 
-  // The atoms_catalog (constant interpretation knowledge — atom audit_rules)
-  // is baked into the specialist skill. Payload only ships the claims SLICE
-  // relevant to this case (anchored by candidate.policy_title + precedents +
-  // tagged atoms + engine-considered claims). Typical slice: 30–150 claims.
-  const claimsSlice = (function buildClaimsSlice() {
-    if (!corpus || !corpus.claims) return null;
-    const issueClaims = corpus.claims.filter(c =>
-      matchesPolicyArea(c.issue, policy_area));
-    const sliced = sliceRelevantClaims(issueClaims, {
-      engineResult:        engineResult,
-      candidatePolicyTitle: pendingCase.policy_title,
-      tags:                tags,
-      precedents:          precedents,
-      hardCap:             200,           // generous cap; per-title typically <160
-      policyArea:          policy_area
-    });
-    // Compact each claim (drop empty arrays / objects).
-    const out = sliced.claims.map(c => {
-      const o = { claim_id: c.claim_id, outcome: c.outcome, gates: c.gates || {} };
-      if (c.policy_titles && c.policy_titles.length) o.policy_titles = c.policy_titles;
-      if (c.modifiers_required && c.modifiers_required.length) o.modifiers_required = c.modifiers_required;
-      if (c.modifiers_excluded && c.modifiers_excluded.length) o.modifiers_excluded = c.modifiers_excluded;
-      if (c.modifiers_lift_to_approve && c.modifiers_lift_to_approve.length) o.modifiers_lift_to_approve = c.modifiers_lift_to_approve;
-      if (c.modifiers_lift_dnf && c.modifiers_lift_dnf.length) o.modifiers_lift_dnf = c.modifiers_lift_dnf;
-      if (c.exceptions_required && c.exceptions_required.length) o.exceptions_required = c.exceptions_required;
-      if (c.exceptions_lift_to_approve) o.exceptions_lift_to_approve = true;
-      if (c.exception_qualifiers && Object.keys(c.exception_qualifiers).length) o.exception_qualifiers = c.exception_qualifiers;
-      if (c.exception_qualifier_modifiers && Object.keys(c.exception_qualifier_modifiers).length) o.exception_qualifier_modifiers = c.exception_qualifier_modifiers;
-      if (c.requires_exception_context) o.requires_exception_context = true;
-      if (c.routing && (c.routing.non_realistic_routes_to || c.routing.cross_title_redirect)) o.routing = c.routing;
-      if (c.notes) o.notes = c.notes;
-      return o;
-    });
-    try { console.info("[AtomConsole] claims_slice:",
-      "policy=" + policy_area,
-      "kept=" + out.length + " of " + issueClaims.length,
-      "mode=" + sliced.mode); } catch(_) {}
-    return {
-      mode:                 sliced.mode,                 // "full" | "slice" | "slice_capped" | "fallback_top_n"
-      claims:               out,
-      claims_in_scope:      out.length,
-      claims_total_for_policy_area: issueClaims.length,
-      anchored_by: {
-        policy_title:       pendingCase.policy_title || null,
-        tagged_atom_count:  Object.keys(tags || {}).reduce((s,d)=>s+(tags[d]||[]).length,0),
-        precedent_count:    precedents.length
-      }
-    };
-  })();
+  // v0.9.0: Claims are now baked into the specialist skill (Appendix B).
+  // Payload no longer ships claims_slice — the skill has the full non-approve
+  // corpus (223 claims) and doesn't need per-case claim data from the plugin.
+  // The local engine still uses corpus.claims for in-plugin simulation.
 
   // Tiny version pointer so the specialist can verify rule book alignment.
   const rule_book_ref = {
@@ -2112,7 +2067,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
 
   return {
     schema:           "case-review-payload",
-    version:          "v0.6",
+    version:          "v0.7",
     policy_area:      policy_area,
     generated_at:     new Date().toISOString(),
     generator:        PLUGIN_VERSION,
@@ -2123,7 +2078,6 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
     _route_hint:      (policy_area ? policy_area.toLowerCase() : "nsa") + "-atom-precedent-review",
     candidate:        candidate,
     precedents:       precedents,
-    claims_slice:     claimsSlice,
     rule_book_ref:    rule_book_ref,
     engine_simulation: engine_simulation
   };
@@ -2157,9 +2111,7 @@ function PayloadPane(props) {
   const verdict = payload.engine_simulation ? payload.engine_simulation.verdict : "(no atoms tagged)";
   const rbr = payload.rule_book_ref || null;
   const rbVersion = rbr ? rbr.version : null;
-  const cs = payload.claims_slice || null;
-  const claimsKept = cs ? cs.claims_in_scope : 0;
-  const claimsAll  = cs ? cs.claims_total_for_policy_area : 0;
+  // v0.9: claims baked into skill — no claims_slice in payload
   const routeHint  = payload._route_hint || "nsa-atom-precedent-review";
 
   // Compose payload-with-preamble: gives the agent an unambiguous routing cue
@@ -2167,7 +2119,7 @@ function PayloadPane(props) {
   // matches schema=case-review-payload. The preamble is plain text the user
   // would type, so it doesn't break the JSON parser on the receiving side.
   const payloadWithPreamble =
-      "Run /" + routeHint + " on this case-review-payload (v0.6, NSA atom-rule-grounded):\n\n" +
+      "Run /" + routeHint + " on this case-review-payload (v0.7, claims baked in skill):\n\n" +
       json;
 
   const hasImages = !!(pendingCase && pendingCase.images && pendingCase.images.length);
@@ -2335,10 +2287,9 @@ function PayloadPane(props) {
       e("span", { className: "payload-stat",
         title: "Atom-engine suggested verdict (specialist may revise tags and override)" },
         "engine: " + verdict),
-      cs && e("span", { className: "payload-stat",
-        title: "Claim slice anchored by candidate.policy_title + draft tags + precedents. " +
-               "Mode: " + cs.mode + ". Full atoms_catalog (interpretation knowledge) lives in the skill." },
-        "claims_slice: " + claimsKept + " / " + claimsAll + " (" + (cs.mode || "?") + ")"),
+      e("span", { className: "payload-stat",
+        title: "Non-approve claims (223) are baked into the specialist skill (Appendix B). No claims_slice in payload." },
+        "claims: baked in skill"),
       rbr && e("span", { className: "payload-stat",
         title: "atoms_catalog (with audit_rule) is BAKED into the specialist skill. " +
                "Payload only ships this version pointer for alignment." },
