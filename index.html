@@ -1087,6 +1087,9 @@ async function loadAtomCorpus() {
 
   return {
     atoms, atomsByDim, claims, cases, pending,
+    _tables: { casesTbl, pendingTbl },
+    _fieldIdx: { casesIdx, pendingIdx, atomsIdx },
+    _atomLookup: { atomByRid, atoms },
     image_meta: {
       case_field_id:    caseImgFieldId,
       pending_field_id: pendingImgFieldId,
@@ -1098,6 +1101,119 @@ async function loadAtomCorpus() {
 }
 
 window.__loadAtomCorpus = loadAtomCorpus;
+
+// =============================================================================
+// WRITE-BACK: Save confirmed record to Precedents table
+// =============================================================================
+async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
+  // opts: { decision, policyTitle, rationale, analyst }
+  const tbl = corpus._tables && corpus._tables.casesTbl;
+  if (!tbl) throw new Error("Precedents table not loaded — cannot save.");
+  const idx = corpus._fieldIdx && corpus._fieldIdx.casesIdx;
+  if (!idx || !idx.byName) throw new Error("Precedents field index not available.");
+
+  // Resolve atom_keys → record_ids for link fields
+  const atomsByKey = {};
+  for (const a of (corpus._atomLookup && corpus._atomLookup.atoms || [])) {
+    atomsByKey[a.atom_key] = a.record_id;
+  }
+  function keysToRids(keys) {
+    return (keys || []).map(k => atomsByKey[k]).filter(Boolean);
+  }
+
+  // Build fields object using field IDs from the index
+  function fid(name) { return idx.byName[name] || null; }
+
+  const fields = {};
+  function setField(name, val) {
+    const id = fid(name);
+    if (id && val !== undefined && val !== null && val !== "") fields[id] = val;
+  }
+  function setTextField(name, val) {
+    const id = fid(name);
+    if (id && val) fields[id] = [{ type: "text", text: String(val) }];
+  }
+  function setLinkField(name, rids) {
+    const id = fid(name);
+    if (id && rids && rids.length) {
+      fields[id] = { recordIds: rids, tableId: corpus.image_meta.case_table_id || "" };
+    }
+  }
+
+  // Core text fields (rich-text in Bitable = array of segments)
+  setTextField("case_id", pendingCase.source_video_id || pendingCase.record_id);
+  setTextField("source_video_id", pendingCase.source_video_id);
+  setTextField("issue", pendingCase.issue);
+  setTextField("policy_title", opts.policyTitle || pendingCase.policy_title || "");
+  setTextField("decision", opts.decision || "flag");
+  setTextField("visual_summary", pendingCase.visual_summary);
+  setTextField("asr_text", pendingCase.asr_text);
+  setTextField("ocr_text", pendingCase.ocr_text);
+  setTextField("caption_text", pendingCase.caption_text);
+  setTextField("rationale", opts.rationale || "");
+  setTextField("analyst", opts.analyst || "");
+  setTextField("reference_weight", "confirmed");
+  if (opts.overrideTag) {
+    setTextField("override_tag", opts.overrideTag);
+  }
+
+  // Copy keyframe attachments from pending case (same base, tokens reusable)
+  if (pendingCase.images && pendingCase.images.length) {
+    // Try each candidate field name for the destination attachment field
+    const imgFieldNames = ["images","image","keyframes","screenshots","attachments","frames","frame_grid","cover"];
+    var imgFieldId = null;
+    for (var i = 0; i < imgFieldNames.length; i++) {
+      imgFieldId = fid(imgFieldNames[i]);
+      if (imgFieldId) break;
+    }
+    if (imgFieldId) {
+      // Write attachment tokens back — Bitable accepts [{file_token, name, type, size}]
+      fields[imgFieldId] = pendingCase.images.map(function(img) {
+        return { file_token: img.token, name: img.name || "", type: img.type || "", size: img.size || 0 };
+      }).filter(function(a) { return a.file_token; });
+    }
+  }
+
+  // Atom link fields
+  const dimFieldMap = {
+    C: "content_atoms", S: "subject_atoms", P: "portrayal_atoms",
+    R: "realism_atoms", E: "explicitness_atoms", M: "modifier_atoms",
+    X: "exception_atoms"
+  };
+  for (const [dim, fieldName] of Object.entries(dimFieldMap)) {
+    const rids = keysToRids(tags[dim] || []);
+    if (rids.length && fid(fieldName)) {
+      // Link field format for Bitable Block SDK addRecord:
+      // Array of { recordId: "xxx" } objects
+      fields[fid(fieldName)] = rids.map(rid => ({ recordId: rid }));
+    }
+  }
+
+  // Create record via SDK
+  const result = await tbl.addRecord({ fields });
+
+  // Mark pending case as "Reviewed"
+  if (opts._pendingRecordId && corpus._tables && corpus._tables.pendingTbl) {
+    try {
+      const ptbl = corpus._tables.pendingTbl;
+      const pidx = corpus._fieldIdx && corpus._fieldIdx.pendingIdx;
+      if (pidx && pidx.byName) {
+        const statusFieldId = pidx.byName["status"] || pidx.byName["Status"] || null;
+        if (statusFieldId) {
+          await ptbl.setRecord(opts._pendingRecordId, {
+            fields: { [statusFieldId]: "Reviewed" }
+          });
+        }
+      }
+    } catch(e) {
+      console.warn("[AtomConsole] Failed to update pending status:", e);
+      // Non-fatal — the precedent was already saved
+    }
+  }
+
+  return result;
+}
+window.__saveConfirmedRecord = saveConfirmedRecord;
 </script>
 
 <script>
@@ -2818,6 +2934,187 @@ function ReasonedVerdictPane(props) {
 }
 
 // ---- AtomTagger: top-level pane --------------------------------------------
+// ---- Confirm & Save section -------------------------------------------------
+function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
+  const e = React.createElement;
+  const [decision, setDecision] = React.useState("flag");
+  const [policyTitle, setPolicyTitle] = React.useState("");
+  const [rationale, setRationale] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [saved, setSaved] = React.useState(null); // { ok, msg }
+
+  // Sync defaults from verdict when it changes
+  React.useEffect(() => {
+    if (verdictData) {
+      const v = verdictData.verdict || "";
+      if (v === "APPROVE") setDecision("pass");
+      else setDecision("flag");
+      setPolicyTitle(verdictData.final_policy_title || pendingCase.policy_title || "");
+      setRationale(verdictData.reason ? verdictData.reason.slice(0, 500) : "");
+    } else {
+      setDecision("flag");
+      setPolicyTitle(pendingCase.policy_title || "");
+      setRationale("");
+    }
+    setSaved(null);
+  }, [verdictData, pendingCase]);
+
+  // Get current user as analyst
+  const [analyst, setAnalyst] = React.useState("");
+  React.useEffect(() => {
+    (async () => {
+      try {
+        if (window.bitable && window.bitable.bridge && window.bitable.bridge.getUserId) {
+          const uid = await window.bitable.bridge.getUserId();
+          setAnalyst(uid || "unknown");
+        } else {
+          setAnalyst("plugin-user");
+        }
+      } catch(e) { setAnalyst("plugin-user"); }
+    })();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaved(null);
+    try {
+      await window.__saveConfirmedRecord(corpus, pendingCase, tags, {
+        decision: decision,
+        policyTitle: policyTitle,
+        rationale: rationale,
+        analyst: analyst,
+        overrideTag: discrepancy.tag || "",
+        _pendingRecordId: pendingCase.record_id
+      });
+      setSaved({ ok: true, msg: "Saved to Precedents table" });
+    } catch(err) {
+      setSaved({ ok: false, msg: String(err.message || err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Available policy titles from the corpus precedents + pending
+  const titleOptions = React.useMemo(() => {
+    const s = new Set();
+    for (const c of (corpus.cases || [])) { if (c.policy_title) s.add(c.policy_title); }
+    for (const p of (corpus.pending || [])) { if (p.policy_title) s.add(p.policy_title); }
+    if (policyTitle) s.add(policyTitle);
+    return Array.from(s).sort();
+  }, [corpus, policyTitle]);
+
+  const hasAtoms = Object.values(tags).some(arr => arr && arr.length > 0);
+
+  // Discrepancy detection: compare user decision vs engine/skill expected outcome
+  const discrepancy = React.useMemo(() => {
+    // Derive what the engine would say
+    var engineDecision = null;
+    try {
+      if (window.AtomEngine && corpus.claims) {
+        const er = window.AtomEngine.evaluate(tags, corpus.claims, {});
+        if (er && er.verdict) {
+          // Map engine verdict to our decision taxonomy
+          const vmap = { "VIOLATION": "flag", "NOT_RECOMMEND": "not_recommend",
+                         "NOT_FOR_FEED": "not_for_feed", "APPROVE": "pass",
+                         "NO_CLAIM_FIRED": "pass" };
+          engineDecision = vmap[er.verdict] || "flag";
+        }
+      }
+    } catch(e) { /* engine not available */ }
+
+    // Also consider skill verdict if available
+    var skillDecision = null;
+    if (verdictData && verdictData.verdict) {
+      const smap = { "VIOLATION": "flag", "NOT_RECOMMEND": "not_recommend",
+                     "NOT_FOR_FEED": "not_for_feed", "APPROVE": "pass",
+                     "ESCALATE": "escalate" };
+      skillDecision = smap[verdictData.verdict] || null;
+    }
+
+    // Determine the "expected" decision (skill > engine)
+    var expected = skillDecision || engineDecision || null;
+
+    // Check policy_title discrepancy
+    var expectedTitle = (verdictData && verdictData.final_policy_title) || pendingCase.policy_title || "";
+
+    var overrides = [];
+    if (expected && decision !== expected) {
+      overrides.push("decision:" + expected + "\u2192" + decision);
+    }
+    if (expectedTitle && policyTitle && policyTitle !== expectedTitle) {
+      overrides.push("title:" + expectedTitle + "\u2192" + policyTitle);
+    }
+
+    return {
+      hasOverride: overrides.length > 0,
+      overrides: overrides,
+      tag: overrides.length > 0 ? overrides.join("; ") : null,
+      expected: expected,
+      expectedTitle: expectedTitle
+    };
+  }, [tags, decision, policyTitle, corpus, verdictData, pendingCase]);
+
+  return e("div", { className: "save-section", style: { marginTop: 16, padding: 12, border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--surface-soft)" } },
+    e("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 8 } }, "Confirm & Save to Precedents"),
+
+    e("div", { className: "row", style: { gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 8 } },
+      e("label", { style: { fontSize: 11, color: "var(--muted)" } }, "Decision:"),
+      e("select", {
+        value: decision,
+        onChange: (ev) => setDecision(ev.target.value),
+        style: { fontSize: 12, padding: "2px 6px" }
+      },
+        e("option", { value: "flag" }, "Flag (violation)"),
+        e("option", { value: "pass" }, "Pass (approve)"),
+        e("option", { value: "not_recommend" }, "Not Recommend"),
+        e("option", { value: "not_for_feed" }, "Not For Feed"),
+        e("option", { value: "escalate" }, "Escalate")
+      ),
+
+      e("label", { style: { fontSize: 11, color: "var(--muted)", marginLeft: 8 } }, "Policy title:"),
+      e("select", {
+        value: policyTitle,
+        onChange: (ev) => setPolicyTitle(ev.target.value),
+        style: { fontSize: 12, padding: "2px 6px", maxWidth: 200 }
+      },
+        e("option", { value: "" }, "— none —"),
+        titleOptions.map(t => e("option", { key: t, value: t }, t))
+      )
+    ),
+
+    e("div", { style: { marginBottom: 8 } },
+      e("label", { style: { fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 2 } }, "Rationale (optional):"),
+      e("textarea", {
+        value: rationale,
+        onChange: (ev) => setRationale(ev.target.value),
+        rows: 2,
+        style: { width: "100%", fontSize: 11, fontFamily: "var(--mono)", resize: "vertical", padding: 4, border: "1px solid var(--hairline)", borderRadius: 4 }
+      })
+    ),
+
+    discrepancy.hasOverride && e("div", { style: {
+        marginBottom: 8, padding: "6px 10px", borderRadius: 6,
+        background: "#fef8e8", border: "1px solid #e8d48b", fontSize: 11
+      } },
+      e("strong", { style: { color: "var(--warning, #b8860b)" } }, "⚠ Override: "),
+      e("span", null, discrepancy.overrides.join("; ")),
+      e("span", { style: { color: "var(--muted)", marginLeft: 8 } }, "— will be tagged for discrepancy analysis")
+    ),
+
+    e("div", { className: "row", style: { gap: 8, alignItems: "center" } },
+      e("button", {
+        className: "primary",
+        onClick: handleSave,
+        disabled: saving || !hasAtoms,
+        style: { fontSize: 12, padding: "4px 12px" }
+      }, saving ? "Saving…" : "Confirm & Save"),
+      e("span", { style: { fontSize: 11, color: "var(--muted)" } }, "as " + analyst),
+      !hasAtoms && e("span", { style: { fontSize: 11, color: "var(--error)" } }, "Tag at least 1 atom first"),
+      saved && e("span", { style: { fontSize: 11, color: saved.ok ? "var(--success)" : "var(--error)" } }, saved.msg)
+    )
+  );
+}
+
 function AtomTagger(props) {
   const { corpus, tags, setTags, verdictData, pendingRid, setPendingRid, onVerdictParsed, onVerdictCleared } = props;
   const [caseFilter, setCaseFilter] = React.useState("");
@@ -3061,6 +3358,13 @@ function AtomTagger(props) {
     pendingCase && precedentsResult && e(PrecedentsPane, {
       result: precedentsResult,
       imageMeta: corpus.image_meta
+    }),
+
+    pendingCase && e(ConfirmSaveSection, {
+      corpus: corpus,
+      pendingCase: pendingCase,
+      tags: tags,
+      verdictData: verdictData
     }),
 
     pendingCase && e("details", { open: false, style: { marginTop: 16, fontSize: 11, color: "var(--muted)" } },
