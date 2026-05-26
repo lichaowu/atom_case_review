@@ -262,8 +262,24 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.10.0-writeback";
+const PLUGIN_VERSION = "atom-mvp v0.11.0-apv-prefill";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
+// APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
+function safeParseAtoms(s) {
+  var EMPTY = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+  if (!s || typeof s !== "string") return EMPTY;
+  try {
+    var o = JSON.parse(s);
+    if (!o || typeof o !== "object") return EMPTY;
+    var out = {};
+    for (var i = 0; i < DIMENSIONS.length; i++) {
+      var d = DIMENSIONS[i];
+      out[d] = Array.isArray(o[d]) ? o[d] : [];
+    }
+    return out;
+  } catch (_) { return EMPTY; }
+}
+
 const DIM_NAMES = {
   C: "Content",       S: "Subject",     P: "Portrayal",
   R: "Realism",       E: "Explicitness", M: "Modifier",
@@ -985,6 +1001,9 @@ async function loadAtomCorpus() {
       images: getImages(f, pendingIdx),
       pending_table_id: pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null,
       atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
+      apv_draft_atoms: safeParseAtoms(get(f, pendingIdx, "apv_draft_atoms")),
+      apv_decision: get(f, pendingIdx, "apv_decision") || null,
+      apv_parse_error: !!get(f, pendingIdx, "apv_parse_error"),
     };
   }).filter(p => p.source_video_id);
 
@@ -3328,6 +3347,28 @@ function AtomTagger(props) {
       )
     ),
 
+    pendingCase && pendingCase.apv_decision && e("div", {
+      className: "apv-banner",
+      style: {
+        padding: "8px 12px", margin: "8px 0", borderRadius: 6, fontSize: 12,
+        background: pendingCase.apv_decision === "OK" ? "#e6f9ee"
+          : pendingCase.apv_decision === "ERROR" ? "#fdecea"
+          : "#e8f4fd",
+        border: "1px solid " + (pendingCase.apv_decision === "OK" ? "#b7e4c7"
+          : pendingCase.apv_decision === "ERROR" ? "#f5c6cb"
+          : "#bee5eb")
+      }
+    },
+      pendingCase.apv_decision === "OK" && e("span", null,
+        "✅ APV pre-fill active — ",
+        (function(){ var n=0; for(var i=0;i<DIMENSIONS.length;i++) n+=(pendingCase.apv_draft_atoms[DIMENSIONS[i]]||[]).length; return n; })(),
+        " atoms loaded into tagger. Adjust as needed before confirming."),
+      pendingCase.apv_decision === "META_NA" && e("span", null,
+        "⚠️ Non-analyzable case (S0: atom.not_applicable). Retrieval skipped."),
+      pendingCase.apv_decision === "ERROR" && e("span", null,
+        "❌ APV pre-fill failed (parse error). Please tag manually.")
+    ),
+
     pendingCase && payload && e(PayloadPane, {
       payload: payload,
       pendingCase: pendingCase,
@@ -3600,10 +3641,17 @@ function App() {
   const [tags, setTags] = React.useState({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
   const [verdictData, setVerdictData] = React.useState(null);
 
-  // Reset tags + verdict when case changes
+  // Reset tags + verdict when case changes; pre-fill from APV if available
   React.useEffect(() => {
-    setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
     setVerdictData(null);
+    if (!pendingRid) { setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] }); return; }
+    var pc = state.corpus && state.corpus.pending && state.corpus.pending.find(function(p) { return p.record_id === pendingRid; });
+    if (pc && pc.apv_decision === "OK" && pc.apv_draft_atoms) {
+      var total = 0;
+      for (var i = 0; i < DIMENSIONS.length; i++) total += (pc.apv_draft_atoms[DIMENSIONS[i]] || []).length;
+      if (total > 0) { setTags(pc.apv_draft_atoms); return; }
+    }
+    setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
   }, [pendingRid]);
 
   // Callback: skill verdict parsed → pre-fill tags
