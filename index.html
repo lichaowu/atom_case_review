@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.14.8-scope-fix";
+const PLUGIN_VERSION = "atom-mvp v0.15.0-lazy-prec-img";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1107,7 +1107,7 @@ async function loadAtomCorpus() {
   // - A 20s defensive watchdog releases the slot if fn() never settles.
   var _resolveQueue = [];
   var _resolveActive = 0;
-  var _RESOLVE_MAX_CONCURRENT = 3;
+  var _RESOLVE_MAX_CONCURRENT = 8;
 
   function _resolveNext() {
     while (_resolveActive < _RESOLVE_MAX_CONCURRENT && _resolveQueue.length > 0) {
@@ -1188,7 +1188,7 @@ async function loadAtomCorpus() {
       try {
         const arr = await Promise.race([
           field.getAttachmentUrls(recordId),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
         ]);
         if (Array.isArray(arr)) {
           let n = 0;
@@ -1211,7 +1211,7 @@ async function loadAtomCorpus() {
       try {
         const arr = await Promise.race([
           field.getTmpUrls(tokens),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
         ]);
         if (Array.isArray(arr)) {
           let j = 0, n = 0;
@@ -1241,7 +1241,7 @@ async function loadAtomCorpus() {
         }
         const results = await Promise.race([
           Promise.all(tasks.map(t => t || Promise.resolve(null))),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
         ]);
         let n = 0;
         for (let i = 0; i < results.length; i++) {
@@ -1333,7 +1333,7 @@ async function loadAtomCorpus() {
 
     const filled = out.filter(Boolean).length;
     if (filled < images.length) {
-      console.warn("[AtomConsole] resolveAttachmentUrls partial:", diag, "filled=" + filled + "/" + images.length);
+      console.warn("[AtomConsole] resolveAttachmentUrls partial: scope=" + scope + " rec=" + recordId + " filled=" + filled + "/" + images.length + " paths=[" + diag.paths.join(" | ") + "]");
     } else if (window.__atomConsoleVerbose) {
       console.debug("[AtomConsole] resolveAttachmentUrls ok:", diag);
     }
@@ -1815,17 +1815,13 @@ function PrecedentsPane(props) {
         // ── Right column: body (images + summary + rationale) ──────────
         e("div", { className: "prec-body" },
           r.images && r.images.length > 0 && e("div", {
-            onClick: (ev) => { /* allow image-link clicks (target=_blank) without opening modal */
-              if (ev.target && ev.target.tagName === "IMG") { /* image click → still bubbles up to card → modal */ }
-            }
-          }, e(ImagesPane, {
-            images: r.images,
-            recordId: r.record_id,
-            scope: "case",
-            resolve: imageMeta && imageMeta.resolve,
-            label: "precedent images",
-            limit: 4
-          })),
+            className: "muted",
+            style: { fontSize: 11, padding: "4px 0", display: "flex",
+                     alignItems: "center", gap: 6 }
+          },
+            e("span", { style: { fontSize: 14 }}, "🖼"),
+            e("span", null, r.images.length + " keyframe" + (r.images.length === 1 ? "" : "s") + " · click card to view")
+          ),
           r.visual_summary && e("div", { className: "prec-summary" },
             r.visual_summary.length > 360
               ? r.visual_summary.slice(0, 360) + "…"
@@ -1906,9 +1902,13 @@ function ImagesPane(props) {
         // If zero SDK urls resolved and this is the first attempt, retry after 3s
         // (SDK might not be ready on initial mount)
         if (filledCount === 0 && attempt === 1 && images.length > 0) {
-          console.warn("[AtomConsole] ImagesPane: 0 urls on attempt 1, retrying in 3s…");
+          console.warn("[AtomConsole] ImagesPane: 0 urls on attempt 1 (scope=" + scope + " rec=" + recordId + "), retrying in 3s…");
           // Clear cache so retry goes through SDK again
           if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
+          // IMPORTANT: flip done=true immediately so UI doesn't stay "loading..."
+          // The retry will update state later if it succeeds.
+          clearTimeout(safetyTimer);
+          setDone(true);
           setTimeout(function () {
             if (cancelled) return;
             attemptResolve(2);
