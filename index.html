@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.14.2-prec-modal";
+const PLUGIN_VERSION = "atom-mvp v0.14.3-async-fix";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1099,7 +1099,7 @@ async function loadAtomCorpus() {
   //   3. Try field.getTmpUrls([tokens])        → temp URLs, by token
   //   4. Fall back to embedded url/tmp_url/tmpUrl on the cell value (may be expired)
   // Returns array of URL strings aligned to the input `images` array (same length, "" on failure).
-  async // Concurrency limiter for attachment URL resolution — prevents SDK overload
+  // Concurrency limiter for attachment URL resolution — prevents SDK overload
   // when many ImagesPane components mount simultaneously (e.g. 1 pending + 8 precedents).
   var _resolveQueue = [];
   var _resolveActive = 0;
