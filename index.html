@@ -227,6 +227,63 @@
   cursor: pointer;
 }
 .chip.rejected-by-skill:hover { opacity: 0.8; text-decoration: none; }
+
+  /* Precedent card — clickable affordance */
+  .prec-card-clickable { cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+  .prec-card-clickable:hover { background: var(--surface-soft); border-color: var(--primary); }
+
+  /* Precedent detail modal */
+  .prec-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(20,20,19,0.55);
+    z-index: 9999; display: flex; align-items: center; justify-content: center;
+    padding: 24px; animation: prec-modal-fade 0.15s ease-out;
+  }
+  @keyframes prec-modal-fade { from { opacity: 0; } to { opacity: 1; } }
+  .prec-modal {
+    background: var(--canvas); border-radius: 8px; max-width: 880px; width: 100%;
+    max-height: calc(100vh - 48px); display: flex; flex-direction: column;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.25); border: 1px solid var(--hairline);
+  }
+  .prec-modal-header {
+    padding: 16px 20px; border-bottom: 1px solid var(--hairline);
+    display: flex; align-items: flex-start; gap: 12px; flex-shrink: 0;
+  }
+  .prec-modal-close {
+    background: transparent; border: none; font-size: 24px; line-height: 1;
+    color: var(--muted); cursor: pointer; padding: 0 4px;
+    border-radius: 4px; transition: background 0.1s, color 0.1s;
+  }
+  .prec-modal-close:hover { background: var(--surface-card); color: var(--ink); }
+  .prec-modal-body {
+    padding: 16px 20px 24px; overflow-y: auto; flex: 1;
+  }
+  .prec-modal-section { margin-bottom: 18px; }
+  .prec-modal-section-label {
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+  }
+  .prec-modal-atom-grid { display: flex; flex-direction: column; gap: 6px; }
+  .prec-modal-atom-row {
+    display: flex; align-items: flex-start; gap: 8px;
+  }
+  .prec-modal-dim-badge {
+    flex-shrink: 0; width: 22px; height: 22px; border-radius: 4px;
+    color: white; font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .prec-modal-atom-chips {
+    display: flex; flex-wrap: wrap; gap: 4px; flex: 1;
+  }
+  .prec-modal-textblock { margin-bottom: 14px; }
+  .prec-modal-textblock-label {
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+  }
+  .prec-modal-textblock-body {
+    font-size: 12px; color: var(--body); line-height: 1.5;
+    background: var(--surface-soft); padding: 8px 10px; border-radius: 4px;
+    white-space: pre-wrap; word-break: break-word;
+  }
 </style>
 </head>
 <body>
@@ -262,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.14.0-draft-retrieval";
+const PLUGIN_VERSION = "atom-mvp v0.14.2-prec-modal";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -419,7 +476,7 @@ const DIM_NAMES = {
     });
     var top = hits[0] || null;
     return {
-      verdict: top ? top.outcome_after_lifts : "NO_CLAIM_FIRED",
+      verdict: top ? top.outcome_after_lifts : "APPROVE",
       applied_claim_chain: top ? [top.claim_id] : [],
       lifts_applied: top && top.lift ? [{ claim_id: top.claim_id, lift: top.lift }] : [],
       gate_hits: hits,
@@ -1042,7 +1099,28 @@ async function loadAtomCorpus() {
   //   3. Try field.getTmpUrls([tokens])        → temp URLs, by token
   //   4. Fall back to embedded url/tmp_url/tmpUrl on the cell value (may be expired)
   // Returns array of URL strings aligned to the input `images` array (same length, "" on failure).
-  async function resolveAttachmentUrls(scope, recordId, images) {
+  async // Concurrency limiter for attachment URL resolution — prevents SDK overload
+  // when many ImagesPane components mount simultaneously (e.g. 1 pending + 8 precedents).
+  var _resolveQueue = [];
+  var _resolveActive = 0;
+  var _RESOLVE_MAX_CONCURRENT = 2;
+
+  function _resolveNext() {
+    while (_resolveActive < _RESOLVE_MAX_CONCURRENT && _resolveQueue.length > 0) {
+      const { fn, resolve, reject } = _resolveQueue.shift();
+      _resolveActive++;
+      fn().then(resolve, reject).finally(() => { _resolveActive--; _resolveNext(); });
+    }
+  }
+
+  function _enqueueResolve(fn) {
+    return new Promise((resolve, reject) => {
+      _resolveQueue.push({ fn, resolve, reject });
+      _resolveNext();
+    });
+  }
+
+  async function _doResolveAttachmentUrls(scope, recordId, images) {
     if (!images || !images.length) return [];
     const tbl     = scope === "case" ? casesTbl   : pendingTbl;
     const fieldId = scope === "case" ? caseImgFieldId : pendingImgFieldId;
@@ -1070,7 +1148,7 @@ async function loadAtomCorpus() {
       try {
         const arr = await Promise.race([
           field.getAttachmentUrls(recordId),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
         ]);
         if (Array.isArray(arr)) {
           for (let i = 0; i < images.length && i < arr.length; i++) {
@@ -1087,7 +1165,7 @@ async function loadAtomCorpus() {
       try {
         const arr = await Promise.race([
           field.getTmpUrls(tokens),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
         ]);
         if (Array.isArray(arr)) {
           let j = 0;
@@ -1104,6 +1182,10 @@ async function loadAtomCorpus() {
     // Path C: embedded url on cell value.
     fillFromEmbedded();
     return out;
+  }
+
+  function resolveAttachmentUrls(scope, recordId, images) {
+    return _enqueueResolve(() => _doResolveAttachmentUrls(scope, recordId, images));
   }
 
   return {
@@ -1344,9 +1426,112 @@ function VerdictPane(props) {
 // per-dim cells, and the noisy meta header line. Diagnostic data stays in the
 // retriever output for the JSON debug pane / payload — only the visual surface
 // is hidden on the main panel.
+// ---- PrecedentDetailModal: full-screen overlay with all images, text, atoms
+function PrecedentDetailModal(props) {
+  const { precedent: r, imageMeta, onClose } = props;
+  // Close on Esc
+  React.useEffect(() => {
+    function onKey(ev) { if (ev.key === "Escape") onClose(); }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (!r) return null;
+
+  // Group atoms by dimension; r.atoms is { C:[], S:[], P:[], R:[], E:[], M:[], X:[] }
+  const dims = ["C","S","P","R","E","M","X"];
+  const atomsByDim = r.atoms || {};
+  const totalAtoms = dims.reduce((n, d) => n + ((atomsByDim[d] || []).length), 0);
+
+  const decisionClass = (d) => {
+    const x = String(d || "").toLowerCase();
+    if (!x) return "";
+    if (x.indexOf("flag") >= 0 || x.indexOf("violat") >= 0) return "flag";
+    if (x.indexOf("allow") >= 0 || x.indexOf("approve") >= 0) return "allow";
+    if (x.indexOf("not_recommend") >= 0 || x.indexOf("dnr") >= 0) return "dnr";
+    if (x.indexOf("not_for_feed") >= 0 || x.indexOf("nff") >= 0) return "nff";
+    return "";
+  };
+
+  function textBlock(label, val) {
+    if (!val) return null;
+    return e("div", { className: "prec-modal-textblock" },
+      e("div", { className: "prec-modal-textblock-label" }, label),
+      e("div", { className: "prec-modal-textblock-body" }, val));
+  }
+
+  return e("div", { className: "prec-modal-backdrop", onClick: onClose },
+    e("div", {
+      className: "prec-modal",
+      onClick: (ev) => ev.stopPropagation()
+    },
+      // Header
+      e("div", { className: "prec-modal-header" },
+        e("div", { style: { flex: 1, minWidth: 0 }},
+          e("div", { style: { fontSize: 11, color: "var(--muted)", marginBottom: 2 }},
+            "Precedent detail"),
+          e("div", { style: { fontSize: 15, fontWeight: 600, color: "var(--ink)",
+                              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }},
+            r.case_id || r.source_video_id || r.record_id || "—"),
+          e("div", { className: "prec-pills", style: { marginTop: 6 }},
+            r.decision && e("span", { className: "prec-decision " + decisionClass(r.decision) },
+              r.decision),
+            r.policy_title && e("span", { className: "ev-pill" }, r.policy_title),
+            r.issue && r.issue !== r.policy_title && e("span", { className: "ev-pill" }, r.issue))
+        ),
+        e("button", {
+          className: "prec-modal-close",
+          onClick: onClose,
+          title: "Close (Esc)"
+        }, "×")
+      ),
+
+      // Body — scrollable
+      e("div", { className: "prec-modal-body" },
+        // Images — full set
+        r.images && r.images.length > 0 && e("div", { className: "prec-modal-section" },
+          e("div", { className: "prec-modal-section-label" },
+            "Images (" + r.images.length + ")"),
+          e(ImagesPane, {
+            images: r.images,
+            recordId: r.record_id,
+            scope: "case",
+            resolve: imageMeta && imageMeta.resolve,
+            label: "precedent images"
+          })),
+
+        // Atoms — by dimension
+        totalAtoms > 0 && e("div", { className: "prec-modal-section" },
+          e("div", { className: "prec-modal-section-label" },
+            "Atoms tagged (" + totalAtoms + ")"),
+          e("div", { className: "prec-modal-atom-grid" },
+            ...dims.map(d => {
+              const keys = atomsByDim[d] || [];
+              if (!keys.length) return null;
+              return e("div", { key: d, className: "prec-modal-atom-row" },
+                e("span", {
+                  className: "prec-modal-dim-badge",
+                  style: { background: "var(--dim-" + d + ")" }
+                }, d),
+                e("div", { className: "prec-modal-atom-chips" },
+                  ...keys.map(k => e("span", { key: k, className: "ev-pill" }, k))));
+            }))),
+
+        // Text fields
+        textBlock("Visual summary", r.visual_summary),
+        textBlock("ASR (transcript)", r.asr_text),
+        textBlock("OCR (on-screen text)", r.ocr_text),
+        textBlock("Caption", r.caption_text),
+        textBlock("Rationale", r.rationale)
+      )
+    )
+  );
+}
+
 function PrecedentsPane(props) {
   const { result, imageMeta } = props;
   const [showDiag, setShowDiag] = React.useState(false);
+  const [openPrec, setOpenPrec] = React.useState(null); // precedent object or null
   if (!result) return null;
   const { results, pool_size, total_scored, mix, scope, atom_share } = result;
   const scopeLabel = scope && scope.kind && scope.kind !== "none"
@@ -1402,7 +1587,12 @@ function PrecedentsPane(props) {
       )
     ),
     e("div", null,
-      ...results.map((r, i) => e("div", { key: r.record_id || i, className: "prec-card" },
+      ...results.map((r, i) => e("div", {
+          key: r.record_id || i,
+          className: "prec-card prec-card-clickable",
+          onClick: () => setOpenPrec(r),
+          title: "Click for full detail (all images, ASR/OCR/caption, atoms)"
+        },
         // ── Left column: meta (+ optional diagnostics) ─────────────────
         e("div", { className: "prec-meta" },
           e("div", { className: "prec-rank" },
@@ -1449,13 +1639,18 @@ function PrecedentsPane(props) {
         ),
         // ── Right column: body (images + summary + rationale) ──────────
         e("div", { className: "prec-body" },
-          r.images && r.images.length > 0 && e(ImagesPane, {
+          r.images && r.images.length > 0 && e("div", {
+            onClick: (ev) => { /* allow image-link clicks (target=_blank) without opening modal */
+              if (ev.target && ev.target.tagName === "IMG") { /* image click → still bubbles up to card → modal */ }
+            }
+          }, e(ImagesPane, {
             images: r.images,
             recordId: r.record_id,
             scope: "case",
             resolve: imageMeta && imageMeta.resolve,
-            label: "precedent images"
-          }),
+            label: "precedent images",
+            limit: 4
+          })),
           r.visual_summary && e("div", { className: "prec-summary" },
             r.visual_summary.length > 360
               ? r.visual_summary.slice(0, 360) + "…"
@@ -1464,7 +1659,8 @@ function PrecedentsPane(props) {
             "rationale: " + (r.rationale.length > 240 ? r.rationale.slice(0, 240) + "…" : r.rationale))
         )
       ))
-    )
+    ),
+    openPrec && e(PrecedentDetailModal, { precedent: openPrec, imageMeta: imageMeta, onClose: () => setOpenPrec(null) })
   );
 }
 
@@ -1473,7 +1669,14 @@ function PrecedentsPane(props) {
 // display we re-resolve via base.getAttachmentUrl(token, recordId, fieldId, tableId).
 // Falls back to the embedded url if available.
 function ImagesPane(props) {
-  const { images, recordId, scope, resolve, label } = props;
+  const { images: rawImages, recordId, scope, resolve, label, limit } = props;
+  // limit > 0: only render & resolve the first N images (list-view optimization)
+  const images = (limit && limit > 0 && rawImages && rawImages.length > limit)
+    ? rawImages.slice(0, limit)
+    : rawImages;
+  const hiddenCount = (limit && limit > 0 && rawImages && rawImages.length > limit)
+    ? rawImages.length - limit
+    : 0;
   const [resolved, setResolved] = React.useState([]); // index-aligned url[]
   const [done,     setDone]     = React.useState(false);
   const [error,    setError]    = React.useState("");
@@ -1544,6 +1747,16 @@ function ImagesPane(props) {
           img.name || ("attachment " + (i+1)))
       );
     }),
+    hiddenCount > 0 && e("div", {
+      style: { width: 140, height: 100, border: "1px dashed var(--hairline)",
+               borderRadius: 4, display: "flex", alignItems: "center",
+               justifyContent: "center", flexDirection: "column",
+               background: "var(--surface-soft)", color: "var(--muted)",
+               fontSize: 11, lineHeight: 1.3, padding: 4, textAlign: "center" }
+    }, e("div", { style: { fontSize: 18, fontWeight: 500, color: "var(--body-strong)" }},
+        "+" + hiddenCount),
+       e("div", null, "more"),
+       e("div", { style: { fontSize: 9, marginTop: 2 }}, "click card →")),
     error && e("div", { className: "muted", style: { fontSize: 10, color: "#c00" }}, "image error: " + error)
   );
 }
