@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.14.5-cache-fallback";
+const PLUGIN_VERSION = "atom-mvp v0.14.7-img-merge";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1157,26 +1157,33 @@ async function loadAtomCorpus() {
     if (!images || !images.length) return [];
     const tbl     = scope === "case" ? casesTbl   : pendingTbl;
     const fieldId = scope === "case" ? caseImgFieldId : pendingImgFieldId;
+    const tableId = scope === "case" ? caseTableId    : pendingTableId;
     const tokens  = images.map(img => img && img.token).filter(Boolean);
     const out     = images.map(() => "");
+    const diag    = { scope: scope, recordId: recordId, n: images.length, paths: [] };
+
     const fillFromEmbedded = () => {
+      let n = 0;
       for (let i = 0; i < images.length; i++) {
         if (out[i]) continue;
         const im = images[i] || {};
         const u = im.url || im.tmp_url || im.tmpUrl || "";
-        if (/^https?:\/\//i.test(u)) out[i] = u;
+        if (/^https?:\/\//i.test(u)) { out[i] = u; n++; }
       }
+      if (n) diag.paths.push("embedded:" + n);
     };
 
     if (!tbl || !fieldId || !recordId) {
+      diag.paths.push("no-tbl-or-recordId");
       fillFromEmbedded();
+      console.warn("[AtomConsole] resolveAttachmentUrls fast-path:", diag, "out=", out.filter(Boolean).length);
       return out;
     }
 
     let field = null;
-    try { field = await tbl.getFieldById(fieldId); } catch (e) { field = null; }
+    try { field = await tbl.getFieldById(fieldId); } catch (e) { diag.paths.push("getFieldById-err"); field = null; }
 
-    // Path A: getAttachmentUrls(recordId) — returns array aligned to the cell's tokens.
+    // Path A: field.getAttachmentUrls(recordId) — Block SDK 2024+
     if (field && typeof field.getAttachmentUrls === "function") {
       try {
         const arr = await Promise.race([
@@ -1184,16 +1191,22 @@ async function loadAtomCorpus() {
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
         ]);
         if (Array.isArray(arr)) {
+          let n = 0;
           for (let i = 0; i < images.length && i < arr.length; i++) {
             const v = arr[i];
             const u = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
-            if (u) out[i] = u;
+            if (u && !out[i]) { out[i] = u; n++; }
           }
+          diag.paths.push("A.getAttachmentUrls:" + n + "/" + arr.length);
+        } else {
+          diag.paths.push("A.getAttachmentUrls:not-array");
         }
-      } catch (e) { /* fall through */ }
+      } catch (e) { diag.paths.push("A.err:" + (e && e.message || e)); }
+    } else {
+      diag.paths.push("A.no-fn");
     }
 
-    // Path B: getTmpUrls([tokens]) — token-keyed.
+    // Path B: field.getTmpUrls([tokens]) — older Block SDK
     if (out.some(u => !u) && field && typeof field.getTmpUrls === "function" && tokens.length) {
       try {
         const arr = await Promise.race([
@@ -1201,19 +1214,129 @@ async function loadAtomCorpus() {
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
         ]);
         if (Array.isArray(arr)) {
-          let j = 0;
+          let j = 0, n = 0;
           for (let i = 0; i < images.length; i++) {
             if (out[i]) continue;
             const v = arr[j++];
             const u = (typeof v === "string") ? v : (v && (v.tmpUrl || v.url || v.tmp_url) || "");
-            if (u) out[i] = u;
+            if (u) { out[i] = u; n++; }
           }
-        }
-      } catch (e) { /* fall through */ }
+          diag.paths.push("B.getTmpUrls:" + n);
+        } else { diag.paths.push("B.getTmpUrls:not-array"); }
+      } catch (e) { diag.paths.push("B.err:" + (e && e.message || e)); }
+    } else if (out.some(u => !u)) {
+      diag.paths.push("B.no-fn");
     }
 
-    // Path C: embedded url on cell value.
+    // Path C: base.getAttachmentUrl(token, fieldId, recordId, tableId) — token-by-token.
+    // Older base-level API; some SDK builds expose only this.
+    if (out.some(u => !u) && base && typeof base.getAttachmentUrl === "function" && tokens.length && tableId) {
+      try {
+        const tasks = [];
+        for (let i = 0; i < images.length; i++) {
+          if (out[i]) { tasks.push(null); continue; }
+          const tk = images[i] && images[i].token;
+          if (!tk) { tasks.push(null); continue; }
+          tasks.push(base.getAttachmentUrl(tk, fieldId, recordId, tableId));
+        }
+        const results = await Promise.race([
+          Promise.all(tasks.map(t => t || Promise.resolve(null))),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
+        ]);
+        let n = 0;
+        for (let i = 0; i < results.length; i++) {
+          if (out[i]) continue;
+          const v = results[i];
+          const u = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
+          if (u) { out[i] = u; n++; }
+        }
+        diag.paths.push("C.base.getAttachmentUrl:" + n);
+      } catch (e) { diag.paths.push("C.err:" + (e && e.message || e)); }
+    } else if (out.some(u => !u) && !(base && typeof base.getAttachmentUrl === "function")) {
+      diag.paths.push("C.no-fn");
+    }
+
+    // Path D: re-read the cell via SDK to get fresh embedded urls
+    if (out.some(u => !u) && tbl && typeof tbl.getCellValue === "function") {
+      try {
+        const cv = await Promise.race([
+          tbl.getCellValue(fieldId, recordId),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8000))
+        ]);
+        const arr = Array.isArray(cv) ? cv : (cv ? [cv] : []);
+        let n = 0;
+        for (let i = 0; i < images.length && i < arr.length; i++) {
+          if (out[i]) continue;
+          const a = arr[i] || {};
+          const u = a.url || a.tmp_url || a.tmpUrl || "";
+          if (/^https?:\/\//i.test(u)) { out[i] = u; n++; }
+        }
+        diag.paths.push("D.getCellValue:" + n);
+      } catch (e) { diag.paths.push("D.err:" + (e && e.message || e)); }
+    }
+
+    // Path E: embedded url on cell value (in-memory).
     fillFromEmbedded();
+
+    // Path F: base.batchGetTmpUrl — batch token resolver available in some SDK builds
+    if (out.some(u => !u) && tokens.length) {
+      const missingTokens = [];
+      const missingIdx = [];
+      for (let i = 0; i < images.length; i++) {
+        if (out[i]) continue;
+        const tk = images[i] && images[i].token;
+        if (tk) { missingTokens.push(tk); missingIdx.push(i); }
+      }
+      if (missingTokens.length) {
+        let resolved_f = false;
+        // Try base.batchGetTmpUrl
+        if (base && typeof base.batchGetTmpUrl === "function") {
+          try {
+            const map = await Promise.race([
+              base.batchGetTmpUrl(missingTokens),
+              new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000))
+            ]);
+            let n = 0;
+            if (map && typeof map === "object") {
+              for (let j = 0; j < missingTokens.length; j++) {
+                const u = map[missingTokens[j]] || (map.urls && map.urls[j]) || "";
+                if (u && !out[missingIdx[j]]) { out[missingIdx[j]] = u; n++; }
+              }
+            }
+            if (n) { diag.paths.push("F.batchGetTmpUrl:" + n); resolved_f = true; }
+            else diag.paths.push("F.batchGetTmpUrl:0");
+          } catch (e) { diag.paths.push("F.batch-err:" + (e && e.message || e)); }
+        }
+        // Try window.bitable bridge if available
+        if (!resolved_f && window.bitable && window.bitable.bridge && typeof window.bitable.bridge.call === "function") {
+          try {
+            const resp = await Promise.race([
+              window.bitable.bridge.call("getTemporaryUrls", { file_tokens: missingTokens }),
+              new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000))
+            ]);
+            let n = 0;
+            if (resp && resp.data && resp.data.tmp_urls) {
+              const tmp = resp.data.tmp_urls;
+              for (let j = 0; j < missingTokens.length; j++) {
+                const u = tmp[missingTokens[j]] || (Array.isArray(tmp) && tmp[j]) || "";
+                if (u && !out[missingIdx[j]]) { out[missingIdx[j]] = u; n++; }
+              }
+            }
+            if (n) diag.paths.push("F.bridge:" + n);
+            else diag.paths.push("F.bridge:0");
+          } catch (e) { diag.paths.push("F.bridge-err:" + (e && e.message || e)); }
+        } else if (!resolved_f) {
+          diag.paths.push("F.no-bridge");
+        }
+      }
+    }
+
+    const filled = out.filter(Boolean).length;
+    if (filled < images.length) {
+      console.warn("[AtomConsole] resolveAttachmentUrls partial:", diag, "filled=" + filled + "/" + images.length);
+    } else if (window.__atomConsoleVerbose) {
+      console.debug("[AtomConsole] resolveAttachmentUrls ok:", diag);
+    }
     return out;
   }
 
@@ -1741,7 +1864,12 @@ function ImagesPane(props) {
   React.useEffect(() => {
     let cancelled = false;
     setError("");
-    setResolved([]);
+    // Re-initialize with embedded urls (don't wipe to []) so images show immediately
+    const embeddedInit = images ? images.map(function (im) {
+      var u = im && (im.url || im.tmp_url || im.tmpUrl) || "";
+      return /^https?:\/\//i.test(u) ? u : "";
+    }) : [];
+    setResolved(embeddedInit);
     setDone(false);
     if (!images || !images.length) { setDone(true); return; }
     if (typeof resolve !== "function") {
@@ -1753,20 +1881,57 @@ function ImagesPane(props) {
     // Safety timeout: never stay in "loading…" forever — flip done after 18s.
     var safetyTimer = setTimeout(function () {
       if (cancelled) return;
-      setError("resolve timeout (18s) — using embedded urls if any");
+      setError("resolve timeout (18s)");
       setDone(true);
     }, 18000);
-    resolve(scope || "case", recordId, images).then(urls => {
-      if (cancelled) return;
-      clearTimeout(safetyTimer);
-      setResolved(Array.isArray(urls) ? urls : []);
-      setDone(true);
-    }).catch(e => {
-      if (cancelled) return;
-      clearTimeout(safetyTimer);
-      setError(String(e && e.message || e));
-      setDone(true);
-    });
+    // Invalidate cache for this record before resolving (ensures fresh SDK calls)
+    var cacheKey = (scope || "case") + ":" + (recordId || "");
+    if (_resolveCache && _resolveCache.has(cacheKey)) _resolveCache.delete(cacheKey);
+
+    var attemptResolve = function (attempt) {
+      resolve(scope || "case", recordId, images).then(function (urls) {
+        if (cancelled) return;
+        var filledCount = 0;
+        if (Array.isArray(urls)) {
+          setResolved(function (prev) {
+            var merged = prev.slice();
+            for (var k = 0; k < urls.length; k++) {
+              if (urls[k]) { merged[k] = urls[k]; filledCount++; }
+            }
+            return merged;
+          });
+        }
+        // If zero SDK urls resolved and this is the first attempt, retry after 3s
+        // (SDK might not be ready on initial mount)
+        if (filledCount === 0 && attempt === 1 && images.length > 0) {
+          console.warn("[AtomConsole] ImagesPane: 0 urls on attempt 1, retrying in 3s…");
+          // Clear cache so retry goes through SDK again
+          if (_resolveCache && _resolveCache.has(cacheKey)) _resolveCache.delete(cacheKey);
+          setTimeout(function () {
+            if (cancelled) return;
+            attemptResolve(2);
+          }, 3000);
+          return;
+        }
+        clearTimeout(safetyTimer);
+        setDone(true);
+      }).catch(function (e) {
+        if (cancelled) return;
+        if (attempt === 1) {
+          // Retry once on error too
+          setTimeout(function () {
+            if (cancelled) return;
+            if (_resolveCache && _resolveCache.has(cacheKey)) _resolveCache.delete(cacheKey);
+            attemptResolve(2);
+          }, 3000);
+          return;
+        }
+        clearTimeout(safetyTimer);
+        setError(String(e && e.message || e));
+        setDone(true);
+      });
+    };
+    attemptResolve(1);
     return () => { cancelled = true; clearTimeout(safetyTimer); };
   }, [images, recordId, scope, resolve]);
 
@@ -1786,8 +1951,16 @@ function ImagesPane(props) {
             src: url,
             alt: img.name || ("attachment " + (i+1)),
             style: { width: "100%", height: 100, objectFit: "cover", display: "block" },
-            onError: () => {
-              setResolved(prev => { const n = prev.slice(); n[i] = ""; return n; });
+            onError: (ev) => {
+              // Don't blank the url; show a placeholder via alt text.
+              // Mark the img element with a class for styling.
+              if (ev && ev.target) ev.target.style.display = "none";
+              if (ev && ev.target && ev.target.parentNode) {
+                var ph = document.createElement("div");
+                ph.textContent = "⚠ expired";
+                ph.style.cssText = "font-size:10px;color:#a00;padding:6px;text-align:center;";
+                ev.target.parentNode.appendChild(ph);
+              }
             }
           }));
       } else if (url) {
