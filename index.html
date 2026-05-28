@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.14.3-async-fix";
+const PLUGIN_VERSION = "atom-mvp v0.14.5-cache-fallback";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1101,21 +1101,54 @@ async function loadAtomCorpus() {
   // Returns array of URL strings aligned to the input `images` array (same length, "" on failure).
   // Concurrency limiter for attachment URL resolution — prevents SDK overload
   // when many ImagesPane components mount simultaneously (e.g. 1 pending + 8 precedents).
+  // - Background thumbnail loads go through the queue (max 3 in flight).
+  // - User-initiated actions (Copy keyframes, etc.) use { priority: true } to bypass
+  //   the queue entirely, so the user is never blocked behind background work.
+  // - A 20s defensive watchdog releases the slot if fn() never settles.
   var _resolveQueue = [];
   var _resolveActive = 0;
-  var _RESOLVE_MAX_CONCURRENT = 2;
+  var _RESOLVE_MAX_CONCURRENT = 3;
 
   function _resolveNext() {
     while (_resolveActive < _RESOLVE_MAX_CONCURRENT && _resolveQueue.length > 0) {
       const { fn, resolve, reject } = _resolveQueue.shift();
       _resolveActive++;
-      fn().then(resolve, reject).finally(() => { _resolveActive--; _resolveNext(); });
+      var released = false;
+      var release = function () {
+        if (released) return;
+        released = true;
+        _resolveActive--;
+        _resolveNext();
+      };
+      // Defensive watchdog — release slot if fn() never settles (e.g. SDK hangs).
+      var watchdog = setTimeout(function () {
+        try { reject(new Error("queue-watchdog timeout (20s)")); } catch (e) {}
+        release();
+      }, 20000);
+      try {
+        var p = fn();
+        if (p && typeof p.then === "function") {
+          p.then(function (v) { clearTimeout(watchdog); resolve(v); release(); },
+                 function (err) { clearTimeout(watchdog); reject(err); release(); });
+        } else {
+          clearTimeout(watchdog); resolve(p); release();
+        }
+      } catch (err) {
+        clearTimeout(watchdog); reject(err); release();
+      }
     }
   }
 
-  function _enqueueResolve(fn) {
-    return new Promise((resolve, reject) => {
-      _resolveQueue.push({ fn, resolve, reject });
+  function _enqueueResolve(fn, opts) {
+    // opts.priority === true → run immediately, bypass queue entirely.
+    if (opts && opts.priority) {
+      try {
+        var p = fn();
+        return (p && typeof p.then === "function") ? p : Promise.resolve(p);
+      } catch (err) { return Promise.reject(err); }
+    }
+    return new Promise(function (resolve, reject) {
+      _resolveQueue.push({ fn: fn, resolve: resolve, reject: reject });
       _resolveNext();
     });
   }
@@ -1184,8 +1217,25 @@ async function loadAtomCorpus() {
     return out;
   }
 
-  function resolveAttachmentUrls(scope, recordId, images) {
-    return _enqueueResolve(() => _doResolveAttachmentUrls(scope, recordId, images));
+  // Per-(scope,recordId) cache so React re-mounts don't pile up duplicate calls.
+  // Cache holds the Promise itself (in-flight or settled), reused for the lifetime of corpus.
+  var _resolveCache = new Map();
+  function _cacheKey(scope, recordId) { return (scope || "case") + ":" + (recordId || ""); }
+
+  function resolveAttachmentUrls(scope, recordId, images, opts) {
+    var key = _cacheKey(scope, recordId);
+    // Priority (user actions): never use cache — always fresh.
+    if (opts && opts.priority) {
+      return _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images); }, opts);
+    }
+    if (_resolveCache.has(key)) {
+      return _resolveCache.get(key);
+    }
+    var p = _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images); }, opts);
+    _resolveCache.set(key, p);
+    // On failure, evict so a subsequent retry can re-attempt.
+    p.catch(function () { _resolveCache.delete(key); });
+    return p;
   }
 
   return {
@@ -1677,7 +1727,14 @@ function ImagesPane(props) {
   const hiddenCount = (limit && limit > 0 && rawImages && rawImages.length > limit)
     ? rawImages.length - limit
     : 0;
-  const [resolved, setResolved] = React.useState([]); // index-aligned url[]
+  // Initialize with embedded urls from the cell value — shows immediately if usable.
+  const [resolved, setResolved] = React.useState(function () {
+    if (!images || !images.length) return [];
+    return images.map(function (im) {
+      var u = im && (im.url || im.tmp_url || im.tmpUrl) || "";
+      return /^https?:\/\//i.test(u) ? u : "";
+    });
+  });
   const [done,     setDone]     = React.useState(false);
   const [error,    setError]    = React.useState("");
 
@@ -1693,16 +1750,24 @@ function ImagesPane(props) {
       if (!cancelled) { setResolved(urls); setDone(true); }
       return;
     }
+    // Safety timeout: never stay in "loading…" forever — flip done after 18s.
+    var safetyTimer = setTimeout(function () {
+      if (cancelled) return;
+      setError("resolve timeout (18s) — using embedded urls if any");
+      setDone(true);
+    }, 18000);
     resolve(scope || "case", recordId, images).then(urls => {
       if (cancelled) return;
+      clearTimeout(safetyTimer);
       setResolved(Array.isArray(urls) ? urls : []);
       setDone(true);
     }).catch(e => {
       if (cancelled) return;
+      clearTimeout(safetyTimer);
       setError(String(e && e.message || e));
       setDone(true);
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(safetyTimer); };
   }, [images, recordId, scope, resolve]);
 
   if (!images || !images.length) {
@@ -2568,7 +2633,7 @@ function PayloadPane(props) {
     let urls = [];
     try {
       if (imageMeta && typeof imageMeta.resolve === "function") {
-        urls = await imageMeta.resolve("pending", pendingCase.record_id, pendingCase.images);
+        urls = await imageMeta.resolve("pending", pendingCase.record_id, pendingCase.images, { priority: true });
       }
       if (!Array.isArray(urls) || urls.length === 0) {
         urls = pendingCase.images.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
