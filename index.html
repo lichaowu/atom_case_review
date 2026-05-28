@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.15.2-policy-title";
+const PLUGIN_VERSION = "atom-mvp v0.15.3-verdict-fix";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -468,16 +468,48 @@ const DIM_NAMES = {
       }
       hits.push(entry);
     }
+    // Normalize outcome strings to be defensive (uppercase, underscore-form)
+    function _normOutcome(o) {
+      if (!o) return "";
+      return String(o).toUpperCase().replace(/[\s\-]+/g, "_");
+    }
+    function _sev(o) {
+      var n = _normOutcome(o);
+      return SEVERITY[n] || 0;
+    }
     hits.sort(function (a, b) {
-      var sa = SEVERITY[a.outcome_after_lifts] || 0;
-      var sb = SEVERITY[b.outcome_after_lifts] || 0;
+      var sa = _sev(a.outcome_after_lifts);
+      var sb = _sev(b.outcome_after_lifts);
       if (sb !== sa) return sb - sa;
       if (b.specificity !== a.specificity) return b.specificity - a.specificity;
       return (a.claim_id || "").localeCompare(b.claim_id || "");
     });
+    // Defensive: verdict must come from the highest-severity hit, even if the
+    // sort comparator gave a wrong order due to bad input data. Compute the
+    // true max-severity hit independently as a sanity check.
+    var trueMax = null, trueMaxSev = -1;
+    for (var hi = 0; hi < hits.length; hi++) {
+      var sv = _sev(hits[hi].outcome_after_lifts);
+      if (sv > trueMaxSev) { trueMaxSev = sv; trueMax = hits[hi]; }
+    }
     var top = hits[0] || null;
+    if (top && trueMax && _sev(top.outcome_after_lifts) < trueMaxSev) {
+      console.warn("[AtomEngine] sort/verdict mismatch — promoting trueMax:",
+        { topClaim: top.claim_id, topOutcome: top.outcome_after_lifts,
+          maxClaim: trueMax.claim_id, maxOutcome: trueMax.outcome_after_lifts,
+          allHits: hits.map(function(h){ return h.claim_id + ":" + h.outcome_after_lifts + "(sev=" + _sev(h.outcome_after_lifts) + ")"; }) });
+      top = trueMax;
+      // Re-sort with trueMax first so the UI shows it as #1 too
+      hits = hits.filter(function (h) { return h !== trueMax; });
+      hits.unshift(trueMax);
+    }
+    if (window.__atomEngineVerbose) {
+      console.debug("[AtomEngine] verdict=" + (top ? top.outcome_after_lifts : "APPROVE") +
+        " top=" + (top ? top.claim_id : "none") +
+        " hits=" + hits.map(function(h){ return h.claim_id + ":" + h.outcome_after_lifts; }).join(","));
+    }
     return {
-      verdict: top ? top.outcome_after_lifts : "APPROVE",
+      verdict: top ? _normOutcome(top.outcome_after_lifts) || top.outcome_after_lifts : "APPROVE",
       applied_claim_chain: top ? [top.claim_id] : [],
       lifts_applied: top && top.lift ? [{ claim_id: top.claim_id, lift: top.lift }] : [],
       gate_hits: hits,
