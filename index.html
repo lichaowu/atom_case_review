@@ -262,7 +262,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.11.0-apv-prefill";
+const PLUGIN_VERSION = "atom-mvp v0.14.0-draft-retrieval";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -270,6 +270,7 @@ function safeParseAtoms(s) {
   if (!s || typeof s !== "string") return EMPTY;
   try {
     var o = JSON.parse(s);
+    if (o && typeof o === "object" && o.draft_atom_tags && typeof o.draft_atom_tags === "object") o = o.draft_atom_tags;
     if (!o || typeof o !== "object") return EMPTY;
     var out = {};
     for (var i = 0; i < DIMENSIONS.length; i++) {
@@ -1002,8 +1003,6 @@ async function loadAtomCorpus() {
       pending_table_id: pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null,
       atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
       apv_draft_atoms: safeParseAtoms(get(f, pendingIdx, "apv_draft_atoms")),
-      apv_decision: get(f, pendingIdx, "apv_decision") || null,
-      apv_parse_error: !!get(f, pendingIdx, "apv_parse_error"),
     };
   }).filter(p => p.source_video_id);
 
@@ -1556,7 +1555,7 @@ function ImagesPane(props) {
 //     narrow down, or start typing to search across all atoms.
 //   - Chip label = atom_name (atom_key + serial_code in tooltip).
 function DimRow(props) {
-  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected } = props;
+  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected, relevantKeys } = props;
   const [filter, setFilter] = React.useState("");
   // Default to "show all" so the reviewer always sees the full atom set with
   // suggestions visually highlighted, instead of having to click through to
@@ -1569,23 +1568,36 @@ function DimRow(props) {
   const skillSet = new Set(skillProposed || []);
   const rejKeys = new Set((skillRejected || []).map(r => r.atom_key));
 
+  // Issue/policy-scoped atom base: when relevantKeys is provided (non-null array),
+  // restrict the atom universe to only those referenced by claims for this issue.
+  const relSet = relevantKeys ? new Set(relevantKeys) : null;
+  const scopedAtoms = relSet ? atoms.filter(a => relSet.has(a.atom_key)) : atoms;
+
   // Decide candidate pool:
-  // 1. If filter text typed -> search ALL atoms
+  // 1. If filter text typed -> search ALL scoped atoms
   // 2. Else if "suggestions only" toggled (and we have suggestions) -> filter
-  // 3. Else (default) -> show all atoms (suggestions highlighted via .suggested chip)
+  // 3. Else (default) -> show all scoped atoms (suggestions highlighted)
   let pool;
   if (f) {
-    pool = atoms.filter(a =>
+    pool = scopedAtoms.filter(a =>
       (a.atom_key||"").toLowerCase().includes(f) ||
       (a.serial_code||"").toLowerCase().includes(f) ||
       (a.atom_name||"").toLowerCase().includes(f) ||
       (a.description||"").toLowerCase().includes(f)
     );
   } else if (suggestedOnly && hasSuggestions) {
-    pool = atoms.filter(a => sugSet.has(a.atom_key));
+    pool = scopedAtoms.filter(a => sugSet.has(a.atom_key));
   } else {
-    pool = atoms;
+    pool = scopedAtoms;
   }
+
+  // Sort pool: suggested atoms first (preserving alpha within each group)
+  pool = pool.slice().sort(function(a, b) {
+    var aS = sugSet.has(a.atom_key) ? 0 : 1;
+    var bS = sugSet.has(b.atom_key) ? 0 : 1;
+    if (aS !== bS) return aS - bS;
+    return (a.atom_name || a.atom_key).localeCompare(b.atom_name || b.atom_key);
+  });
 
   const toggle = (k) => {
     const next = new Set(sel);
@@ -1597,10 +1609,10 @@ function DimRow(props) {
   const modeLabel = f
     ? "filter: " + pool.length + " match"
     : (suggestedOnly && hasSuggestions)
-      ? "suggested " + pool.length + "/" + atoms.length
+      ? "suggested " + pool.length + "/" + scopedAtoms.length
       : (hasSuggestions
-          ? "all " + atoms.length + " atoms · " + sugSet.size + " suggested"
-          : "all " + atoms.length + " atoms");
+          ? "all " + scopedAtoms.length + " atoms · " + sugSet.size + " suggested"
+          : "all " + scopedAtoms.length + " atoms");
 
   return e("div", { className: "dim-row dim-" + dim },
     e("div", { className: "dim-label" }, dim),
@@ -3233,19 +3245,33 @@ function AtomTagger(props) {
 
   // Phase 4: hybrid retriever. Runs when a case is picked; uses pendingCase text +
   // current atom selection to find similar precedents in corpus.cases.
+  // Merge user-selected tags with APV draft atoms for richer atom-Jaccard retrieval.
+  const retrievalAtoms = React.useMemo(() => {
+    var draft = (pendingCase && pendingCase.apv_draft_atoms) || null;
+    if (!draft) return tags;
+    var merged = {};
+    for (var i = 0; i < DIMENSIONS.length; i++) {
+      var d = DIMENSIONS[i];
+      var s = new Set(tags[d] || []);
+      (draft[d] || []).forEach(function(k){ s.add(k); });
+      merged[d] = Array.from(s);
+    }
+    return merged;
+  }, [tags, pendingCase]);
+
   const precedentsResult = React.useMemo(() => {
     if (!pendingCase) return null;
     const candidate = {
       policy_title: pendingCase.policy_title,
       issue:        pendingCase.issue,
-      atoms: tags,
+      atoms: retrievalAtoms,
       visual_summary: pendingCase.visual_summary,
       asr_text:       pendingCase.asr_text,
       ocr_text:       pendingCase.ocr_text,
       caption_text:   pendingCase.caption_text
     };
     return window.AtomRetriever.retrieve(candidate, corpus.cases, { topPerChannel: 4, totalK: 8 });
-  }, [tags, pendingCase, corpus.cases]);
+  }, [retrievalAtoms, pendingCase, corpus.cases]);
 
   // Suggested atoms per dim = union of atoms from top-5 precedents.
   // Drives DimRow's default candidate pool. Re-computes with the precedent set.
@@ -3264,6 +3290,43 @@ function AtomTagger(props) {
     }
     return out;
   }, [precedentsResult]);
+
+  // Issue/policy-scoped atom filter: only show atoms referenced by claims for the active issue.
+  // Collects all atom_keys from gates + modifiers + exceptions of matching claims.
+  const relevantAtomKeysByDim = React.useMemo(() => {
+    if (!pendingCase || !pendingCase.issue) return null;
+    var issue = pendingCase.issue;
+    var policyTitle = pendingCase.policy_title || null;
+    var relevant = { C:new Set(), S:new Set(), P:new Set(), R:new Set(), E:new Set(), M:new Set(), X:new Set() };
+    for (var i = 0; i < corpus.claims.length; i++) {
+      var c = corpus.claims[i];
+      if (c.issue && c.issue !== issue) continue;
+      if (policyTitle && (c.policy_titles||[]).length && (c.policy_titles||[]).indexOf(policyTitle) < 0) continue;
+      var g = c.gates || {};
+      (g.C||[]).forEach(function(k){ relevant.C.add(k); });
+      (g.S||[]).forEach(function(k){ relevant.S.add(k); });
+      (g.P||[]).forEach(function(k){ relevant.P.add(k); });
+      (g.R||[]).forEach(function(k){ relevant.R.add(k); });
+      (g.E||[]).forEach(function(k){ relevant.E.add(k); });
+      (c.modifiers_required||[]).forEach(function(k){ relevant.M.add(k); });
+      (c.modifiers_excluded||[]).forEach(function(k){ relevant.M.add(k); });
+      (c.modifiers_lift_to_approve||[]).forEach(function(k){ relevant.M.add(k); });
+      // modifiers_lift_dnf is array-of-arrays (DNF groups of modifier keys)
+      (c.modifiers_lift_dnf||[]).forEach(function(grp){
+        if (Array.isArray(grp)) grp.forEach(function(k){ relevant.M.add(k); });
+      });
+      (c.exceptions_required||[]).forEach(function(k){ relevant.X.add(k); });
+    }
+    // Convert sets to sorted arrays (null means "show all" — no filtering)
+    var total = 0;
+    var out = {};
+    for (var di = 0; di < DIMENSIONS.length; di++) {
+      var d = DIMENSIONS[di];
+      out[d] = Array.from(relevant[d]).sort();
+      total += out[d].length;
+    }
+    return total > 0 ? out : null;
+  }, [pendingCase, corpus.claims]);
 
   // Phase 5: payload v0.5 emit. Memoized on (pendingCase, tags, engineResult,
   // precedentsResult, corpus). Returns null when no case picked.
@@ -3347,26 +3410,24 @@ function AtomTagger(props) {
       )
     ),
 
-    pendingCase && pendingCase.apv_decision && e("div", {
+    pendingCase && (function(){
+      var n = 0;
+      if (pendingCase.apv_draft_atoms) {
+        for (var i = 0; i < DIMENSIONS.length; i++) n += (pendingCase.apv_draft_atoms[DIMENSIONS[i]] || []).length;
+      }
+      return n > 0;
+    })() && e("div", {
       className: "apv-banner",
       style: {
         padding: "8px 12px", margin: "8px 0", borderRadius: 6, fontSize: 12,
-        background: pendingCase.apv_decision === "OK" ? "#e6f9ee"
-          : pendingCase.apv_decision === "ERROR" ? "#fdecea"
-          : "#e8f4fd",
-        border: "1px solid " + (pendingCase.apv_decision === "OK" ? "#b7e4c7"
-          : pendingCase.apv_decision === "ERROR" ? "#f5c6cb"
-          : "#bee5eb")
+        background: "#e6f9ee",
+        border: "1px solid #b7e4c7"
       }
     },
-      pendingCase.apv_decision === "OK" && e("span", null,
+      e("span", null,
         "✅ APV pre-fill active — ",
         (function(){ var n=0; for(var i=0;i<DIMENSIONS.length;i++) n+=(pendingCase.apv_draft_atoms[DIMENSIONS[i]]||[]).length; return n; })(),
-        " atoms loaded into tagger. Adjust as needed before confirming."),
-      pendingCase.apv_decision === "META_NA" && e("span", null,
-        "⚠️ Non-analyzable case (S0: atom.not_applicable). Retrieval skipped."),
-      pendingCase.apv_decision === "ERROR" && e("span", null,
-        "❌ APV pre-fill failed (parse error). Please tag manually.")
+        " atoms loaded into tagger. Adjust as needed before confirming.")
     ),
 
     pendingCase && payload && e(PayloadPane, {
@@ -3404,6 +3465,7 @@ function AtomTagger(props) {
         suggested: (suggestedByDim && suggestedByDim[d]) || [],
         skillProposed: (skillProposed[d] || []),
         skillRejected: skillRejected.filter(r => (r.dim || "") === d),
+        relevantKeys: relevantAtomKeysByDim ? (relevantAtomKeysByDim[d] || []) : null,
         onChange: setDim(d),
       }))
     ),
@@ -3646,7 +3708,7 @@ function App() {
     setVerdictData(null);
     if (!pendingRid) { setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] }); return; }
     var pc = state.corpus && state.corpus.pending && state.corpus.pending.find(function(p) { return p.record_id === pendingRid; });
-    if (pc && pc.apv_decision === "OK" && pc.apv_draft_atoms) {
+    if (pc && pc.apv_draft_atoms) {
       var total = 0;
       for (var i = 0; i < DIMENSIONS.length; i++) total += (pc.apv_draft_atoms[DIMENSIONS[i]] || []).length;
       if (total > 0) { setTags(pc.apv_draft_atoms); return; }
