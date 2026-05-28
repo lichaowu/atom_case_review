@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.14.7-img-merge";
+const PLUGIN_VERSION = "atom-mvp v0.14.8-scope-fix";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1342,7 +1342,9 @@ async function loadAtomCorpus() {
 
   // Per-(scope,recordId) cache so React re-mounts don't pile up duplicate calls.
   // Cache holds the Promise itself (in-flight or settled), reused for the lifetime of corpus.
-  var _resolveCache = new Map();
+  // Hoisted to window so ImagesPane (module-scope) can invalidate it
+  window._atomResolveCache = window._atomResolveCache || new Map();
+  var _resolveCache = window._atomResolveCache;
   function _cacheKey(scope, recordId) { return (scope || "case") + ":" + (recordId || ""); }
 
   function resolveAttachmentUrls(scope, recordId, images, opts) {
@@ -1886,7 +1888,7 @@ function ImagesPane(props) {
     }, 18000);
     // Invalidate cache for this record before resolving (ensures fresh SDK calls)
     var cacheKey = (scope || "case") + ":" + (recordId || "");
-    if (_resolveCache && _resolveCache.has(cacheKey)) _resolveCache.delete(cacheKey);
+    if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
 
     var attemptResolve = function (attempt) {
       resolve(scope || "case", recordId, images).then(function (urls) {
@@ -1906,7 +1908,7 @@ function ImagesPane(props) {
         if (filledCount === 0 && attempt === 1 && images.length > 0) {
           console.warn("[AtomConsole] ImagesPane: 0 urls on attempt 1, retrying in 3s…");
           // Clear cache so retry goes through SDK again
-          if (_resolveCache && _resolveCache.has(cacheKey)) _resolveCache.delete(cacheKey);
+          if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
           setTimeout(function () {
             if (cancelled) return;
             attemptResolve(2);
@@ -1921,7 +1923,7 @@ function ImagesPane(props) {
           // Retry once on error too
           setTimeout(function () {
             if (cancelled) return;
-            if (_resolveCache && _resolveCache.has(cacheKey)) _resolveCache.delete(cacheKey);
+            if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
             attemptResolve(2);
           }, 3000);
           return;
