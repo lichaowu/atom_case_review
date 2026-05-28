@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.15.3-verdict-fix";
+const PLUGIN_VERSION = "atom-mvp v0.16.0-multi-feature";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1047,12 +1047,18 @@ async function loadAtomCorpus() {
     return [];
   }
 
+  // Feature-detection: resolve primary ID field (SV="source_video_id", LIVE="object_id")
+  const ID_FIELD = pendingIdx.byName["source_video_id"] ? "source_video_id"
+                 : (pendingIdx.byName["object_id"] ? "object_id" : "source_video_id");
+  const HAS_USER_NICKNAME = !!(pendingIdx.byName["user_nickname"] || casesIdx.byName["user_nickname"]);
+  const HAS_USER_BIO = !!(pendingIdx.byName["user_bio"] || casesIdx.byName["user_bio"]);
+
   const cases = caseRecs.map(r => {
     const f = r.fields || {};
     return {
       record_id: r.recordId || r.record_id,
       case_id: get(f, casesIdx, "case_id"),
-      source_video_id: get(f, casesIdx, "source_video_id"),
+      source_video_id: get(f, casesIdx, ID_FIELD) || get(f, casesIdx, "source_video_id") || get(f, casesIdx, "object_id"),
       issue: get(f, casesIdx, "issue") || get(f, casesIdx, "policy_area"),
       policy_title: get(f, casesIdx, "policy_title"),
       decision: get(f, casesIdx, "decision"),
@@ -1061,6 +1067,8 @@ async function loadAtomCorpus() {
       ocr_text: get(f, casesIdx, "ocr_text"),
       caption_text: get(f, casesIdx, "caption_text"),
       rationale: get(f, casesIdx, "rationale"),
+      user_nickname: HAS_USER_NICKNAME ? get(f, casesIdx, "user_nickname") : null,
+      user_bio: HAS_USER_BIO ? get(f, casesIdx, "user_bio") : null,
       images: getImages(f, casesIdx),
       atoms: {
         C: ridsToKeys(getLnk(f, casesIdx, "content_atoms")),
@@ -1082,13 +1090,15 @@ async function loadAtomCorpus() {
     const f = r.fields || {};
     return {
       record_id: r.recordId || r.record_id,
-      source_video_id: get(f, pendingIdx, "source_video_id"),
+      source_video_id: get(f, pendingIdx, ID_FIELD) || get(f, pendingIdx, "source_video_id") || get(f, pendingIdx, "object_id"),
       issue: get(f, pendingIdx, "issue"),
       policy_title: get(f, pendingIdx, "policy_title"),
       visual_summary: get(f, pendingIdx, "visual_summary"),
       asr_text: get(f, pendingIdx, "asr_text"),
       ocr_text: get(f, pendingIdx, "ocr_text"),
       caption_text: get(f, pendingIdx, "caption_text"),
+      user_nickname: HAS_USER_NICKNAME ? get(f, pendingIdx, "user_nickname") : null,
+      user_bio: HAS_USER_BIO ? get(f, pendingIdx, "user_bio") : null,
       images: getImages(f, pendingIdx),
       pending_table_id: pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null,
       atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
@@ -1400,6 +1410,7 @@ async function loadAtomCorpus() {
     atoms, atomsByDim, claims, cases, pending,
     _tables: { casesTbl, pendingTbl },
     _fieldIdx: { casesIdx, pendingIdx, atomsIdx },
+    _featureFlags: { ID_FIELD, HAS_USER_NICKNAME, HAS_USER_BIO },
     _atomLookup: { atomByRid, atoms },
     image_meta: {
       case_field_id:    caseImgFieldId,
@@ -1452,8 +1463,11 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   }
 
   // Core text fields (rich-text in Bitable = array of segments)
+  // ID_FIELD: write to whichever field exists (source_video_id or object_id)
+  const _idField = idx.byName["source_video_id"] ? "source_video_id"
+                 : (idx.byName["object_id"] ? "object_id" : "source_video_id");
   setTextField("case_id", pendingCase.source_video_id || pendingCase.record_id);
-  setTextField("source_video_id", pendingCase.source_video_id);
+  setTextField(_idField, pendingCase.source_video_id);
   setTextField("issue", pendingCase.issue);
   setTextField("policy_title", opts.policyTitle || pendingCase.policy_title || "");
   setTextField("decision", opts.decision || "flag");
@@ -1464,6 +1478,9 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   setTextField("rationale", opts.rationale || "");
   setTextField("analyst", opts.analyst || "");
   setTextField("reference_weight", "confirmed");
+  // LIVE-specific fields (feature-detected, no-op if field absent)
+  if (pendingCase.user_nickname) setTextField("user_nickname", pendingCase.user_nickname);
+  if (pendingCase.user_bio) setTextField("user_bio", pendingCase.user_bio);
   if (opts.overrideTag) {
     setTextField("override_tag", opts.overrideTag);
   }
@@ -3931,8 +3948,10 @@ function AtomTagger(props) {
         )
       ),
       pendingCase && e("dl", { className: "case-meta" },
-        e("dt", null, "video_id"),       e("dd", null, pendingCase.source_video_id || "—"),
+        e("dt", null, "item_id"),        e("dd", null, pendingCase.source_video_id || "—"),
         e("dt", null, "issue / title"),  e("dd", null, (pendingCase.issue || "—") + " · " + (pendingCase.policy_title || "—")),
+        pendingCase.user_nickname && e("dt", null, "user"),
+        pendingCase.user_nickname && e("dd", null, pendingCase.user_nickname + (pendingCase.user_bio ? " — " + pendingCase.user_bio.slice(0, 80) : "")),
         pendingCase.images && pendingCase.images.length > 0 && e("dt", null, "images"),
         pendingCase.images && pendingCase.images.length > 0 && e("dd", null,
           e(ImagesPane, {
