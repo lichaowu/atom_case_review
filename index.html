@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.15.1-img-zoom";
+const PLUGIN_VERSION = "atom-mvp v0.15.2-policy-title";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -460,6 +460,7 @@ const DIM_NAMES = {
         specificity: specificity(c),
         evidence: evidenceFor(c, caseAtoms),
         routing: c.routing || { non_realistic_routes_to: null, cross_title_redirect: null },
+        policy_titles: c.policy_titles || [],
       };
       if (lift.suppress) {
         suppressed.push(Object.assign({}, entry, { suppress_reason: lift.reason }));
@@ -1558,15 +1559,26 @@ function VerdictPane(props) {
       e("summary", null, "Gate hits (top 5 by severity)"),
       e("div", null,
         ...[top].concat(rest).map(function (h) {
+          var finalOutcome = h.outcome_after_lifts;
+          var showPolicy = finalOutcome !== "APPROVE" && h.policy_titles && h.policy_titles.length > 0;
           return e("div", { key: h.claim_id, className: "hit-row" },
             e("span", { className: "hit-id" }, h.claim_id),
             e("div", { className: "hit-evidence" },
               ...evidencePills(h.evidence),
-              h.lift && e("span", { className: "lift-pill", style: { marginLeft: 4 }}, "lift:" + h.lift)
+              h.lift && e("span", { className: "lift-pill", style: { marginLeft: 4 }}, "lift:" + h.lift),
+              showPolicy && e("span", {
+                className: "policy-title-pill",
+                title: h.policy_titles.join(" / "),
+                style: { marginLeft: 6, padding: "2px 6px", fontSize: 10,
+                         background: "var(--accent-soft, #fef3c7)",
+                         color: "var(--accent-strong, #92400e)",
+                         border: "1px solid var(--accent-line, #fcd34d)",
+                         borderRadius: 3, fontFamily: "inherit", fontWeight: 500 }
+              }, "\ud83d\udcd6 " + (h.policy_titles.length === 1 ? h.policy_titles[0] : h.policy_titles[0] + " +" + (h.policy_titles.length - 1)))
             ),
             e("span", { className: "outcome-tag" },
               h.outcome_after_lifts !== h.outcome_base
-                ? h.outcome_base + " → " + h.outcome_after_lifts
+                ? h.outcome_base + " \u2192 " + h.outcome_after_lifts
                 : h.outcome_after_lifts)
           );
         })
@@ -1577,11 +1589,21 @@ function VerdictPane(props) {
       e("summary", null, "Suppressed (" + suppressed.length + ") — gate-hit but blocked by modifier rules"),
       e("div", null,
         ...suppressed.slice(0, 10).map(function (s) {
+          var suppShowPolicy = s.outcome_base !== "APPROVE" && s.policy_titles && s.policy_titles.length > 0;
           return e("div", { key: s.claim_id, className: "suppressed-row" },
             e("span", { className: "hit-id" }, s.claim_id),
-            " · would have been ",
+            " \u00b7 would have been ",
             e("span", { className: "outcome-tag" }, s.outcome_base),
-            " · suppressed: ", s.suppress_reason
+            suppShowPolicy && e("span", {
+              className: "policy-title-pill",
+              title: s.policy_titles.join(" / "),
+              style: { marginLeft: 6, padding: "2px 6px", fontSize: 10,
+                       background: "var(--accent-soft, #fef3c7)",
+                       color: "var(--accent-strong, #92400e)",
+                       border: "1px solid var(--accent-line, #fcd34d)",
+                       borderRadius: 3, fontWeight: 500 }
+            }, "\ud83d\udcd6 " + (s.policy_titles.length === 1 ? s.policy_titles[0] : s.policy_titles[0] + " +" + (s.policy_titles.length - 1))),
+            " \u00b7 suppressed: ", s.suppress_reason
           );
         }),
         suppressed.length > 10 && e("div", { className: "muted", style: { fontSize: 11, marginTop: 4 }},
@@ -2690,12 +2712,14 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
       outcome_base:        h.outcome_base,
       outcome_after_lifts: h.outcome_after_lifts,
       lift:                h.lift || null,
-      evidence:            h.evidence || {}
+      evidence:            h.evidence || {},
+      policy_titles:       h.policy_titles || []
     })),
     suppressed: (engineResult.suppressed || []).map(s => ({
       claim_id:        s.claim_id,
       outcome_base:    s.outcome_base,
-      suppress_reason: s.suppress_reason
+      suppress_reason: s.suppress_reason,
+      policy_titles:   s.policy_titles || []
     }))
   } : null;
 
