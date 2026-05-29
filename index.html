@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.0-multi-feature";
+const PLUGIN_VERSION = "atom-mvp v0.16.1-multi-feature";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1445,6 +1445,15 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
 
   // Build fields object using field IDs from the index
   function fid(name) { return idx.byName[name] || null; }
+  function ftype(name) {
+    const id = fid(name);
+    return (id && idx.types) ? idx.types[id] : null;
+  }
+
+  // Bitable field type constants
+  //   1=Text, 2=Number, 3=SingleSelect, 4=MultiSelect, 5=DateTime,
+  //   11=User/Person, 15=Url, 17=Attachment, 18=SingleLink, 21=DuplexLink
+  const FT_TEXT = 1, FT_SELECT = 3, FT_MULTI = 4, FT_USER = 11, FT_URL = 15;
 
   const fields = {};
   function setField(name, val) {
@@ -1461,23 +1470,51 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
       fields[id] = { recordIds: rids, tableId: corpus.image_meta.case_table_id || "" };
     }
   }
+  // Type-aware writer: dispatch on the actual Bitable field type.
+  // Falls back to rich-text segments for Text and unknown types (legacy shape).
+  function setSmartField(name, val) {
+    const id = fid(name);
+    if (!id || val === undefined || val === null || val === "") return;
+    const t = (idx.types && idx.types[id]) || null;
+    if (t === FT_USER) {
+      // Person/Member field: expects [{id: open_id, type: "user"}]
+      const arr = Array.isArray(val) ? val : [val];
+      fields[id] = arr.filter(Boolean).map(function(v) {
+        if (typeof v === "object" && v.id) return v;
+        return { id: String(v), type: "user" };
+      });
+    } else if (t === FT_SELECT) {
+      // SingleSelect: option NAME as plain string
+      fields[id] = String(val);
+    } else if (t === FT_MULTI) {
+      // MultiSelect: array of option NAMEs
+      fields[id] = Array.isArray(val) ? val.map(String) : [String(val)];
+    } else if (t === FT_URL) {
+      // Url: {link, text}
+      fields[id] = { link: String(val), text: String(val) };
+    } else {
+      // Text / RichText / unknown — legacy shape
+      fields[id] = [{ type: "text", text: String(val) }];
+    }
+  }
 
-  // Core text fields (rich-text in Bitable = array of segments)
+  // Core fields — type-aware where Bitable cares (User/Select/Url),
+  // legacy rich-text elsewhere.
   // ID_FIELD: write to whichever field exists (source_video_id or object_id)
   const _idField = idx.byName["source_video_id"] ? "source_video_id"
                  : (idx.byName["object_id"] ? "object_id" : "source_video_id");
   setTextField("case_id", pendingCase.source_video_id || pendingCase.record_id);
   setTextField(_idField, pendingCase.source_video_id);
-  setTextField("issue", pendingCase.issue);
-  setTextField("policy_title", opts.policyTitle || pendingCase.policy_title || "");
-  setTextField("decision", opts.decision || "flag");
+  setSmartField("issue", pendingCase.issue);
+  setSmartField("policy_title", opts.policyTitle || pendingCase.policy_title || "");
+  setSmartField("decision", opts.decision || "flag");
   setTextField("visual_summary", pendingCase.visual_summary);
   setTextField("asr_text", pendingCase.asr_text);
   setTextField("ocr_text", pendingCase.ocr_text);
   setTextField("caption_text", pendingCase.caption_text);
   setTextField("rationale", opts.rationale || "");
-  setTextField("analyst", opts.analyst || "");
-  setTextField("reference_weight", "confirmed");
+  setSmartField("analyst", opts.analyst || "");
+  setSmartField("reference_weight", "confirmed");
   // LIVE-specific fields (feature-detected, no-op if field absent)
   if (pendingCase.user_nickname) setTextField("user_nickname", pendingCase.user_nickname);
   if (pendingCase.user_bio) setTextField("user_bio", pendingCase.user_bio);
