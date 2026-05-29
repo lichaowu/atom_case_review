@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.1-multi-feature";
+const PLUGIN_VERSION = "atom-mvp v0.16.2-multi-feature";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -894,16 +894,25 @@ async function loadAllRecords(table) {
 async function buildFieldIndex(table) {
   try {
     const metas = await table.getFieldMetaList();
-    const byName = {}, byId = {}, types = {};
+    const byName = {}, byId = {}, types = {}, linkTableIds = {};
     for (const m of metas) {
       const id = m.id || m.field_id;
       const nm = m.name || m.field_name;
-      if (id && nm) { byName[nm] = id; byId[id] = nm; types[id] = m.type; }
+      if (id && nm) {
+        byName[nm] = id;
+        byId[id] = nm;
+        types[id] = m.type;
+        // Capture linked table ID for SingleLink (18) and DuplexLink (21).
+        // SDK exposes it on m.property.tableId.
+        if ((m.type === 18 || m.type === 21) && m.property && m.property.tableId) {
+          linkTableIds[id] = m.property.tableId;
+        }
+      }
     }
-    return { byName, byId, types };
+    return { byName, byId, types, linkTableIds };
   } catch (e) {
     console.warn("[AtomConsole] getFieldMetaList failed:", e);
-    return { byName: {}, byId: {}, types: {} };
+    return { byName: {}, byId: {}, types: {}, linkTableIds: {} };
   }
 }
 function readCell(fieldsObj, fieldIndex, name) {
@@ -1503,18 +1512,35 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   // ID_FIELD: write to whichever field exists (source_video_id or object_id)
   const _idField = idx.byName["source_video_id"] ? "source_video_id"
                  : (idx.byName["object_id"] ? "object_id" : "source_video_id");
+  // Normalize decision: incoming state is lowercase ("flag","pass"); Bitable
+  // option names are uppercase ("FLAG","PASS"). Map known synonyms -> FLAG/PASS.
+  function _normDecision(d) {
+    if (!d) return "FLAG";
+    var s = String(d).trim().toUpperCase();
+    if (s === "NOT_RECOMMEND" || s === "NOT_FOR_FEED" || s === "ESCALATE") return "FLAG";
+    return s;
+  }
+  // issue / policy_title can arrive as a comma- or space-joined string from
+  // cellText() on a MultiSelect cell. Split into array of option names.
+  function _splitMulti(v) {
+    if (v == null || v === "") return [];
+    if (Array.isArray(v)) return v.map(String).map(function(s){return s.trim();}).filter(Boolean);
+    return String(v).split(/[,;]\s*|\s{2,}/).map(function(s){return s.trim();}).filter(Boolean);
+  }
+
   setTextField("case_id", pendingCase.source_video_id || pendingCase.record_id);
   setTextField(_idField, pendingCase.source_video_id);
-  setSmartField("issue", pendingCase.issue);
-  setSmartField("policy_title", opts.policyTitle || pendingCase.policy_title || "");
-  setSmartField("decision", opts.decision || "flag");
+  setSmartField("issue", _splitMulti(pendingCase.issue));
+  setSmartField("policy_title", _splitMulti(opts.policyTitle || pendingCase.policy_title || ""));
+  setSmartField("decision", _normDecision(opts.decision));
+  setSmartField("status", "Reviewed");
   setTextField("visual_summary", pendingCase.visual_summary);
   setTextField("asr_text", pendingCase.asr_text);
   setTextField("ocr_text", pendingCase.ocr_text);
   setTextField("caption_text", pendingCase.caption_text);
   setTextField("rationale", opts.rationale || "");
   setSmartField("analyst", opts.analyst || "");
-  setSmartField("reference_weight", "confirmed");
+  setSmartField("reference_weight", "Golden case");
   // LIVE-specific fields (feature-detected, no-op if field absent)
   if (pendingCase.user_nickname) setTextField("user_nickname", pendingCase.user_nickname);
   if (pendingCase.user_bio) setTextField("user_bio", pendingCase.user_bio);
@@ -1532,10 +1558,11 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
       if (imgFieldId) break;
     }
     if (imgFieldId) {
-      // Write attachment tokens back — Bitable accepts [{file_token, name, type, size}]
+      // Block SDK addRecord attachment shape: [{token, name, type, size}]
+      // (REST API uses "file_token"; Block SDK uses "token" — different layer.)
       fields[imgFieldId] = pendingCase.images.map(function(img) {
-        return { file_token: img.token, name: img.name || "", type: img.type || "", size: img.size || 0 };
-      }).filter(function(a) { return a.file_token; });
+        return { token: img.token, name: img.name || "", type: img.type || "", size: img.size || 0 };
+      }).filter(function(a) { return a.token; });
     }
   }
 
@@ -1545,12 +1572,15 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     R: "realism_atoms", E: "explicitness_atoms", M: "modifier_atoms",
     X: "exception_atoms"
   };
+  // DuplexLink/SingleLink Block SDK shape:
+  //   { recordIds: [...], tableId: "<linked_table_id>" }
+  // tableId is captured per-field in buildFieldIndex (idx.linkTableIds).
   for (const [dim, fieldName] of Object.entries(dimFieldMap)) {
     const rids = keysToRids(tags[dim] || []);
-    if (rids.length && fid(fieldName)) {
-      // Link field format for Bitable Block SDK addRecord:
-      // Array of { recordId: "xxx" } objects
-      fields[fid(fieldName)] = rids.map(rid => ({ recordId: rid }));
+    const fId = fid(fieldName);
+    if (rids.length && fId) {
+      const linkedTableId = (idx.linkTableIds && idx.linkTableIds[fId]) || "";
+      fields[fId] = { recordIds: rids, tableId: linkedTableId };
     }
   }
 
