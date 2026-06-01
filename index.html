@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.4-diag";
+const PLUGIN_VERSION = "atom-mvp v0.16.5-diag";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1635,17 +1635,38 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   try {
     const newRecId = (typeof result === "string") ? result
                    : (result && (result.recordId || result.record_id || result.id)) || null;
-    if (newRecId && tbl.getRecordById) {
-      const fresh = await tbl.getRecordById(newRecId);
-      const fr = (fresh && fresh.fields) || fresh || {};
-      const peek = {};
-      const peekNames = ["policy_title","decision","status","reference_weight","images","issue"];
+    if (newRecId) {
+      // Dump the raw object so we can see its actual nesting shape.
+      if (tbl.getRecordById) {
+        try {
+          const fresh = await tbl.getRecordById(newRecId);
+          console.log("[AtomConsole.save] readback RAW getRecordById(" + newRecId + "):", fresh);
+          try {
+            console.log("[AtomConsole.save] readback RAW (JSON):",
+              JSON.stringify(fresh, function(k,v){ return (v instanceof Function) ? "[fn]" : v; }, 2));
+          } catch(_) {}
+        } catch (e1) {
+          console.warn("[AtomConsole.save] getRecordById threw:", e1);
+        }
+      }
+      // Alternate path: getCellValue per field. Known-good Block SDK API.
+      const peekNames = ["policy_title","decision","status","reference_weight","images","issue","case_id","source_video_id"];
+      const peek2 = {};
       for (const nm of peekNames) {
         const _id = fid(nm);
-        peek[nm] = _id ? fr[_id] : "(no field id)";
+        if (!_id) { peek2[nm] = "(no field id)"; continue; }
+        try {
+          if (tbl.getCellValue) {
+            peek2[nm] = await tbl.getCellValue(_id, newRecId);
+          } else {
+            peek2[nm] = "(no getCellValue)";
+          }
+        } catch (e2) {
+          peek2[nm] = "(err: " + (e2 && e2.message || e2) + ")";
+        }
       }
-      console.log("[AtomConsole.save] readback newRecordId=" + newRecId + " peek:", peek);
-      try { window.__lastSaveReadback = { newRecordId: newRecId, peek: peek, fullFields: fr }; } catch(_) {}
+      console.log("[AtomConsole.save] readback via getCellValue newRecordId=" + newRecId + ":", peek2);
+      try { window.__lastSaveReadback = { newRecordId: newRecId, peek2: peek2 }; } catch(_) {}
     } else {
       console.warn("[AtomConsole.save] no newRecId resolved from addRecord result; cannot readback");
     }
