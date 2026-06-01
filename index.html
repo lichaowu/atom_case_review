@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.2-multi-feature";
+const PLUGIN_VERSION = "atom-mvp v0.16.3-diag";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1512,6 +1512,30 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   // ID_FIELD: write to whichever field exists (source_video_id or object_id)
   const _idField = idx.byName["source_video_id"] ? "source_video_id"
                  : (idx.byName["object_id"] ? "object_id" : "source_video_id");
+  // === v0.16.3 diagnostic trace (remove once green) ===
+  const __saveTrace = [];
+  const __origSetSmart = typeof setSmartField === "function" ? setSmartField : null;
+  const __origSetText  = typeof setTextField  === "function" ? setTextField  : null;
+  function __traceWrap(kind, origFn, name, value) {
+    const fId = (typeof fid === "function") ? fid(name) : null;
+    const fType = (idx && idx.types && fId) ? idx.types[fId] : null;
+    let result, error = null;
+    try { result = origFn(name, value); }
+    catch (e) { error = String(e && e.message || e); }
+    __saveTrace.push({
+      kind, name, fieldId: fId, fieldType: fType,
+      rawValue: value,
+      normalizedValueSeen: (typeof value === "object" ? JSON.stringify(value) : String(value)),
+      error
+    });
+    return result;
+  }
+  // eslint-disable-next-line no-func-assign
+  setSmartField = function(name, value) { return __traceWrap("smart", __origSetSmart, name, value); };
+  // eslint-disable-next-line no-func-assign
+  setTextField  = function(name, value) { return __traceWrap("text",  __origSetText,  name, value); };
+  console.log("[AtomConsole.save] v0.16.3-diag trace armed for", pendingCase && (pendingCase.source_video_id || pendingCase.record_id));
+
   // Normalize decision: incoming state is lowercase ("flag","pass"); Bitable
   // option names are uppercase ("FLAG","PASS"). Map known synonyms -> FLAG/PASS.
   function _normDecision(d) {
@@ -1585,7 +1609,12 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   }
 
   // Create record via SDK
-  const result = await tbl.addRecord({ fields });
+  const result = console.log("[AtomConsole.save] fields payload BEFORE addRecord:", JSON.parse(JSON.stringify(fields)));
+      console.log("[AtomConsole.save] trace:", __saveTrace);
+      console.log("[AtomConsole.save] field index types:", idx && idx.types);
+      console.log("[AtomConsole.save] link table ids:", idx && idx.linkTableIds);
+      try { window.__lastSavePayload = { fields: JSON.parse(JSON.stringify(fields)), trace: __saveTrace }; } catch(_) {}
+      await tbl.addRecord({ fields });
 
   // Mark pending case as "Reviewed"
   if (opts._pendingRecordId && corpus._tables && corpus._tables.pendingTbl) {
