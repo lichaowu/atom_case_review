@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.5-diag";
+const PLUGIN_VERSION = "atom-mvp v0.16.6";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1516,16 +1516,53 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   const __saveTrace = [];
   const __origSetSmart = typeof setSmartField === "function" ? setSmartField : null;
   const __origSetText  = typeof setTextField  === "function" ? setTextField  : null;
+  function __normalizeForType(fType, value) {
+    // Block SDK addRecord per-type shape adapters.
+    // SingleSelect (3): {text: "Name"}; accepts string -> wrap.
+    if (fType === 3) {
+      if (value == null || value === "") return null;
+      if (typeof value === "string") return { text: value };
+      if (typeof value === "object" && (value.text != null || value.id != null)) return value;
+      return { text: String(value) };
+    }
+    // MultiSelect (4): [{text:"A"},{text:"B"}].
+    if (fType === 4) {
+      if (!value) return [];
+      const arr = Array.isArray(value) ? value : [value];
+      return arr.map(function(v){
+        if (v == null || v === "") return null;
+        if (typeof v === "string") return { text: v };
+        if (typeof v === "object" && (v.text != null || v.id != null)) return v;
+        return { text: String(v) };
+      }).filter(Boolean);
+    }
+    // User (11): [{id:"..."}]
+    if (fType === 11) {
+      if (!value) return [];
+      const arr = Array.isArray(value) ? value : [value];
+      return arr.map(function(v){
+        if (v == null || v === "") return null;
+        if (typeof v === "string") return { id: v };
+        if (typeof v === "object" && (v.id != null || v.user_id != null || v.open_id != null)) {
+          return { id: v.id || v.user_id || v.open_id };
+        }
+        return { id: String(v) };
+      }).filter(Boolean);
+    }
+    // Everything else (text, attachment, link, datetime, etc.): passthrough.
+    return value;
+  }
   function __traceWrap(kind, origFn, name, value) {
     const fId = (typeof fid === "function") ? fid(name) : null;
     const fType = (idx && idx.types && fId) ? idx.types[fId] : null;
+    const normalized = (kind === "smart" && fType != null) ? __normalizeForType(fType, value) : value;
     let result, error = null;
-    try { result = origFn(name, value); }
+    try { result = origFn(name, normalized); }
     catch (e) { error = String(e && e.message || e); }
     __saveTrace.push({
       kind, name, fieldId: fId, fieldType: fType,
       rawValue: value,
-      normalizedValueSeen: (typeof value === "object" ? JSON.stringify(value) : String(value)),
+      normalizedValueSeen: (typeof normalized === "object" ? JSON.stringify(normalized) : String(normalized)),
       error
     });
     return result;
