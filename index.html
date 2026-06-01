@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.8";
+const PLUGIN_VERSION = "atom-mvp v0.16.9-probe";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1718,30 +1718,77 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   const result = await tbl.addRecord({ fields });
   console.log("[AtomConsole.save] addRecord returned:", result);
 
-  // v0.16.8: post-create attachment write via per-field setValue.
+  // v0.16.9 PROBE: try multiple shapes and write paths, log readback after each.
   if (__pendingAttachments && __pendingAttachments.length) {
     const newRecId = (typeof result === "string") ? result
                    : (result && (result.recordId || result.record_id || result.id)) || null;
     if (newRecId) {
       const _imgFieldId = fid("images");
+
+      // Bridge probe: what methods exist?
       try {
-        const _imgField = tbl.getField ? await tbl.getField(_imgFieldId) : null;
-        if (_imgField && typeof _imgField.setValue === "function") {
-          const sv = await _imgField.setValue(newRecId, __pendingAttachments);
-          console.log("[AtomConsole.save] attachment field.setValue returned:", sv);
-        } else if (tbl.setCellValue) {
-          // Fallback: table.setCellValue(fieldId, recordId, value)
-          const sc = await tbl.setCellValue(_imgFieldId, newRecId, __pendingAttachments);
-          console.log("[AtomConsole.save] attachment setCellValue returned:", sc);
-        } else if (tbl.setRecord) {
-          // Last resort: setRecord with just the attachment field.
-          const sr = await tbl.setRecord(newRecId, { fields: { [_imgFieldId]: __pendingAttachments } });
-          console.log("[AtomConsole.save] attachment setRecord returned:", sr);
-        } else {
-          console.warn("[AtomConsole.save] no attachment write path available on this SDK");
+        const bridgeKeys = (window.bitable && window.bitable.bridge)
+          ? Object.keys(window.bitable.bridge) : [];
+        const tableMethods = ["getField","setCellValue","setRecord","setRecords"]
+          .filter(function(k){ return typeof tbl[k] === "function"; });
+        console.log("[AtomConsole.attach] bridge methods:", bridgeKeys);
+        console.log("[AtomConsole.attach] table methods available:", tableMethods);
+      } catch (e) { console.warn("probe meta failed:", e); }
+
+      // Build candidate shapes from the same source items.
+      const src0 = __pendingAttachments;
+      const _shape = function(name, fn) { return { name: name, payload: src0.map(fn) }; };
+      const shapes = [
+        _shape("S1.token", function(a){ return { token: a.token, name: a.name||"", type: a.type||"image/jpeg", size: a.size||0 }; }),
+        _shape("S2.file_token", function(a){ return { file_token: a.token, name: a.name||"", type: a.type||"image/jpeg", size: a.size||0 }; }),
+        _shape("S3.token+url", function(a){ return { token: a.token, name: a.name||"", type: a.type||"image/jpeg", size: a.size||0, url: a.url||"", tmp_url: a.url||"" }; }),
+        _shape("S4.minimal", function(a){ return { token: a.token, name: a.name||"img.jpg", type: "image/jpeg", size: a.size||0 }; }),
+      ];
+
+      // For each shape, try paths P1 -> P3 until one works. After each
+      // attempt, read back the cell and stop if non-null.
+      let _landed = false;
+      let _attemptLog = [];
+      for (let si = 0; si < shapes.length && !_landed; si++) {
+        const sh = shapes[si];
+        const paths = [];
+        paths.push({ name: "P1.field.setValue", fn: async function() {
+          const f = tbl.getField ? await tbl.getField(_imgFieldId) : null;
+          if (!f || typeof f.setValue !== "function") throw new Error("no field.setValue");
+          return await f.setValue(newRecId, sh.payload);
+        }});
+        paths.push({ name: "P2.setCellValue", fn: async function() {
+          if (typeof tbl.setCellValue !== "function") throw new Error("no setCellValue");
+          return await tbl.setCellValue(_imgFieldId, newRecId, sh.payload);
+        }});
+        paths.push({ name: "P3.setRecord", fn: async function() {
+          if (typeof tbl.setRecord !== "function") throw new Error("no setRecord");
+          return await tbl.setRecord(newRecId, { fields: { [_imgFieldId]: sh.payload } });
+        }});
+
+        for (let pi = 0; pi < paths.length && !_landed; pi++) {
+          const p = paths[pi];
+          let rv, err = null;
+          try { rv = await p.fn(); } catch (e) { err = String(e && e.message || e); }
+          // Read back the cell.
+          let after = null, afterErr = null;
+          try {
+            if (tbl.getCellValue) after = await tbl.getCellValue(_imgFieldId, newRecId);
+          } catch (e) { afterErr = String(e && e.message || e); }
+          const landed = after != null && (Array.isArray(after) ? after.length > 0 : true);
+          _attemptLog.push({ shape: sh.name, path: p.name, returned: rv, error: err,
+            after: after, afterErr: afterErr, landed: landed });
+          console.log("[AtomConsole.attach] " + sh.name + " + " + p.name +
+                      " -> returned:", rv, " err:", err, " after:", after, " landed:", landed);
+          if (landed) _landed = true;
         }
-      } catch (e) {
-        console.warn("[AtomConsole.save] attachment write failed:", e);
+      }
+      console.log("[AtomConsole.attach] summary landed=" + _landed + " attempts=" + _attemptLog.length);
+      try { window.__lastAttachAttempts = _attemptLog; } catch(_) {}
+      if (!_landed) {
+        console.warn("[AtomConsole.attach] NO shape/path combination landed. " +
+                     "Tokens may be REST-only and require bridge upload. " +
+                     "Inspect window.__lastAttachAttempts for full trace.");
       }
     } else {
       console.warn("[AtomConsole.save] no newRecId, cannot write attachments");
