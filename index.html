@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.10";
+const PLUGIN_VERSION = "atom-mvp v0.16.13";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1545,70 +1545,6 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   // ID_FIELD: write to whichever field exists (source_video_id or object_id)
   const _idField = idx.byName["source_video_id"] ? "source_video_id"
                  : (idx.byName["object_id"] ? "object_id" : "source_video_id");
-  // === v0.16.3 diagnostic trace (remove once green) ===
-  const __saveTrace = [];
-  const __origSetSmart = typeof setSmartField === "function" ? setSmartField : null;
-  const __origSetText  = typeof setTextField  === "function" ? setTextField  : null;
-  function __normalizeForType(fType, value) {
-    // Block SDK addRecord per-type shape adapters.
-    // SingleSelect (3): {text: "Name"}; accepts string -> wrap.
-    if (fType === 3) {
-      if (value == null || value === "") return null;
-      if (typeof value === "string") return { text: value };
-      if (typeof value === "object" && (value.text != null || value.id != null)) return value;
-      return { text: String(value) };
-    }
-    // MultiSelect (4): [{text:"A"},{text:"B"}].
-    if (fType === 4) {
-      if (!value) return [];
-      const arr = Array.isArray(value) ? value : [value];
-      return arr.map(function(v){
-        if (v == null || v === "") return null;
-        if (typeof v === "string") return { text: v };
-        if (typeof v === "object" && (v.text != null || v.id != null)) return v;
-        return { text: String(v) };
-      }).filter(Boolean);
-    }
-    // User (11): [{id:"..."}]
-    if (fType === 11) {
-      if (!value) return [];
-      const arr = Array.isArray(value) ? value : [value];
-      return arr.map(function(v){
-        if (v == null || v === "") return null;
-        if (typeof v === "string") return { id: v };
-        if (typeof v === "object" && (v.id != null || v.user_id != null || v.open_id != null)) {
-          return { id: v.id || v.user_id || v.open_id };
-        }
-        return { id: String(v) };
-      }).filter(Boolean);
-    }
-    // Everything else (text, attachment, link, datetime, etc.): passthrough.
-    return value;
-  }
-  function __traceWrap(kind, origFn, name, value) {
-    // v0.16.7: stop double-wrapping. setSmartField now handles shape via
-    // option-id resolution. Trace records the raw value going in and the
-    // resulting fields[id] going out (post-write).
-    const fId = (typeof fid === "function") ? fid(name) : null;
-    const fType = (idx && idx.types && fId) ? idx.types[fId] : null;
-    let result, error = null;
-    try { result = origFn(name, value); }
-    catch (e) { error = String(e && e.message || e); }
-    const written = fId ? fields[fId] : undefined;
-    __saveTrace.push({
-      kind, name, fieldId: fId, fieldType: fType,
-      rawValue: value,
-      writtenShape: (typeof written === "object" ? JSON.stringify(written) : String(written)),
-      error
-    });
-    return result;
-  }
-  // eslint-disable-next-line no-func-assign
-  setSmartField = function(name, value) { return __traceWrap("smart", __origSetSmart, name, value); };
-  // eslint-disable-next-line no-func-assign
-  setTextField  = function(name, value) { return __traceWrap("text",  __origSetText,  name, value); };
-  console.log("[AtomConsole.save] v0.16.3-diag trace armed for", pendingCase && (pendingCase.source_video_id || pendingCase.record_id));
-
   // Normalize decision: incoming state is lowercase ("flag","pass"); Bitable
   // option names are uppercase ("FLAG","PASS"). Map known synonyms -> FLAG/PASS.
   function _normDecision(d) {
@@ -1637,7 +1573,6 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   setTextField("caption_text", pendingCase.caption_text);
   setTextField("rationale", opts.rationale || "");
   setSmartField("analyst", opts.analyst || "");
-  setSmartField("reference_weight", "Golden case");
   // LIVE-specific fields (feature-detected, no-op if field absent)
   if (pendingCase.user_nickname) setTextField("user_nickname", pendingCase.user_nickname);
   if (pendingCase.user_bio) setTextField("user_bio", pendingCase.user_bio);
@@ -1715,10 +1650,7 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
 
   // Create record via SDK
   console.log("[AtomConsole.save] fields payload BEFORE addRecord:", JSON.parse(JSON.stringify(fields)));
-  console.log("[AtomConsole.save] trace:", __saveTrace);
-  console.log("[AtomConsole.save] field index types:", idx && idx.types);
-  console.log("[AtomConsole.save] link table ids:", idx && idx.linkTableIds);
-  try { window.__lastSavePayload = { fields: JSON.parse(JSON.stringify(fields)), trace: __saveTrace }; } catch(_) {}
+  try { window.__lastSavePayload = { fields: JSON.parse(JSON.stringify(fields)) }; } catch(_) {}
 
   // Warn if policy_title is about to write empty — usually means APPROVE verdict
   // with no final_policy_title AND pending row had no preset title.
@@ -1735,50 +1667,6 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   const result = await tbl.addRecord({ fields });
   console.log("[AtomConsole.save] addRecord returned:", result);
 
-  // Read back the newly created record to confirm what actually landed.
-  // result on Block SDK is the new record id (string) or an object containing it.
-  try {
-    const newRecId = (typeof result === "string") ? result
-                   : (result && (result.recordId || result.record_id || result.id)) || null;
-    if (newRecId) {
-      // Dump the raw object so we can see its actual nesting shape.
-      if (tbl.getRecordById) {
-        try {
-          const fresh = await tbl.getRecordById(newRecId);
-          console.log("[AtomConsole.save] readback RAW getRecordById(" + newRecId + "):", fresh);
-          try {
-            console.log("[AtomConsole.save] readback RAW (JSON):",
-              JSON.stringify(fresh, function(k,v){ return (v instanceof Function) ? "[fn]" : v; }, 2));
-          } catch(_) {}
-        } catch (e1) {
-          console.warn("[AtomConsole.save] getRecordById threw:", e1);
-        }
-      }
-      // Alternate path: getCellValue per field. Known-good Block SDK API.
-      const peekNames = ["policy_title","decision","status","reference_weight","images","issue","case_id","source_video_id"];
-      const peek2 = {};
-      for (const nm of peekNames) {
-        const _id = fid(nm);
-        if (!_id) { peek2[nm] = "(no field id)"; continue; }
-        try {
-          if (tbl.getCellValue) {
-            peek2[nm] = await tbl.getCellValue(_id, newRecId);
-          } else {
-            peek2[nm] = "(no getCellValue)";
-          }
-        } catch (e2) {
-          peek2[nm] = "(err: " + (e2 && e2.message || e2) + ")";
-        }
-      }
-      console.log("[AtomConsole.save] readback via getCellValue newRecordId=" + newRecId + ":", peek2);
-      try { window.__lastSaveReadback = { newRecordId: newRecId, peek2: peek2 }; } catch(_) {}
-    } else {
-      console.warn("[AtomConsole.save] no newRecId resolved from addRecord result; cannot readback");
-    }
-  } catch (e) {
-    console.warn("[AtomConsole.save] readback failed:", e);
-  }
-
   // Mark pending case as "Reviewed"
   if (opts._pendingRecordId && corpus._tables && corpus._tables.pendingTbl) {
     try {
@@ -1787,22 +1675,26 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
       if (pidx && pidx.byName) {
         const statusFieldId = pidx.byName["status"] || pidx.byName["Status"] || null;
         if (statusFieldId) {
-          // SDK SingleSelect setRecord accepts the bare option text. Log result.
+          // v0.16.13: Block SDK SingleSelect silently accepts a bare string
+          // as "no match → clear cell" — same trap we hit on the precedent
+          // side. Resolve the option id from pidx.selectOptions and write
+          // the canonical {id, text} shape.
+          const _opts = (pidx.selectOptions && pidx.selectOptions[statusFieldId]) || null;
+          const _optId = _opts && (_opts.byName["Reviewed"] || _opts.byName["reviewed"]);
+          let _payload;
+          if (_optId) {
+            _payload = { id: _optId, text: "Reviewed" };
+          } else {
+            console.warn("[AtomConsole.save] pending status: 'Reviewed' option not indexed; falling back to {text}",
+              _opts ? Object.keys(_opts.byName) : "(no selectOptions)");
+            _payload = { text: "Reviewed" };
+          }
           try {
-            const pr = await ptbl.setRecord(opts._pendingRecordId, {
-              fields: { [statusFieldId]: "Reviewed" }
+            await ptbl.setRecord(opts._pendingRecordId, {
+              fields: { [statusFieldId]: _payload }
             });
-            console.log("[AtomConsole.save] pending status setRecord returned:", pr);
           } catch (e1) {
-            console.warn("[AtomConsole.save] pending status setRecord(string) failed, retrying with {text}:", e1);
-            try {
-              const pr2 = await ptbl.setRecord(opts._pendingRecordId, {
-                fields: { [statusFieldId]: { text: "Reviewed" } }
-              });
-              console.log("[AtomConsole.save] pending status setRecord({text}) returned:", pr2);
-            } catch (e2) {
-              console.warn("[AtomConsole.save] pending status setRecord({text}) also failed:", e2);
-            }
+            console.warn("[AtomConsole.save] pending status setRecord failed:", e1);
           }
         } else {
           console.warn("[AtomConsole.save] pending table has no status field — skipped");
