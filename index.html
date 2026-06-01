@@ -3956,12 +3956,15 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
 
   const hasAtoms = Object.values(tags).some(arr => arr && arr.length > 0);
 
-  // Discrepancy detection: compare user decision vs engine/skill expected outcome
+  // Escalation flag — user can manually escalate even when everything agrees
+  const [escalate, setEscalate] = React.useState(false);
+
+  // Discrepancy detection — classifies into 3 distinct override types:
+  //   model_vs_human: skill verdict != engine verdict (atom edits changed outcome)
+  //   rule_gap: engine verdict matches but user manually overrode decision/policy
+  //   escalate: everything agrees, user flagged for discussion
   const discrepancy = React.useMemo(() => {
-    // Derive what the engine would say
-    // v0.16.14: decision is binary (flag/pass). Severity (NR / NFF /
-    // Escalate) lives on policy_title, not decision. Collapse engine and
-    // skill verdicts to flag/pass before comparing.
+    // Live engine evaluation
     var engineDecision = null;
     try {
       if (window.AtomEngine && corpus.claims) {
@@ -3971,35 +3974,63 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         }
       }
     } catch(e) { /* engine not available */ }
+    // 0 atoms = no claims fire = pass
+    if (!engineDecision && !Object.values(tags).some(a => a && a.length)) engineDecision = "pass";
 
-    // Also consider skill verdict if available, collapsed to flag/pass.
+    // Skill verdict (frozen at paste time)
     var skillDecision = null;
     if (verdictData && verdictData.verdict) {
       skillDecision = (verdictData.verdict === "APPROVE") ? "pass" : "flag";
     }
 
-    // Determine the "expected" decision (skill > engine)
-    var expected = skillDecision || engineDecision || null;
+    // Expected policy title from skill
+    var expectedTitle = (verdictData && verdictData.final_policy_title) || "";
 
-    // Check policy_title discrepancy (only relevant for flag decisions)
-    var expectedTitle = (decision === "flag") ? ((verdictData && verdictData.final_policy_title) || pendingCase.policy_title || "") : "";
+    // Classification
+    var type = null;
+    var details = [];
 
-    var overrides = [];
-    if (expected && decision !== expected) {
-      overrides.push("decision:" + expected + "\u2192" + decision);
+    // Type 1: model_vs_human — skill says X, engine says Y (user changed atoms)
+    if (skillDecision && engineDecision && skillDecision !== engineDecision) {
+      type = "model_vs_human";
+      details.push("Skill:" + skillDecision + " \u2192 Engine:" + engineDecision + " (atom edits changed outcome)");
     }
-    if (expectedTitle && policyTitle && policyTitle !== expectedTitle) {
-      overrides.push("title:" + expectedTitle + "\u2192" + policyTitle);
+
+    // Type 2: rule_gap — engine says X but user manually picked Y in dropdown
+    if (engineDecision && decision !== engineDecision) {
+      type = "rule_gap";
+      details.push("Engine:" + engineDecision + " \u2192 User:" + decision);
+    }
+    // Also flag policy_title manual override (only for flag decisions)
+    if (decision === "flag" && expectedTitle && policyTitle && policyTitle !== expectedTitle) {
+      if (!type) type = "rule_gap";
+      details.push("Policy: " + expectedTitle + " \u2192 " + policyTitle);
+    }
+
+    // Type 3: escalate — user explicitly flagged
+    if (escalate && !type) {
+      type = "escalate";
+      details.push("User escalated for alignment discussion");
+    }
+
+    // Build tag string for persistence
+    var tag = null;
+    if (type) {
+      tag = "[" + type + "] " + details.join("; ");
+    } else if (escalate) {
+      type = "escalate";
+      tag = "[escalate] User escalated for alignment discussion";
     }
 
     return {
-      hasOverride: overrides.length > 0,
-      overrides: overrides,
-      tag: overrides.length > 0 ? overrides.join("; ") : null,
-      expected: expected,
-      expectedTitle: expectedTitle
+      type: type,
+      hasOverride: !!type,
+      details: details,
+      tag: tag,
+      engineDecision: engineDecision,
+      skillDecision: skillDecision
     };
-  }, [tags, decision, policyTitle, corpus, verdictData, pendingCase]);
+  }, [tags, decision, policyTitle, corpus, verdictData, pendingCase, escalate]);
 
   return e("div", { className: "save-section", style: { marginTop: 16, padding: 12, border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--surface-soft)" } },
     e("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 8 } }, "Confirm & Save to Precedents"),
