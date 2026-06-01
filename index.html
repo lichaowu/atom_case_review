@@ -1298,12 +1298,15 @@ async function loadAtomCorpus() {
     if (out.some(u => !u) && base && typeof base.getAttachmentUrl === "function" && tokens.length && tableId) {
       try {
         const tasks = [];
+        const _MAX_PATH_C = 12; var _pathC_count = 0;
         for (let i = 0; i < images.length; i++) {
           if (out[i]) { tasks.push(null); continue; }
           const tk = images[i] && images[i].token;
           if (!tk) { tasks.push(null); continue; }
+          if (_pathC_count >= _MAX_PATH_C) { tasks.push(null); continue; }
           tasks.push(base.getAttachmentUrl(tk, fieldId, recordId, tableId));
         }
+          _pathC_count++;
         const results = await Promise.race([
           Promise.all(tasks.map(t => t || Promise.resolve(null))),
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
@@ -3614,12 +3617,13 @@ function ReasonedVerdictPane(props) {
         // Helper: find retrieval record matching a skill-analyzed precedent by case_id
         function _findRetrievalMatch(pa) {
           if (!precedentsResult || !precedentsResult.results) return null;
-          var cid = pa.case_id || "";
+          var cid = pa.case_id || pa.source_video_id || "";
           if (!cid) return null;
           for (var k = 0; k < precedentsResult.results.length; k++) {
             var r = precedentsResult.results[k];
-            var rid = r.case_id || r.source_video_id || r.record_id || "";
-            if (rid === cid) return r;
+            if ((r.case_id && r.case_id === cid) ||
+                (r.source_video_id && r.source_video_id === cid) ||
+                (r.record_id && r.record_id === cid)) return r;
           }
           return null;
         }
@@ -3672,7 +3676,10 @@ function ReasonedVerdictPane(props) {
              ap === "PARTIAL"    ? "partial" : "non-applicable");
           var apKind = ap === "APPLICABLE" ? "high" : ap === "PARTIAL" ? "mid" : "low";
           var _match = _findRetrievalMatch(pa);
-          return e("div", { key: "pa" + i, className: cls },
+          var _detailTarget = _match || { case_id: pa.case_id, decision: pa.decision, policy_title: pa.policy_title };
+          return e("div", { key: "pa" + i, className: cls,
+            style: { cursor: "pointer" }, onClick: function() { setOpenPrec(_detailTarget); },
+            title: "Click to view precedent detail" },
             e("div", { className: "pa-row" },
               e("span", { className: "conf-chip " + apKind,
                 style: { letterSpacing: 1, fontSize: 10 } }, ap || "?"),
@@ -3693,22 +3700,17 @@ function ReasonedVerdictPane(props) {
               resolveList(pa.conflicting_atoms).map(function(a, j) { return e(AtomChip, { key: "c" + j, atom: a, struck: true }); })
             ),
             pa.note && e("div", { className: "pa-note" }, pa.note),
-            // Enrichment from retrieval: keyframes + summary + view-detail link
+            // Enrichment from retrieval: keyframe count + summary snippet (card itself is clickable)
             _match && e("div", { style: { marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--hairline-soft)",
-              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 11, color: "var(--muted)" } },
               _match.images && _match.images.length > 0 && e("span", {
-                style: { fontSize: 11, color: "var(--primary)", cursor: "pointer", textDecoration: "underline dotted" },
-                onClick: function(ev) { ev.stopPropagation(); setOpenPrec(_match); },
-                title: "View full precedent detail (all keyframes, ASR, OCR, atoms)"
-              }, "🖼️ " + _match.images.length + " keyframes · view detail"),
-              !(_match.images && _match.images.length > 0) && e("span", {
-                style: { fontSize: 11, color: "var(--primary)", cursor: "pointer", textDecoration: "underline dotted" },
-                onClick: function(ev) { ev.stopPropagation(); setOpenPrec(_match); },
-                title: "View full precedent detail"
-              }, "view detail"),
-              _match.visual_summary && e("span", { style: { fontSize: 11, color: "var(--muted)", flex: 1, minWidth: 120 } },
-                _match.visual_summary.length > 120 ? _match.visual_summary.slice(0, 120) + "…" : _match.visual_summary)
-            )
+                style: { color: "var(--primary)" }
+              }, "🖼️ " + _match.images.length + " keyframes"),
+              _match.visual_summary && e("span", { style: { flex: 1, minWidth: 120 } },
+                _match.visual_summary.length > 120 ? _match.visual_summary.slice(0, 120) + "…" : _match.visual_summary),
+              e("span", { style: { color: "var(--primary)", fontWeight: 500 } }, "→ view detail")
+            ),
+            !_match && e("div", { style: { marginTop: 4, fontSize: 11, color: "var(--primary)", fontWeight: 500 } }, "→ view detail")
           );
         }
 
@@ -4222,6 +4224,7 @@ function AtomTagger(props) {
             recordId: pendingCase.record_id,
             scope: "pending",
             resolve: corpus.image_meta && corpus.image_meta.resolve,
+            limit: 12,
             label: "Pending images"
           })
         ),
