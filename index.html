@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.7";
+const PLUGIN_VERSION = "atom-mvp v0.16.8";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1700,8 +1700,53 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     }
   } catch(_) {}
 
+  // v0.16.8: Block SDK addRecord silently drops Attachment fields. Pull the
+  // attachment payload aside, call addRecord with everything else, then write
+  // attachments via field.setValue(recordId, payload) which IS supported.
+  let __pendingAttachments = null;
+  try {
+    const _imgFieldId = fid("images");
+    if (_imgFieldId && fields[_imgFieldId] && (idx.types[_imgFieldId] === 17)) {
+      __pendingAttachments = fields[_imgFieldId];
+      delete fields[_imgFieldId];
+      console.log("[AtomConsole.save] deferred attachment write:", __pendingAttachments.length, "items");
+    }
+  } catch (e) {
+    console.warn("[AtomConsole.save] attachment defer failed:", e);
+  }
+
   const result = await tbl.addRecord({ fields });
   console.log("[AtomConsole.save] addRecord returned:", result);
+
+  // v0.16.8: post-create attachment write via per-field setValue.
+  if (__pendingAttachments && __pendingAttachments.length) {
+    const newRecId = (typeof result === "string") ? result
+                   : (result && (result.recordId || result.record_id || result.id)) || null;
+    if (newRecId) {
+      const _imgFieldId = fid("images");
+      try {
+        const _imgField = tbl.getField ? await tbl.getField(_imgFieldId) : null;
+        if (_imgField && typeof _imgField.setValue === "function") {
+          const sv = await _imgField.setValue(newRecId, __pendingAttachments);
+          console.log("[AtomConsole.save] attachment field.setValue returned:", sv);
+        } else if (tbl.setCellValue) {
+          // Fallback: table.setCellValue(fieldId, recordId, value)
+          const sc = await tbl.setCellValue(_imgFieldId, newRecId, __pendingAttachments);
+          console.log("[AtomConsole.save] attachment setCellValue returned:", sc);
+        } else if (tbl.setRecord) {
+          // Last resort: setRecord with just the attachment field.
+          const sr = await tbl.setRecord(newRecId, { fields: { [_imgFieldId]: __pendingAttachments } });
+          console.log("[AtomConsole.save] attachment setRecord returned:", sr);
+        } else {
+          console.warn("[AtomConsole.save] no attachment write path available on this SDK");
+        }
+      } catch (e) {
+        console.warn("[AtomConsole.save] attachment write failed:", e);
+      }
+    } else {
+      console.warn("[AtomConsole.save] no newRecId, cannot write attachments");
+    }
+  }
 
   // Read back the newly created record to confirm what actually landed.
   // result on Block SDK is the new record id (string) or an object containing it.
