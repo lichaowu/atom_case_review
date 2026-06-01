@@ -143,12 +143,13 @@
   .claim-row.dominant{padding:10px 12px;background:var(--surface-card);border-radius:8px;margin-top:2px;border-top:none}
   .claim-id{font-family:var(--mono);font-weight:500;color:var(--ink);font-size:12px}
   /* Precedent applicability cards */
-  .precedent-pa{padding:10px 12px;background:var(--canvas);border:1px solid var(--hairline);border-left:3px solid var(--hairline);border-radius:8px;margin:6px 0;font-size:12px;line-height:1.55}
+  .precedent-pa{padding:10px 12px;background:var(--canvas);border:1px solid var(--hairline);border-left:3px solid var(--hairline);border-radius:8px;margin:6px 0;font-size:12px;line-height:1.55;overflow:hidden}
   .precedent-pa.applicable{border-left-color:var(--success)}
   .precedent-pa.partial{border-left-color:var(--warning)}
   .precedent-pa.non-applicable{border-left-color:var(--muted-soft,#8e8b82);opacity:0.85}
   .precedent-pa .pa-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .precedent-pa .pa-note{margin-top:4px;color:var(--body)}
+  .precedent-pa .atom-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis}
   /* Watch-out callouts */
   .watch-out{padding:8px 10px;background:#fdf3e0;border-left:3px solid var(--warning);font-size:12px;margin:4px 0;border-radius:6px;line-height:1.5}
   /* Confidence chip semantics */
@@ -2410,7 +2411,7 @@ function DimRow(props) {
             title: (isSkill ? "[skill-proposed] " : "[reviewer-added] ") +
               (a ? (a.atom_key + (a.serial_code ? " · " + a.serial_code : "") + " — " + (a.description||"").slice(0,200)) : k),
             onClick: () => toggle(k)
-          }, label, isSkill ? " ·s ✕" : " ✕");
+          }, label, " ✕");
         }),
         // Skill-rejected atoms (struck-through, click to override and add)
         ...(skillRejected || []).filter(r => !sel.has(r.atom_key)).map(r => {
