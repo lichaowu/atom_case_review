@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.3-diag";
+const PLUGIN_VERSION = "atom-mvp v0.16.4-diag";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1609,12 +1609,49 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   }
 
   // Create record via SDK
-  const result = console.log("[AtomConsole.save] fields payload BEFORE addRecord:", JSON.parse(JSON.stringify(fields)));
-      console.log("[AtomConsole.save] trace:", __saveTrace);
-      console.log("[AtomConsole.save] field index types:", idx && idx.types);
-      console.log("[AtomConsole.save] link table ids:", idx && idx.linkTableIds);
-      try { window.__lastSavePayload = { fields: JSON.parse(JSON.stringify(fields)), trace: __saveTrace }; } catch(_) {}
-      await tbl.addRecord({ fields });
+  console.log("[AtomConsole.save] fields payload BEFORE addRecord:", JSON.parse(JSON.stringify(fields)));
+  console.log("[AtomConsole.save] trace:", __saveTrace);
+  console.log("[AtomConsole.save] field index types:", idx && idx.types);
+  console.log("[AtomConsole.save] link table ids:", idx && idx.linkTableIds);
+  try { window.__lastSavePayload = { fields: JSON.parse(JSON.stringify(fields)), trace: __saveTrace }; } catch(_) {}
+
+  // Warn if policy_title is about to write empty — usually means APPROVE verdict
+  // with no final_policy_title AND pending row had no preset title.
+  try {
+    const _ptId = fid("policy_title");
+    if (_ptId && Array.isArray(fields[_ptId]) && fields[_ptId].length === 0) {
+      console.warn("[AtomConsole.save] policy_title is empty []. Source: opts.policyTitle=" +
+        JSON.stringify(opts && opts.policyTitle) + " pendingCase.policy_title=" +
+        JSON.stringify(pendingCase && pendingCase.policy_title) +
+        ". Pick a value in the dropdown before Save to populate this column.");
+    }
+  } catch(_) {}
+
+  const result = await tbl.addRecord({ fields });
+  console.log("[AtomConsole.save] addRecord returned:", result);
+
+  // Read back the newly created record to confirm what actually landed.
+  // result on Block SDK is the new record id (string) or an object containing it.
+  try {
+    const newRecId = (typeof result === "string") ? result
+                   : (result && (result.recordId || result.record_id || result.id)) || null;
+    if (newRecId && tbl.getRecordById) {
+      const fresh = await tbl.getRecordById(newRecId);
+      const fr = (fresh && fresh.fields) || fresh || {};
+      const peek = {};
+      const peekNames = ["policy_title","decision","status","reference_weight","images","issue"];
+      for (const nm of peekNames) {
+        const _id = fid(nm);
+        peek[nm] = _id ? fr[_id] : "(no field id)";
+      }
+      console.log("[AtomConsole.save] readback newRecordId=" + newRecId + " peek:", peek);
+      try { window.__lastSaveReadback = { newRecordId: newRecId, peek: peek, fullFields: fr }; } catch(_) {}
+    } else {
+      console.warn("[AtomConsole.save] no newRecId resolved from addRecord result; cannot readback");
+    }
+  } catch (e) {
+    console.warn("[AtomConsole.save] readback failed:", e);
+  }
 
   // Mark pending case as "Reviewed"
   if (opts._pendingRecordId && corpus._tables && corpus._tables.pendingTbl) {
@@ -1624,9 +1661,25 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
       if (pidx && pidx.byName) {
         const statusFieldId = pidx.byName["status"] || pidx.byName["Status"] || null;
         if (statusFieldId) {
-          await ptbl.setRecord(opts._pendingRecordId, {
-            fields: { [statusFieldId]: "Reviewed" }
-          });
+          // SDK SingleSelect setRecord accepts the bare option text. Log result.
+          try {
+            const pr = await ptbl.setRecord(opts._pendingRecordId, {
+              fields: { [statusFieldId]: "Reviewed" }
+            });
+            console.log("[AtomConsole.save] pending status setRecord returned:", pr);
+          } catch (e1) {
+            console.warn("[AtomConsole.save] pending status setRecord(string) failed, retrying with {text}:", e1);
+            try {
+              const pr2 = await ptbl.setRecord(opts._pendingRecordId, {
+                fields: { [statusFieldId]: { text: "Reviewed" } }
+              });
+              console.log("[AtomConsole.save] pending status setRecord({text}) returned:", pr2);
+            } catch (e2) {
+              console.warn("[AtomConsole.save] pending status setRecord({text}) also failed:", e2);
+            }
+          }
+        } else {
+          console.warn("[AtomConsole.save] pending table has no status field — skipped");
         }
       }
     } catch(e) {
