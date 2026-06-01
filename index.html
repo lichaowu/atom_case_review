@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.13";
+const PLUGIN_VERSION = "atom-mvp v0.17.0-merged-prec";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1450,6 +1450,7 @@ window.__loadAtomCorpus = loadAtomCorpus;
 // WRITE-BACK: Save confirmed record to Precedents table
 // =============================================================================
 async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
+  try { window.__lastSaveDropped = []; } catch(_) {}
   // opts: { decision, policyTitle, rationale, analyst }
   const tbl = corpus._tables && corpus._tables.casesTbl;
   if (!tbl) throw new Error("Precedents table not loaded — cannot save.");
@@ -1518,6 +1519,7 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
         console.warn("[AtomConsole.setSmartField] SingleSelect option not found:",
           name, "value:", _name,
           "available:", _opts ? Object.keys(_opts.byName).filter(function(k){return k===k.toLowerCase()?false:true;}) : "(no options indexed)");
+        try { (window.__lastSaveDropped = window.__lastSaveDropped || []).push({ field: name, value: _name, kind: "SingleSelect" }); } catch(_) {}
         fields[id] = { text: _name };  // fall back; SDK may still drop
       }
     } else if (t === FT_MULTI) {
@@ -1529,6 +1531,7 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
         const _vid = _opts && (_opts.byName[_vname] || _opts.byName[_vname.toLowerCase()]);
         if (_vid) return { id: _vid, text: _vname };
         console.warn("[AtomConsole.setSmartField] MultiSelect option not found:", name, "value:", _vname);
+        try { (window.__lastSaveDropped = window.__lastSaveDropped || []).push({ field: name, value: _vname, kind: "MultiSelect" }); } catch(_) {}
         return { text: _vname };
       });
     } else if (t === FT_URL) {
@@ -1667,6 +1670,10 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   const result = await tbl.addRecord({ fields });
   console.log("[AtomConsole.save] addRecord returned:", result);
 
+  // v0.16.14: collect any silent drops from setSmartField for caller to surface.
+  var _dropped = [];
+  try { _dropped = (window.__lastSaveDropped || []).slice(); } catch(_) {}
+
   // Mark pending case as "Reviewed"
   if (opts._pendingRecordId && corpus._tables && corpus._tables.pendingTbl) {
     try {
@@ -1706,7 +1713,8 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     }
   }
 
-  return result;
+  // v0.16.14: return enriched object so caller can surface dropped options.
+  return { recordId: result, droppedOptions: _dropped };
 }
 window.__saveConfirmedRecord = saveConfirmedRecord;
 </script>
@@ -3299,11 +3307,12 @@ function _splitReason(raw) {
 //   • Watch-outs / next_step / suppressed claims (collapsible)
 //   • Engine alignment delta + tagged reasoning sections (collapsible)
 function ReasonedVerdictPane(props) {
-  const { engineSimulation, atomsByDim, onVerdictParsed, onVerdictCleared } = props || {};
+  const { engineSimulation, atomsByDim, onVerdictParsed, onVerdictCleared, precedentsResult, imageMeta } = props || {};
   const [raw, setRaw]         = React.useState("");
   const [parsed, setParsed]   = React.useState(null);
   const [check, setCheck]     = React.useState({ ok: true, errors: [], warnings: [] });
   const [editing, setEditing] = React.useState(true); // textarea expanded by default until first parse
+  const [openPrec, setOpenPrec] = React.useState(null); // detail modal from analysis cards
 
   // ---- Build a flat lookup index from corpus.atomsByDim ----
   // Map atom_key → { atom_key, atom_name, serial_code, dim }. Used to resolve
@@ -3599,8 +3608,51 @@ function ReasonedVerdictPane(props) {
           nextStep)
       ),
 
-      // Precedent analysis — sorted by applicability tier, NON-APPLICABLE collapsed
-      precs.length > 0 && (function() {
+      // Precedent analysis — merged view (replaces standalone Top Precedents)
+      // Before verdict: show retrieval summary. After verdict: skill analysis enriched with retrieval data.
+      (function() {
+        // Helper: find retrieval record matching a skill-analyzed precedent by case_id
+        function _findRetrievalMatch(pa) {
+          if (!precedentsResult || !precedentsResult.results) return null;
+          var cid = pa.case_id || "";
+          if (!cid) return null;
+          for (var k = 0; k < precedentsResult.results.length; k++) {
+            var r = precedentsResult.results[k];
+            var rid = r.case_id || r.source_video_id || r.record_id || "";
+            if (rid === cid) return r;
+          }
+          return null;
+        }
+
+        // PRE-VERDICT state: show a lightweight retrieval summary
+        if (!precs || precs.length === 0) {
+          if (!precedentsResult || !precedentsResult.results || !precedentsResult.results.length) return null;
+          var _res = precedentsResult.results;
+          return e("details", { open: false, style: { marginTop: 14 } },
+            e("summary", null, "Retrieved precedents (" + _res.length + ") — analysis will appear after verdict paste"),
+            e("div", { style: { marginTop: 6 } },
+              ..._res.map(function(r, i) {
+                return e("div", { key: "rp" + i, style: { padding: "6px 10px", borderLeft: "3px solid var(--hairline)",
+                  marginBottom: 6, background: "var(--surface-soft)", borderRadius: 6, cursor: "pointer" },
+                  onClick: function() { setOpenPrec(r); },
+                  title: "Click to view full precedent detail" },
+                  e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+                    e("span", { style: { fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600 } }, "#" + (i+1)),
+                    e("span", { style: { fontFamily: "var(--mono)", fontSize: 11, color: "var(--body-strong)" } },
+                      r.case_id || r.source_video_id || r.record_id || "—"),
+                    r.decision && e("span", { className: "atom-chip" },
+                      e("span", { className: "chip-name" }, r.decision)),
+                    r.policy_title && e("span", { className: "ev-pill" }, r.policy_title)
+                  ),
+                  r.visual_summary && e("div", { style: { fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.4 } },
+                    r.visual_summary.length > 150 ? r.visual_summary.slice(0, 150) + "…" : r.visual_summary)
+                );
+              })
+            )
+          );
+        }
+
+        // POST-VERDICT state: show skill analysis enriched with retrieval detail
         var _tierOrder = { "APPLICABLE": 0, "PARTIAL": 1, "NON-APPLICABLE": 2 };
         var _sorted = precs.slice().sort(function(a, b) {
           var ta = _tierOrder[(a.applicability || "").toUpperCase()];
@@ -3619,6 +3671,7 @@ function ReasonedVerdictPane(props) {
             (ap === "APPLICABLE" ? "applicable" :
              ap === "PARTIAL"    ? "partial" : "non-applicable");
           var apKind = ap === "APPLICABLE" ? "high" : ap === "PARTIAL" ? "mid" : "low";
+          var _match = _findRetrievalMatch(pa);
           return e("div", { key: "pa" + i, className: cls },
             e("div", { className: "pa-row" },
               e("span", { className: "conf-chip " + apKind,
@@ -3629,7 +3682,7 @@ function ReasonedVerdictPane(props) {
               pa.decision && e("span", { className: "atom-chip" },
                 e("span", { className: "chip-name" }, pa.decision)),
               pa.decision_alignment && e("span", { style: { fontSize: 11, color: "var(--muted)" } },
-                "\u2192 " + pa.decision_alignment)
+                "→ " + pa.decision_alignment)
             ),
             Array.isArray(pa.shared_atoms) && pa.shared_atoms.length > 0 && e("div", { style: { marginTop: 6 } },
               e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", letterSpacing: 0.5, marginRight: 4 } }, "SHARED"),
@@ -3639,21 +3692,60 @@ function ReasonedVerdictPane(props) {
               e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", letterSpacing: 0.5, marginRight: 4 } }, "CONFLICT"),
               resolveList(pa.conflicting_atoms).map(function(a, j) { return e(AtomChip, { key: "c" + j, atom: a, struck: true }); })
             ),
-            pa.note && e("div", { className: "pa-note" }, pa.note)
+            pa.note && e("div", { className: "pa-note" }, pa.note),
+            // Enrichment from retrieval: keyframes + summary + view-detail link
+            _match && e("div", { style: { marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--hairline-soft)",
+              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+              _match.images && _match.images.length > 0 && e("span", {
+                style: { fontSize: 11, color: "var(--primary)", cursor: "pointer", textDecoration: "underline dotted" },
+                onClick: function(ev) { ev.stopPropagation(); setOpenPrec(_match); },
+                title: "View full precedent detail (all keyframes, ASR, OCR, atoms)"
+              }, "🖼️ " + _match.images.length + " keyframes · view detail"),
+              !(_match.images && _match.images.length > 0) && e("span", {
+                style: { fontSize: 11, color: "var(--primary)", cursor: "pointer", textDecoration: "underline dotted" },
+                onClick: function(ev) { ev.stopPropagation(); setOpenPrec(_match); },
+                title: "View full precedent detail"
+              }, "view detail"),
+              _match.visual_summary && e("span", { style: { fontSize: 11, color: "var(--muted)", flex: 1, minWidth: 120 } },
+                _match.visual_summary.length > 120 ? _match.visual_summary.slice(0, 120) + "…" : _match.visual_summary)
+            )
           );
         }
 
         var _applicableCount = _applicable.length + _partial.length;
-        return e("details", { open: false, style: { marginTop: 14 } },
-          e("summary", null, "Precedent analysis (" + precs.length + ")"),
-          e("div", { style: { marginTop: 6 } },
-            _applicable.map(function(pa, i) { return _renderPrecCard(pa, i); }),
-            _partial.map(function(pa, i) { return _renderPrecCard(pa, _applicable.length + i); }),
-            _nonappl.length > 0 && e("details", { open: false, style: { marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 8 } },
-              e("summary", { style: { fontSize: 11, color: "var(--muted)", cursor: "pointer" } },
-                "Non-applicable (" + _nonappl.length + ")"),
-              e("div", { style: { marginTop: 6 } },
-                _nonappl.map(function(pa, i) { return _renderPrecCard(pa, _applicableCount + i); })
+
+        return e(React.Fragment, null,
+          e("details", { open: true, style: { marginTop: 14 } },
+            e("summary", null, "Precedent analysis (" + precs.length + ")"),
+            e("div", { style: { marginTop: 6 } },
+              ..._applicable.map(function(pa, i) { return _renderPrecCard(pa, i); }),
+              ..._partial.map(function(pa, i) { return _renderPrecCard(pa, _applicable.length + i); }),
+              _nonappl.length > 0 && e("details", { open: false, style: { marginTop: 10, borderTop: "1px solid var(--hairline)", paddingTop: 8 } },
+                e("summary", { style: { fontSize: 11, color: "var(--muted)", cursor: "pointer" } },
+                  "Non-applicable (" + _nonappl.length + ")"),
+                e("div", { style: { marginTop: 6 } },
+                  ..._nonappl.map(function(pa, i) { return _renderPrecCard(pa, _applicableCount + i); })
+                )
+              )
+            )
+          ),
+          // Retrieval diagnostics (collapsed)
+          precedentsResult && precedentsResult.results && e("details", { open: false, style: { marginTop: 6 } },
+            e("summary", { style: { fontSize: 11, color: "var(--muted)", cursor: "pointer" } }, "Retrieval diagnostics"),
+            e("div", { style: { marginTop: 6, fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" } },
+              "pool=" + (precedentsResult.pool_size || 0) +
+              " · scored=" + (precedentsResult.total_scored || 0) +
+              (precedentsResult.mix ? " · mix bm/atom " + Math.round((precedentsResult.mix.bm||0)*100) + "/" + Math.round((precedentsResult.mix.atom||0)*100) : ""),
+              e("div", { style: { marginTop: 4 } },
+                ...precedentsResult.results.map(function(r, i) {
+                  return e("div", { key: "diag" + i, style: { padding: "2px 0" } },
+                    "#" + (i+1) + " " + (r.case_id || r.record_id || "—") +
+                    " score=" + (r.score != null ? r.score.toFixed(3) : "—") +
+                    " vis=" + (r.visual_norm != null ? r.visual_norm.toFixed(3) : "—") +
+                    " txt=" + (r.text_norm != null ? r.text_norm.toFixed(3) : "—") +
+                    " atm=" + (r._atom != null ? r._atom.toFixed(3) : "—")
+                  );
+                })
               )
             )
           )
@@ -3699,7 +3791,10 @@ function ReasonedVerdictPane(props) {
                             whiteSpace: "pre-wrap" } },
           JSON.stringify(parsed, null, 2))
       )
-    )
+    ),
+
+      // PrecedentDetailModal — opened from analysis card view-detail links
+      openPrec && e(PrecedentDetailModal, { precedent: openPrec, imageMeta: imageMeta, onClose: function() { setOpenPrec(null); } })
   );
 }
 
@@ -3763,7 +3858,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
     setSaving(true);
     setSaved(null);
     try {
-      await window.__saveConfirmedRecord(corpus, pendingCase, tags, {
+      const _res = await window.__saveConfirmedRecord(corpus, pendingCase, tags, {
         decision: decision,
         policyTitle: policyTitle,
         rationale: rationale,
@@ -3771,7 +3866,15 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
         overrideTag: discrepancy.tag || "",
         _pendingRecordId: pendingCase.record_id
       });
-      setSaved({ ok: true, msg: "Saved to Precedents table" });
+      const _drops = (_res && _res.droppedOptions) || [];
+      if (_drops.length) {
+        const _msg = "Saved, but these Select options were missing on the column and got dropped: " +
+          _drops.map(function(d){ return d.field + "=\'" + d.value + "\'"; }).join(", ") +
+          ". Add the option to the column in the Bitable, then re-save.";
+        setSaved({ ok: false, msg: _msg });
+      } else {
+        setSaved({ ok: true, msg: "Saved to Precedents table" });
+      }
     } catch(err) {
       setSaved({ ok: false, msg: String(err.message || err) });
     } finally {
@@ -3793,27 +3896,23 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
   // Discrepancy detection: compare user decision vs engine/skill expected outcome
   const discrepancy = React.useMemo(() => {
     // Derive what the engine would say
+    // v0.16.14: decision is binary (flag/pass). Severity (NR / NFF /
+    // Escalate) lives on policy_title, not decision. Collapse engine and
+    // skill verdicts to flag/pass before comparing.
     var engineDecision = null;
     try {
       if (window.AtomEngine && corpus.claims) {
         const er = window.AtomEngine.evaluate(tags, corpus.claims, {});
         if (er && er.verdict) {
-          // Map engine verdict to our decision taxonomy
-          const vmap = { "VIOLATION": "flag", "NOT_RECOMMEND": "not_recommend",
-                         "NOT_FOR_FEED": "not_for_feed", "APPROVE": "pass",
-                         "NO_CLAIM_FIRED": "pass" };
-          engineDecision = vmap[er.verdict] || "flag";
+          engineDecision = (er.verdict === "APPROVE" || er.verdict === "NO_CLAIM_FIRED") ? "pass" : "flag";
         }
       }
     } catch(e) { /* engine not available */ }
 
-    // Also consider skill verdict if available
+    // Also consider skill verdict if available, collapsed to flag/pass.
     var skillDecision = null;
     if (verdictData && verdictData.verdict) {
-      const smap = { "VIOLATION": "flag", "NOT_RECOMMEND": "not_recommend",
-                     "NOT_FOR_FEED": "not_for_feed", "APPROVE": "pass",
-                     "ESCALATE": "escalate" };
-      skillDecision = smap[verdictData.verdict] || null;
+      skillDecision = (verdictData.verdict === "APPROVE") ? "pass" : "flag";
     }
 
     // Determine the "expected" decision (skill > engine)
@@ -3850,10 +3949,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
         style: { fontSize: 12, padding: "2px 6px" }
       },
         e("option", { value: "flag" }, "Flag (violation)"),
-        e("option", { value: "pass" }, "Pass (approve)"),
-        e("option", { value: "not_recommend" }, "Not Recommend"),
-        e("option", { value: "not_for_feed" }, "Not For Feed"),
-        e("option", { value: "escalate" }, "Escalate")
+        e("option", { value: "pass" }, "Pass (approve)")
       ),
 
       e("label", { style: { fontSize: 11, color: "var(--muted)", marginLeft: 8 } }, "Policy title:"),
@@ -4170,7 +4266,9 @@ function AtomTagger(props) {
       engineSimulation: payload.engine_simulation,
       atomsByDim: corpus.atomsByDim,
       onVerdictParsed: onVerdictParsed,
-      onVerdictCleared: onVerdictCleared
+      onVerdictCleared: onVerdictCleared,
+      precedentsResult: precedentsResult,
+      imageMeta: corpus.image_meta
     }),
 
     pendingCase && e("div", { className: "tag-card" },
@@ -4212,12 +4310,6 @@ function AtomTagger(props) {
           "Local engine skipped — skill is authoritative.")
       )
     ),
-
-    pendingCase && precedentsResult && e(PrecedentsPane, {
-      result: precedentsResult,
-      imageMeta: corpus.image_meta
-    }),
-
     pendingCase && e(ConfirmSaveSection, {
       corpus: corpus,
       pendingCase: pendingCase,
