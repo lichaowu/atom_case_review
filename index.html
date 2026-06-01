@@ -319,7 +319,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.16.6";
+const PLUGIN_VERSION = "atom-mvp v0.16.7";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -894,7 +894,7 @@ async function loadAllRecords(table) {
 async function buildFieldIndex(table) {
   try {
     const metas = await table.getFieldMetaList();
-    const byName = {}, byId = {}, types = {}, linkTableIds = {};
+    const byName = {}, byId = {}, types = {}, linkTableIds = {}, selectOptions = {};
     for (const m of metas) {
       const id = m.id || m.field_id;
       const nm = m.name || m.field_name;
@@ -903,16 +903,29 @@ async function buildFieldIndex(table) {
         byId[id] = nm;
         types[id] = m.type;
         // Capture linked table ID for SingleLink (18) and DuplexLink (21).
-        // SDK exposes it on m.property.tableId.
         if ((m.type === 18 || m.type === 21) && m.property && m.property.tableId) {
           linkTableIds[id] = m.property.tableId;
         }
+        // Capture select options for SingleSelect (3) / MultiSelect (4).
+        // SDK exposes them on m.property.options as [{id, name, color}].
+        if ((m.type === 3 || m.type === 4) && m.property && Array.isArray(m.property.options)) {
+          const oByName = {}, oById = {};
+          for (const opt of m.property.options) {
+            if (opt && opt.id != null && opt.name != null) {
+              oByName[String(opt.name)] = String(opt.id);
+              // Case-insensitive backup
+              oByName[String(opt.name).toLowerCase()] = String(opt.id);
+              oById[String(opt.id)] = String(opt.name);
+            }
+          }
+          selectOptions[id] = { byName: oByName, byId: oById };
+        }
       }
     }
-    return { byName, byId, types, linkTableIds };
+    return { byName, byId, types, linkTableIds, selectOptions };
   } catch (e) {
     console.warn("[AtomConsole] getFieldMetaList failed:", e);
-    return { byName: {}, byId: {}, types: {}, linkTableIds: {} };
+    return { byName: {}, byId: {}, types: {}, linkTableIds: {}, selectOptions: {} };
   }
 }
 function readCell(fieldsObj, fieldIndex, name) {
@@ -1493,11 +1506,31 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
         return { id: String(v), type: "user" };
       });
     } else if (t === FT_SELECT) {
-      // SingleSelect: option NAME as plain string
-      fields[id] = String(val);
+      // SingleSelect on Block SDK: requires { text: "OptionName" } object.
+      // (Bare string and bare option-id both silently drop on this SDK
+      // version, confirmed via readback in v0.16.5/v0.16.6.)
+      const _opts = (idx.selectOptions && idx.selectOptions[id]) || null;
+      const _name = String(val);
+      const _optId = _opts && (_opts.byName[_name] || _opts.byName[_name.toLowerCase()]);
+      if (_optId) {
+        fields[id] = { id: _optId, text: _name };
+      } else {
+        console.warn("[AtomConsole.setSmartField] SingleSelect option not found:",
+          name, "value:", _name,
+          "available:", _opts ? Object.keys(_opts.byName).filter(function(k){return k===k.toLowerCase()?false:true;}) : "(no options indexed)");
+        fields[id] = { text: _name };  // fall back; SDK may still drop
+      }
     } else if (t === FT_MULTI) {
-      // MultiSelect: array of option NAMEs
-      fields[id] = Array.isArray(val) ? val.map(String) : [String(val)];
+      // MultiSelect on Block SDK: array of { text: "OptionName" } objects.
+      const _opts = (idx.selectOptions && idx.selectOptions[id]) || null;
+      const _arr = Array.isArray(val) ? val : [val];
+      fields[id] = _arr.filter(Boolean).map(function(v) {
+        const _vname = (typeof v === "object" && v !== null) ? String(v.text || v.name || v.id || "") : String(v);
+        const _vid = _opts && (_opts.byName[_vname] || _opts.byName[_vname.toLowerCase()]);
+        if (_vid) return { id: _vid, text: _vname };
+        console.warn("[AtomConsole.setSmartField] MultiSelect option not found:", name, "value:", _vname);
+        return { text: _vname };
+      });
     } else if (t === FT_URL) {
       // Url: {link, text}
       fields[id] = { link: String(val), text: String(val) };
@@ -1553,16 +1586,19 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     return value;
   }
   function __traceWrap(kind, origFn, name, value) {
+    // v0.16.7: stop double-wrapping. setSmartField now handles shape via
+    // option-id resolution. Trace records the raw value going in and the
+    // resulting fields[id] going out (post-write).
     const fId = (typeof fid === "function") ? fid(name) : null;
     const fType = (idx && idx.types && fId) ? idx.types[fId] : null;
-    const normalized = (kind === "smart" && fType != null) ? __normalizeForType(fType, value) : value;
     let result, error = null;
-    try { result = origFn(name, normalized); }
+    try { result = origFn(name, value); }
     catch (e) { error = String(e && e.message || e); }
+    const written = fId ? fields[fId] : undefined;
     __saveTrace.push({
       kind, name, fieldId: fId, fieldType: fType,
       rawValue: value,
-      normalizedValueSeen: (typeof normalized === "object" ? JSON.stringify(normalized) : String(normalized)),
+      writtenShape: (typeof written === "object" ? JSON.stringify(written) : String(written)),
       error
     });
     return result;
