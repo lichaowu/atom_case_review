@@ -2907,7 +2907,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
   };
   const precedents = ((precedentsResult && precedentsResult.results) || []).map((r, i) => ({
     rank:               i + 1,
-    case_id:            r.case_id || "",
+    case_id:            r.case_id || r.source_video_id || "",
     source_video_id:    r.source_video_id || "",
     policy_title:       r.policy_title || "",
     issue:              r.issue || "",
@@ -3617,13 +3617,20 @@ function ReasonedVerdictPane(props) {
         // Helper: find retrieval record matching a skill-analyzed precedent by case_id
         function _findRetrievalMatch(pa) {
           if (!precedentsResult || !precedentsResult.results) return null;
+          var results = precedentsResult.results;
+          // Match by case_id / source_video_id
           var cid = pa.case_id || pa.source_video_id || "";
-          if (!cid) return null;
-          for (var k = 0; k < precedentsResult.results.length; k++) {
-            var r = precedentsResult.results[k];
-            if ((r.case_id && r.case_id === cid) ||
-                (r.source_video_id && r.source_video_id === cid) ||
-                (r.record_id && r.record_id === cid)) return r;
+          if (cid) {
+            for (var k = 0; k < results.length; k++) {
+              var r = results[k];
+              if ((r.case_id && r.case_id === cid) ||
+                  (r.source_video_id && r.source_video_id === cid) ||
+                  (r.record_id && r.record_id === cid)) return r;
+            }
+          }
+          // Fallback: match by rank (skill echoes payload rank)
+          if (typeof pa.rank === "number" && pa.rank >= 1 && pa.rank <= results.length) {
+            return results[pa.rank - 1];
           }
           return null;
         }
@@ -3676,7 +3683,7 @@ function ReasonedVerdictPane(props) {
              ap === "PARTIAL"    ? "partial" : "non-applicable");
           var apKind = ap === "APPLICABLE" ? "high" : ap === "PARTIAL" ? "mid" : "low";
           var _match = _findRetrievalMatch(pa);
-          var _detailTarget = _match || { case_id: pa.case_id, decision: pa.decision, policy_title: pa.policy_title };
+          var _detailTarget = _match || { case_id: pa.case_id || pa.source_video_id, decision: pa.decision, policy_title: pa.policy_title, note: pa.note, atoms: {} };
           return e("div", { key: "pa" + i, className: cls,
             style: { cursor: "pointer" }, onClick: function() { setOpenPrec(_detailTarget); },
             title: "Click to view precedent detail" },
