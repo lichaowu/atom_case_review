@@ -1570,7 +1570,10 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   setTextField("case_id", pendingCase.source_video_id || pendingCase.record_id);
   setTextField(_idField, pendingCase.source_video_id);
   setSmartField("issue", _splitMulti(pendingCase.issue));
-  setSmartField("policy_title", _splitMulti(opts.policyTitle || pendingCase.policy_title || ""));
+  // Only write policy_title for non-pass decisions (pass = approve, no policy needed)
+  if (opts.decision && opts.decision.toLowerCase() !== "pass") {
+    setSmartField("policy_title", _splitMulti(opts.policyTitle || pendingCase.policy_title || ""));
+  }
   setSmartField("decision", _normDecision(opts.decision));
   setSmartField("status", "Reviewed");
   setTextField("visual_summary", pendingCase.visual_summary);
@@ -3809,7 +3812,7 @@ function ReasonedVerdictPane(props) {
 
 // ---- AtomTagger: top-level pane --------------------------------------------
 // ---- Confirm & Save section -------------------------------------------------
-function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
+function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult }) {
   const e = React.createElement;
   const [decision, setDecision] = React.useState("flag");
   const [policyTitle, setPolicyTitle] = React.useState("");
@@ -3847,6 +3850,24 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
     }
     setSaved(null);
   }, [verdictData, pendingCase]);
+
+  // Re-sync decision from live engine when atoms change AFTER initial load.
+  // This gives the user feedback that their atom edits changed the engine outcome.
+  // Guard: only when engineResult has meaningful content (not null, not from 0 atoms).
+  const _prevEngineRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!engineResult || !engineResult.verdict) return;
+    // Skip the very first engine result (let verdictData effect win on initial paste)
+    if (_prevEngineRef.current === null) {
+      _prevEngineRef.current = engineResult;
+      return;
+    }
+    _prevEngineRef.current = engineResult;
+    var liveDecision = (engineResult.verdict === "APPROVE" || engineResult.verdict === "NO_CLAIM_FIRED") ? "pass" : "flag";
+    setDecision(liveDecision);
+    // If switching to pass, clear policy_title
+    if (liveDecision === "pass") setPolicyTitle("");
+  }, [engineResult]);
 
   // Get current user as analyst
   const [analyst, setAnalyst] = React.useState("");
@@ -3927,8 +3948,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
     // Determine the "expected" decision (skill > engine)
     var expected = skillDecision || engineDecision || null;
 
-    // Check policy_title discrepancy
-    var expectedTitle = (verdictData && verdictData.final_policy_title) || pendingCase.policy_title || "";
+    // Check policy_title discrepancy (only relevant for flag decisions)
+    var expectedTitle = (decision === "flag") ? ((verdictData && verdictData.final_policy_title) || pendingCase.policy_title || "") : "";
 
     var overrides = [];
     if (expected && decision !== expected) {
@@ -3961,8 +3982,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData }) {
         e("option", { value: "pass" }, "Pass (approve)")
       ),
 
-      e("label", { style: { fontSize: 11, color: "var(--muted)", marginLeft: 8 } }, "Policy title:"),
-      e("select", {
+      decision === "flag" && e("label", { style: { fontSize: 11, color: "var(--muted)", marginLeft: 8 } }, "Policy title:"),
+      decision === "flag" && e("select", {
         value: policyTitle,
         onChange: (ev) => setPolicyTitle(ev.target.value),
         style: { fontSize: 12, padding: "2px 6px", maxWidth: 200 }
@@ -4324,7 +4345,8 @@ function AtomTagger(props) {
       corpus: corpus,
       pendingCase: pendingCase,
       tags: tags,
-      verdictData: verdictData
+      verdictData: verdictData,
+      engineResult: engineResult
     }),
 
     pendingCase && e("details", { open: false, style: { marginTop: 16, fontSize: 11, color: "var(--muted)" } },
