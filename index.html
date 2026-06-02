@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.11-no-threshold";
+const PLUGIN_VERSION = "atom-mvp v0.17.12-low-concurrency";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1206,7 +1206,7 @@ async function loadAtomCorpus() {
   // - A 20s defensive watchdog releases the slot if fn() never settles.
   var _resolveQueue = [];
   var _resolveActive = 0;
-  var _RESOLVE_MAX_CONCURRENT = 8;
+  var _RESOLVE_MAX_CONCURRENT = 2;  // Low concurrency: each getAttachmentUrls resolves ALL tokens on record
 
   function _resolveNext() {
     while (_resolveActive < _RESOLVE_MAX_CONCURRENT && _resolveQueue.length > 0) {
