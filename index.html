@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.7-clean-resolve";
+const PLUGIN_VERSION = "atom-mvp v0.17.8-restore-working";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1191,103 +1191,288 @@ async function loadAtomCorpus() {
   const caseTableId    = casesTbl   ? (casesTbl.id   || casesTbl.tableId   || null) : null;
   const pendingTableId = pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null;
 
-  // =========================================================================
-  // ATTACHMENT URL RESOLVER (v0.17.7 — threshold-based, clean rewrite)
-  // =========================================================================
-  // field.getAttachmentUrls(recordId) resolves ALL tokens on the record.
-  // With >10 attachments the SDK's internal HTTP pool floods -> ECONNABORTED.
-  // No partial-resolution API exists in the Block SDK.
-  //
+  // The SDK exposes attachment URL resolution as field-level methods (NOT base.getAttachmentUrl).
   // Strategy:
-  //   <=10 total attachments on record -> call getAttachmentUrls (safe)
-  //   >10 total attachments on record -> embedded url/tmp_url only (no SDK calls)
-  // =========================================================================
-
+  //   1. table.getFieldById(fieldId) → Field
+  //   2. Try field.getAttachmentUrls(recordId)  → fresh signed URLs (preferred)
+  //   3. Try field.getTmpUrls([tokens])        → temp URLs, by token
+  //   4. Fall back to embedded url/tmp_url/tmpUrl on the cell value (may be expired)
+  // Returns array of URL strings aligned to the input `images` array (same length, "" on failure).
+  // Concurrency limiter for attachment URL resolution — prevents SDK overload
+  // when many ImagesPane components mount simultaneously (e.g. 1 pending + 8 precedents).
+  // - Background thumbnail loads go through the queue (max 3 in flight).
+  // - User-initiated actions (Copy keyframes, etc.) use { priority: true } to bypass
+  //   the queue entirely, so the user is never blocked behind background work.
+  // - A 20s defensive watchdog releases the slot if fn() never settles.
   var _resolveQueue = [];
   var _resolveActive = 0;
-  var _RESOLVE_MAX_CONCURRENT = 2;
+  var _RESOLVE_MAX_CONCURRENT = 8;
 
   function _resolveNext() {
     while (_resolveActive < _RESOLVE_MAX_CONCURRENT && _resolveQueue.length > 0) {
-      var item = _resolveQueue.shift();
+      const { fn, resolve, reject } = _resolveQueue.shift();
       _resolveActive++;
-      item.fn().then(item.resolve, item.reject).finally(function() {
+      var released = false;
+      var release = function () {
+        if (released) return;
+        released = true;
         _resolveActive--;
         _resolveNext();
-      });
+      };
+      // Defensive watchdog — release slot if fn() never settles (e.g. SDK hangs).
+      var watchdog = setTimeout(function () {
+        try { reject(new Error("queue-watchdog timeout (20s)")); } catch (e) {}
+        release();
+      }, 20000);
+      try {
+        var p = fn();
+        if (p && typeof p.then === "function") {
+          p.then(function (v) { clearTimeout(watchdog); resolve(v); release(); },
+                 function (err) { clearTimeout(watchdog); reject(err); release(); });
+        } else {
+          clearTimeout(watchdog); resolve(p); release();
+        }
+      } catch (err) {
+        clearTimeout(watchdog); reject(err); release();
+      }
     }
   }
 
-  function _enqueueResolve(fn) {
-    return new Promise(function(resolve, reject) {
+  function _enqueueResolve(fn, opts) {
+    // opts.priority === true → run immediately, bypass queue entirely.
+    if (opts && opts.priority) {
+      try {
+        var p = fn();
+        return (p && typeof p.then === "function") ? p : Promise.resolve(p);
+      } catch (err) { return Promise.reject(err); }
+    }
+    return new Promise(function (resolve, reject) {
       _resolveQueue.push({ fn: fn, resolve: resolve, reject: reject });
       _resolveNext();
     });
   }
 
-  async function _doResolveAttachmentUrls(scope, recordId, images, totalOnRecord) {
+  async function _doResolveAttachmentUrls(scope, recordId, images) {
     if (!images || !images.length) return [];
-    var out = images.map(function() { return ""; });
 
-    var fillFromEmbedded = function() {
-      for (var i = 0; i < images.length; i++) {
+    // === THRESHOLD GUARD (v0.17.8) ===
+    // field.getAttachmentUrls resolves ALL tokens on the record at once.
+    // With >10 attachments the SDK internal HTTP pool floods -> ECONNABORTED.
+    // For high-count records, use embedded urls only (no SDK calls).
+    if (images.length > 10) {
+      return images.map(function(im) {
+        var u = im && (im.url || im.tmp_url || im.tmpUrl) || "";
+        return /^https?:\/\//i.test(u) ? u : "";
+      });
+    }
+    // === END THRESHOLD GUARD ===
+
+    const tbl     = scope === "case" ? casesTbl   : pendingTbl;
+    const fieldId = scope === "case" ? caseImgFieldId : pendingImgFieldId;
+    const tableId = scope === "case" ? caseTableId    : pendingTableId;
+    const tokens  = images.map(img => img && img.token).filter(Boolean);
+    const out     = images.map(() => "");
+    const diag    = { scope: scope, recordId: recordId, n: images.length, paths: [] };
+
+    const fillFromEmbedded = () => {
+      let n = 0;
+      for (let i = 0; i < images.length; i++) {
         if (out[i]) continue;
-        var im = images[i] || {};
-        var u = im.url || im.tmp_url || im.tmpUrl || "";
-        if (/^https?:\/\//.test(u)) out[i] = u;
+        const im = images[i] || {};
+        const u = im.url || im.tmp_url || im.tmpUrl || "";
+        if (/^https?:\/\//i.test(u)) { out[i] = u; n++; }
       }
+      if (n) diag.paths.push("embedded:" + n);
     };
 
-    var total = totalOnRecord || images.length;
-
-    // HIGH-COUNT RECORD (>10): embedded-only, zero SDK calls
-    if (total > 10) {
-      fillFromEmbedded();
-      return out;
-    }
-
-    // LOW-COUNT RECORD (<=10): SDK resolution is safe
-    var tbl     = scope === "case" ? casesTbl   : pendingTbl;
-    var fieldId = scope === "case" ? caseImgFieldId : pendingImgFieldId;
-
     if (!tbl || !fieldId || !recordId) {
+      diag.paths.push("no-tbl-or-recordId");
       fillFromEmbedded();
+      console.warn("[AtomConsole] resolveAttachmentUrls fast-path:", diag, "out=", out.filter(Boolean).length);
       return out;
     }
 
-    var field = null;
-    try { field = await tbl.getFieldById(fieldId); } catch (e) { field = null; }
+    let field = null;
+    try { field = await tbl.getFieldById(fieldId); } catch (e) { diag.paths.push("getFieldById-err"); field = null; }
 
+    // Path A: field.getAttachmentUrls(recordId) — Block SDK 2024+
     if (field && typeof field.getAttachmentUrls === "function") {
       try {
-        var arr = await Promise.race([
+        const arr = await Promise.race([
           field.getAttachmentUrls(recordId),
-          new Promise(function(_, rej) { setTimeout(function() { rej(new Error("timeout")); }, 8000); })
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
         ]);
         if (Array.isArray(arr)) {
-          for (var i = 0; i < images.length && i < arr.length; i++) {
-            var v = arr[i];
-            var u = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
-            if (u) out[i] = u;
+          let n = 0;
+          for (let i = 0; i < images.length && i < arr.length; i++) {
+            const v = arr[i];
+            const u = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
+            if (u && !out[i]) { out[i] = u; n++; }
           }
+          diag.paths.push("A.getAttachmentUrls:" + n + "/" + arr.length);
+        } else {
+          diag.paths.push("A.getAttachmentUrls:not-array");
         }
-      } catch (e) {
-        console.warn("[AtomConsole] resolve: SDK failed for <=10 record:", e && e.message || e);
+      } catch (e) { diag.paths.push("A.err:" + (e && e.message || e)); }
+    } else {
+      diag.paths.push("A.no-fn");
+    }
+
+    // Path B: field.getTmpUrls([tokens]) — older Block SDK
+    if (out.some(u => !u) && field && typeof field.getTmpUrls === "function" && tokens.length) {
+      try {
+        const arr = await Promise.race([
+          field.getTmpUrls(tokens),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+        ]);
+        if (Array.isArray(arr)) {
+          let j = 0, n = 0;
+          for (let i = 0; i < images.length; i++) {
+            if (out[i]) continue;
+            const v = arr[j++];
+            const u = (typeof v === "string") ? v : (v && (v.tmpUrl || v.url || v.tmp_url) || "");
+            if (u) { out[i] = u; n++; }
+          }
+          diag.paths.push("B.getTmpUrls:" + n);
+        } else { diag.paths.push("B.getTmpUrls:not-array"); }
+      } catch (e) { diag.paths.push("B.err:" + (e && e.message || e)); }
+    } else if (out.some(u => !u)) {
+      diag.paths.push("B.no-fn");
+    }
+
+    // Path C: base.getAttachmentUrl(token, fieldId, recordId, tableId) — token-by-token.
+    // Older base-level API; some SDK builds expose only this.
+    if (out.some(u => !u) && base && typeof base.getAttachmentUrl === "function" && tokens.length && tableId) {
+      try {
+        const tasks = [];
+        for (let i = 0; i < images.length; i++) {
+          if (out[i]) { tasks.push(null); continue; }
+          const tk = images[i] && images[i].token;
+          if (!tk) { tasks.push(null); continue; }
+          tasks.push(base.getAttachmentUrl(tk, fieldId, recordId, tableId));
+        }
+        const results = await Promise.race([
+          Promise.all(tasks.map(t => t || Promise.resolve(null))),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+        ]);
+        let n = 0;
+        for (let i = 0; i < results.length; i++) {
+          if (out[i]) continue;
+          const v = results[i];
+          const u = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
+          if (u) { out[i] = u; n++; }
+        }
+        diag.paths.push("C.base.getAttachmentUrl:" + n);
+      } catch (e) { diag.paths.push("C.err:" + (e && e.message || e)); }
+    } else if (out.some(u => !u) && !(base && typeof base.getAttachmentUrl === "function")) {
+      diag.paths.push("C.no-fn");
+    }
+
+    // Path D: re-read the cell via SDK to get fresh embedded urls
+    if (out.some(u => !u) && tbl && typeof tbl.getCellValue === "function") {
+      try {
+        const cv = await Promise.race([
+          tbl.getCellValue(fieldId, recordId),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8000))
+        ]);
+        const arr = Array.isArray(cv) ? cv : (cv ? [cv] : []);
+        let n = 0;
+        for (let i = 0; i < images.length && i < arr.length; i++) {
+          if (out[i]) continue;
+          const a = arr[i] || {};
+          const u = a.url || a.tmp_url || a.tmpUrl || "";
+          if (/^https?:\/\//i.test(u)) { out[i] = u; n++; }
+        }
+        diag.paths.push("D.getCellValue:" + n);
+      } catch (e) { diag.paths.push("D.err:" + (e && e.message || e)); }
+    }
+
+    // Path E: embedded url on cell value (in-memory).
+    fillFromEmbedded();
+
+    // Path F: base.batchGetTmpUrl — batch token resolver available in some SDK builds
+    if (out.some(u => !u) && tokens.length) {
+      const missingTokens = [];
+      const missingIdx = [];
+      for (let i = 0; i < images.length; i++) {
+        if (out[i]) continue;
+        const tk = images[i] && images[i].token;
+        if (tk) { missingTokens.push(tk); missingIdx.push(i); }
+      }
+      if (missingTokens.length) {
+        let resolved_f = false;
+        // Try base.batchGetTmpUrl
+        if (base && typeof base.batchGetTmpUrl === "function") {
+          try {
+            const map = await Promise.race([
+              base.batchGetTmpUrl(missingTokens),
+              new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000))
+            ]);
+            let n = 0;
+            if (map && typeof map === "object") {
+              for (let j = 0; j < missingTokens.length; j++) {
+                const u = map[missingTokens[j]] || (map.urls && map.urls[j]) || "";
+                if (u && !out[missingIdx[j]]) { out[missingIdx[j]] = u; n++; }
+              }
+            }
+            if (n) { diag.paths.push("F.batchGetTmpUrl:" + n); resolved_f = true; }
+            else diag.paths.push("F.batchGetTmpUrl:0");
+          } catch (e) { diag.paths.push("F.batch-err:" + (e && e.message || e)); }
+        }
+        // Try window.bitable bridge if available
+        if (!resolved_f && window.bitable && window.bitable.bridge && typeof window.bitable.bridge.call === "function") {
+          try {
+            const resp = await Promise.race([
+              window.bitable.bridge.call("getTemporaryUrls", { file_tokens: missingTokens }),
+              new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000))
+            ]);
+            let n = 0;
+            if (resp && resp.data && resp.data.tmp_urls) {
+              const tmp = resp.data.tmp_urls;
+              for (let j = 0; j < missingTokens.length; j++) {
+                const u = tmp[missingTokens[j]] || (Array.isArray(tmp) && tmp[j]) || "";
+                if (u && !out[missingIdx[j]]) { out[missingIdx[j]] = u; n++; }
+              }
+            }
+            if (n) diag.paths.push("F.bridge:" + n);
+            else diag.paths.push("F.bridge:0");
+          } catch (e) { diag.paths.push("F.bridge-err:" + (e && e.message || e)); }
+        } else if (!resolved_f) {
+          diag.paths.push("F.no-bridge");
+        }
       }
     }
 
-    fillFromEmbedded();
+    const filled = out.filter(Boolean).length;
+    if (filled < images.length) {
+      console.warn("[AtomConsole] resolveAttachmentUrls partial: scope=" + scope + " rec=" + recordId + " filled=" + filled + "/" + images.length + " paths=[" + diag.paths.join(" | ") + "]");
+    } else if (window.__atomConsoleVerbose) {
+      console.debug("[AtomConsole] resolveAttachmentUrls ok:", diag);
+    }
     return out;
   }
 
-  function resolveAttachmentUrls(scope, recordId, images, opts, totalOnRecord) {
-    var total = totalOnRecord || (images ? images.length : 0);
-    if (total > 10) {
-      return _doResolveAttachmentUrls(scope, recordId, images, total);
+  // Per-(scope,recordId) cache so React re-mounts don't pile up duplicate calls.
+  // Cache holds the Promise itself (in-flight or settled), reused for the lifetime of corpus.
+  // Hoisted to window so ImagesPane (module-scope) can invalidate it
+  window._atomResolveCache = window._atomResolveCache || new Map();
+  var _resolveCache = window._atomResolveCache;
+  function _cacheKey(scope, recordId) { return (scope || "case") + ":" + (recordId || ""); }
+
+  function resolveAttachmentUrls(scope, recordId, images, opts) {
+    var key = _cacheKey(scope, recordId);
+    // Priority (user actions): never use cache — always fresh.
+    if (opts && opts.priority) {
+      return _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images); }, opts);
     }
-    return _enqueueResolve(function() {
-      return _doResolveAttachmentUrls(scope, recordId, images, total);
-    });
+    if (_resolveCache.has(key)) {
+      return _resolveCache.get(key);
+    }
+    var p = _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images); }, opts);
+    _resolveCache.set(key, p);
+    // On failure, evict so a subsequent retry can re-attempt.
+    p.catch(function () { _resolveCache.delete(key); });
+    return p;
   }
 
   return {
@@ -2001,51 +2186,107 @@ function ImageZoomOverlay(props) {
   );
 }
 
-// ---- ImagesPane: display attachments for a case (v0.17.7 — no retries) ----
+// ---- ImagesPane: display attachments for a case -----------------------------
+// Bitable attachment urls embedded in field values are short-lived; for reliable
+// display we re-resolve via base.getAttachmentUrl(token, recordId, fieldId, tableId).
+// Falls back to the embedded url if available.
 function ImagesPane(props) {
-  var rawImages = props.images;
-  var recordId = props.recordId;
-  var scope = props.scope;
-  var resolve = props.resolve;
-  var label = props.label;
-  var limit = props.limit;
+  const { images: rawImages, recordId, scope, resolve, label, limit } = props;
+  // limit > 0: only render & resolve the first N images (list-view optimization)
+  const images = (limit && limit > 0 && rawImages && rawImages.length > limit)
+    ? rawImages.slice(0, limit)
+    : rawImages;
+  const hiddenCount = (limit && limit > 0 && rawImages && rawImages.length > limit)
+    ? rawImages.length - limit
+    : 0;
+  // Initialize with embedded urls from the cell value — shows immediately if usable.
+  const [zoomSrc, setZoomSrc] = React.useState(null);
+  const [resolved, setResolved] = React.useState(function () {
+    if (!images || !images.length) return [];
+    return images.map(function (im) {
+      var u = im && (im.url || im.tmp_url || im.tmpUrl) || "";
+      return /^https?:\/\//i.test(u) ? u : "";
+    });
+  });
+  const [done,     setDone]     = React.useState(false);
+  const [error,    setError]    = React.useState("");
 
-  var images = (limit && limit > 0 && rawImages && rawImages.length > limit)
-    ? rawImages.slice(0, limit) : rawImages;
-  var hiddenCount = (limit && limit > 0 && rawImages && rawImages.length > limit)
-    ? rawImages.length - limit : 0;
-  var totalOnRecord = rawImages ? rawImages.length : (images ? images.length : 0);
-
-  var _s1 = React.useState([]);
-  var resolved = _s1[0], setResolved = _s1[1];
-  var _s2 = React.useState(false);
-  var done = _s2[0], setDone = _s2[1];
-
-  React.useEffect(function() {
-    var cancelled = false;
+  React.useEffect(() => {
+    let cancelled = false;
+    setError("");
+    // Re-initialize with embedded urls (don't wipe to []) so images show immediately
+    const embeddedInit = images ? images.map(function (im) {
+      var u = im && (im.url || im.tmp_url || im.tmpUrl) || "";
+      return /^https?:\/\//i.test(u) ? u : "";
+    }) : [];
+    setResolved(embeddedInit);
     setDone(false);
-    setResolved([]);
     if (!images || !images.length) { setDone(true); return; }
-
     if (typeof resolve !== "function") {
-      var urls = images.map(function(im) { return (im && (im.url || im.tmp_url || im.tmpUrl)) || ""; });
+      // No resolver — fall back to embedded urls only.
+      const urls = images.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
       if (!cancelled) { setResolved(urls); setDone(true); }
       return;
     }
-
-    // Single attempt. For >10 records this resolves instantly (embedded only, no SDK calls).
-    resolve(scope || "case", recordId, images, undefined, totalOnRecord).then(function(urls) {
+    // Safety timeout: never stay in "loading…" forever — flip done after 18s.
+    var safetyTimer = setTimeout(function () {
       if (cancelled) return;
-      setResolved(Array.isArray(urls) ? urls : []);
+      setError("resolve timeout (18s)");
       setDone(true);
-    }).catch(function() {
-      if (cancelled) return;
-      var fb = images.map(function(im) { return (im && (im.url || im.tmp_url || im.tmpUrl)) || ""; });
-      setResolved(fb);
-      setDone(true);
-    });
+    }, 18000);
+    // Invalidate cache for this record before resolving (ensures fresh SDK calls)
+    var cacheKey = (scope || "case") + ":" + (recordId || "");
+    if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
 
-    return function() { cancelled = true; };
+    var attemptResolve = function (attempt) {
+      resolve(scope || "case", recordId, images).then(function (urls) {
+        if (cancelled) return;
+        var filledCount = 0;
+        if (Array.isArray(urls)) {
+          setResolved(function (prev) {
+            var merged = prev.slice();
+            for (var k = 0; k < urls.length; k++) {
+              if (urls[k]) { merged[k] = urls[k]; filledCount++; }
+            }
+            return merged;
+          });
+        }
+        // If zero SDK urls resolved and this is the first attempt, retry after 3s
+        // (SDK might not be ready on initial mount)
+        if (filledCount === 0 && attempt === 1 && images.length > 0) {
+          console.warn("[AtomConsole] ImagesPane: 0 urls on attempt 1 (scope=" + scope + " rec=" + recordId + "), retrying in 3s…");
+          // Clear cache so retry goes through SDK again
+          if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
+          // IMPORTANT: flip done=true immediately so UI doesn't stay "loading..."
+          // The retry will update state later if it succeeds.
+          clearTimeout(safetyTimer);
+          setDone(true);
+          setTimeout(function () {
+            if (cancelled) return;
+            attemptResolve(2);
+          }, 3000);
+          return;
+        }
+        clearTimeout(safetyTimer);
+        setDone(true);
+      }).catch(function (e) {
+        if (cancelled) return;
+        if (attempt === 1) {
+          // Retry once on error too
+          setTimeout(function () {
+            if (cancelled) return;
+            if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
+            attemptResolve(2);
+          }, 3000);
+          return;
+        }
+        clearTimeout(safetyTimer);
+        setError(String(e && e.message || e));
+        setDone(true);
+      });
+    };
+    attemptResolve(1);
+    return () => { cancelled = true; clearTimeout(safetyTimer); };
   }, [images, recordId, scope, resolve]);
 
   if (!images || !images.length) {
@@ -2054,33 +2295,44 @@ function ImagesPane(props) {
   }
 
   return e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, padding: "4px 0" }},
-    images.map(function(img, i) {
-      var url = (resolved && resolved[i]) || "";
-      var isImg = !img.type || /^image\//i.test(img.type) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(img.name || "");
-      var body;
+    ...images.map((img, i) => {
+      const url = resolved[i] || "";
+      const isImg = !img.type || /^image\//i.test(img.type) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(img.name || "");
+      let body;
       if (url && isImg) {
-        body = e("img", {
-          src: url,
-          alt: img.name || ("kf" + (i+1)),
-          style: { width: "100%", height: 100, objectFit: "cover", display: "block" },
-          onError: function(ev) { if (ev && ev.target) ev.target.style.opacity = "0.3"; }
-        });
+        body = e("div", {
+            style: { cursor: "zoom-in" },
+            onClick: (ev) => { ev.stopPropagation(); setZoomSrc(url); }
+          },
+          e("img", {
+            src: url,
+            alt: img.name || ("attachment " + (i+1)),
+            style: { width: "100%", height: 100, objectFit: "cover", display: "block" },
+            onError: (ev) => {
+              if (ev && ev.target) ev.target.style.display = "none";
+              if (ev && ev.target && ev.target.parentNode) {
+                var ph = document.createElement("div");
+                ph.textContent = "\u26a0 expired";
+                ph.style.cssText = "font-size:10px;color:#a00;padding:6px;text-align:center;";
+                ev.target.parentNode.appendChild(ph);
+              }
+            }
+          }));
       } else if (url) {
         body = e("a", { href: url, target: "_blank", rel: "noreferrer",
           style: { display: "block", padding: 6, fontSize: 10, textDecoration: "none" }},
-          img.name || "attachment");
+          "📎 " + (img.name || "attachment"));
       } else if (done) {
         body = e("div", {
-          style: { padding: "8px 6px", fontSize: 10, color: "var(--muted)", textAlign: "center", lineHeight: 1.3 },
-          title: "token=" + (img.token || "?")
-        }, (img.name || "").replace(/^\d+_/, "").slice(0, 14) || "\u2014");
+          style: { padding: 6, fontSize: 10, color: "#a00", lineHeight: 1.3 },
+          title: "no signed url returned · token=" + (img.token || "?")
+        }, "image unavailable");
       } else {
-        body = e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "loading...");
+        body = e("div", { style: { padding: 6, fontSize: 10 }, className: "muted" }, "loading…");
       }
       return e("div", {
-        key: (img.token || "") + "_" + i,
-        style: { width: "clamp(100px, 28vw, 140px)", flex: "0 0 auto",
-          border: "1px solid var(--hairline)", borderRadius: 4, overflow: "hidden", background: "#0001" }
+        key: (img.token || "noTok") + "_" + i,
+        style: { width: 140, border: "1px solid var(--hairline)", borderRadius: 4, overflow: "hidden", background: "#0001" }
       },
         body,
         e("div", { style: { padding: "2px 4px", fontSize: 9, color: "var(--muted)",
@@ -2089,17 +2341,20 @@ function ImagesPane(props) {
       );
     }),
     hiddenCount > 0 && e("div", {
-      style: { width: "clamp(100px, 28vw, 140px)", flex: "0 0 auto",
-        border: "1px solid var(--hairline)", borderRadius: 4, padding: 12,
-        textAlign: "center", background: "#0001" },
-      title: "Click the case card to see all images"
-    },
-      e("div", { style: { fontSize: 18, fontWeight: 600 }}, "+" + hiddenCount),
-      e("div", { style: { fontSize: 10, color: "var(--muted)" }}, "more"),
-      e("div", { style: { fontSize: 9, color: "var(--muted)" }}, "click card \u2192")
-    )
+      style: { width: 140, height: 100, border: "1px dashed var(--hairline)",
+               borderRadius: 4, display: "flex", alignItems: "center",
+               justifyContent: "center", flexDirection: "column",
+               background: "var(--surface-soft)", color: "var(--muted)",
+               fontSize: 11, lineHeight: 1.3, padding: 4, textAlign: "center" }
+    }, e("div", { style: { fontSize: 18, fontWeight: 500, color: "var(--body-strong)" }},
+        "+" + hiddenCount),
+       e("div", null, "more"),
+       e("div", { style: { fontSize: 9, marginTop: 2 }}, "click card →")),
+    error && e("div", { className: "muted", style: { fontSize: 10, color: "#c00" }}, "image error: " + error),
+    zoomSrc && e(ImageZoomOverlay, { src: zoomSrc, alt: "zoom", onClose: () => setZoomSrc(null) })
   );
 }
+
 
 // ---- DimRow: chip multi-select for one dimension ---------------------------
 // Suggestion-first UX:
