@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.8-restore-working";
+const PLUGIN_VERSION = "atom-mvp v0.17.9-threshold-total";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1252,14 +1252,16 @@ async function loadAtomCorpus() {
     });
   }
 
-  async function _doResolveAttachmentUrls(scope, recordId, images) {
+  async function _doResolveAttachmentUrls(scope, recordId, images, opts) {
     if (!images || !images.length) return [];
 
     // === THRESHOLD GUARD (v0.17.8) ===
     // field.getAttachmentUrls resolves ALL tokens on the record at once.
-    // With >10 attachments the SDK internal HTTP pool floods -> ECONNABORTED.
+    // With >8 attachments the SDK internal HTTP pool floods -> ECONNABORTED.
     // For high-count records, use embedded urls only (no SDK calls).
-    if (images.length > 10) {
+    // NOTE: totalOnRecord is the FULL count on the record, not the sliced display count.
+    var totalOnRecord = (opts && opts._totalOnRecord) || images.length;
+    if (totalOnRecord > 8) {
       return images.map(function(im) {
         var u = im && (im.url || im.tmp_url || im.tmpUrl) || "";
         return /^https?:\/\//i.test(u) ? u : "";
@@ -1300,7 +1302,7 @@ async function loadAtomCorpus() {
       try {
         const arr = await Promise.race([
           field.getAttachmentUrls(recordId),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
         ]);
         if (Array.isArray(arr)) {
           let n = 0;
@@ -1323,7 +1325,7 @@ async function loadAtomCorpus() {
       try {
         const arr = await Promise.race([
           field.getTmpUrls(tokens),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
         ]);
         if (Array.isArray(arr)) {
           let j = 0, n = 0;
@@ -1463,12 +1465,12 @@ async function loadAtomCorpus() {
     var key = _cacheKey(scope, recordId);
     // Priority (user actions): never use cache — always fresh.
     if (opts && opts.priority) {
-      return _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images); }, opts);
+      return _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images, opts); }, opts);
     }
     if (_resolveCache.has(key)) {
       return _resolveCache.get(key);
     }
-    var p = _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images); }, opts);
+    var p = _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images, opts); }, opts);
     _resolveCache.set(key, p);
     // On failure, evict so a subsequent retry can re-attempt.
     p.catch(function () { _resolveCache.delete(key); });
@@ -2234,12 +2236,11 @@ function ImagesPane(props) {
       setError("resolve timeout (18s)");
       setDone(true);
     }, 18000);
-    // Invalidate cache for this record before resolving (ensures fresh SDK calls)
+    // Cache key for this record (used by retry logic to invalidate on 0-fill)
     var cacheKey = (scope || "case") + ":" + (recordId || "");
-    if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
 
     var attemptResolve = function (attempt) {
-      resolve(scope || "case", recordId, images).then(function (urls) {
+      resolve(scope || "case", recordId, images, { _totalOnRecord: rawImages ? rawImages.length : (images ? images.length : 0) }).then(function (urls) {
         if (cancelled) return;
         var filledCount = 0;
         if (Array.isArray(urls)) {
@@ -2256,7 +2257,6 @@ function ImagesPane(props) {
         if (filledCount === 0 && attempt === 1 && images.length > 0) {
           console.warn("[AtomConsole] ImagesPane: 0 urls on attempt 1 (scope=" + scope + " rec=" + recordId + "), retrying in 3s…");
           // Clear cache so retry goes through SDK again
-          if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
           // IMPORTANT: flip done=true immediately so UI doesn't stay "loading..."
           // The retry will update state later if it succeeds.
           clearTimeout(safetyTimer);
@@ -3172,7 +3172,7 @@ function PayloadPane(props) {
         const allUrls = new Array(kfImages.length).fill("");
         for (let bi = 0; bi < kfImages.length; bi += BATCH) {
           const batch = kfImages.slice(bi, bi + BATCH);
-          const batchUrls = await imageMeta.resolve("pending", pendingCase.record_id, batch, { priority: true }, pendingCase.images.length);
+          const batchUrls = await imageMeta.resolve("pending", pendingCase.record_id, batch, { priority: true, _totalOnRecord: pendingCase.images.length });
           if (Array.isArray(batchUrls)) {
             for (let j = 0; j < batchUrls.length; j++) {
               if (batchUrls[j]) allUrls[bi + j] = batchUrls[j];
