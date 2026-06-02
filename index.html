@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.12-low-concurrency";
+const PLUGIN_VERSION = "atom-mvp v0.17.15-minimal-resolver";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1206,7 +1206,7 @@ async function loadAtomCorpus() {
   // - A 20s defensive watchdog releases the slot if fn() never settles.
   var _resolveQueue = [];
   var _resolveActive = 0;
-  var _RESOLVE_MAX_CONCURRENT = 2;  // Low concurrency: each getAttachmentUrls resolves ALL tokens on record
+  var _RESOLVE_MAX_CONCURRENT = 2;  // Keep low: 1 pending + N precedent cards mount together
 
   function _resolveNext() {
     while (_resolveActive < _RESOLVE_MAX_CONCURRENT && _resolveQueue.length > 0) {
@@ -1253,44 +1253,23 @@ async function loadAtomCorpus() {
   }
 
   async function _doResolveAttachmentUrls(scope, recordId, images, opts) {
+    // v0.17.15-minimal-resolver: ONE SDK call (Path A) only.
+    // getAttachmentUrls(recordId) always resolves ALL tokens on the record.
+    // No threshold, no batching, no fallback paths (B-F never work here).
     if (!images || !images.length) return [];
-
-    // === THRESHOLD NOTE (v0.17.11) ===
-    // No hard skip — let all records attempt SDK resolution.
-    // The 15s Path A timeout + stable useEffect (no infinite loop) + per-record cache
-    // prevent SDK flooding. Embedded URLs are always empty in this environment,
-    // so SDK resolution is the ONLY way to get working image URLs.
-    // === END THRESHOLD NOTE ===
 
     const tbl     = scope === "case" ? casesTbl   : pendingTbl;
     const fieldId = scope === "case" ? caseImgFieldId : pendingImgFieldId;
-    const tableId = scope === "case" ? caseTableId    : pendingTableId;
-    const tokens  = images.map(img => img && img.token).filter(Boolean);
     const out     = images.map(() => "");
-    const diag    = { scope: scope, recordId: recordId, n: images.length, paths: [] };
-
-    const fillFromEmbedded = () => {
-      let n = 0;
-      for (let i = 0; i < images.length; i++) {
-        if (out[i]) continue;
-        const im = images[i] || {};
-        const u = im.url || im.tmp_url || im.tmpUrl || "";
-        if (/^https?:\/\//i.test(u)) { out[i] = u; n++; }
-      }
-      if (n) diag.paths.push("embedded:" + n);
-    };
 
     if (!tbl || !fieldId || !recordId) {
-      diag.paths.push("no-tbl-or-recordId");
-      fillFromEmbedded();
-      console.warn("[AtomConsole] resolveAttachmentUrls fast-path:", diag, "out=", out.filter(Boolean).length);
+      console.warn("[AtomConsole] resolve: no tbl/field/record — returning empty");
       return out;
     }
 
     let field = null;
-    try { field = await tbl.getFieldById(fieldId); } catch (e) { diag.paths.push("getFieldById-err"); field = null; }
+    try { field = await tbl.getFieldById(fieldId); } catch (e) { field = null; }
 
-    // Path A: field.getAttachmentUrls(recordId) — Block SDK 2024+
     if (field && typeof field.getAttachmentUrls === "function") {
       try {
         const arr = await Promise.race([
@@ -1298,151 +1277,19 @@ async function loadAtomCorpus() {
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
         ]);
         if (Array.isArray(arr)) {
-          let n = 0;
           for (let i = 0; i < images.length && i < arr.length; i++) {
             const v = arr[i];
-            const u = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
-            if (u && !out[i]) { out[i] = u; n++; }
+            out[i] = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
           }
-          diag.paths.push("A.getAttachmentUrls:" + n + "/" + arr.length);
-        } else {
-          diag.paths.push("A.getAttachmentUrls:not-array");
         }
-      } catch (e) { diag.paths.push("A.err:" + (e && e.message || e)); }
-    } else {
-      diag.paths.push("A.no-fn");
-    }
-
-    // Path B: field.getTmpUrls([tokens]) — older Block SDK
-    if (out.some(u => !u) && field && typeof field.getTmpUrls === "function" && tokens.length) {
-      try {
-        const arr = await Promise.race([
-          field.getTmpUrls(tokens),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))
-        ]);
-        if (Array.isArray(arr)) {
-          let j = 0, n = 0;
-          for (let i = 0; i < images.length; i++) {
-            if (out[i]) continue;
-            const v = arr[j++];
-            const u = (typeof v === "string") ? v : (v && (v.tmpUrl || v.url || v.tmp_url) || "");
-            if (u) { out[i] = u; n++; }
-          }
-          diag.paths.push("B.getTmpUrls:" + n);
-        } else { diag.paths.push("B.getTmpUrls:not-array"); }
-      } catch (e) { diag.paths.push("B.err:" + (e && e.message || e)); }
-    } else if (out.some(u => !u)) {
-      diag.paths.push("B.no-fn");
-    }
-
-    // Path C: base.getAttachmentUrl(token, fieldId, recordId, tableId) — token-by-token.
-    // Older base-level API; some SDK builds expose only this.
-    if (out.some(u => !u) && base && typeof base.getAttachmentUrl === "function" && tokens.length && tableId) {
-      try {
-        const tasks = [];
-        for (let i = 0; i < images.length; i++) {
-          if (out[i]) { tasks.push(null); continue; }
-          const tk = images[i] && images[i].token;
-          if (!tk) { tasks.push(null); continue; }
-          tasks.push(base.getAttachmentUrl(tk, fieldId, recordId, tableId));
-        }
-        const results = await Promise.race([
-          Promise.all(tasks.map(t => t || Promise.resolve(null))),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
-        ]);
-        let n = 0;
-        for (let i = 0; i < results.length; i++) {
-          if (out[i]) continue;
-          const v = results[i];
-          const u = (typeof v === "string") ? v : (v && (v.url || v.tmpUrl || v.tmp_url) || "");
-          if (u) { out[i] = u; n++; }
-        }
-        diag.paths.push("C.base.getAttachmentUrl:" + n);
-      } catch (e) { diag.paths.push("C.err:" + (e && e.message || e)); }
-    } else if (out.some(u => !u) && !(base && typeof base.getAttachmentUrl === "function")) {
-      diag.paths.push("C.no-fn");
-    }
-
-    // Path D: re-read the cell via SDK to get fresh embedded urls
-    if (out.some(u => !u) && tbl && typeof tbl.getCellValue === "function") {
-      try {
-        const cv = await Promise.race([
-          tbl.getCellValue(fieldId, recordId),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8000))
-        ]);
-        const arr = Array.isArray(cv) ? cv : (cv ? [cv] : []);
-        let n = 0;
-        for (let i = 0; i < images.length && i < arr.length; i++) {
-          if (out[i]) continue;
-          const a = arr[i] || {};
-          const u = a.url || a.tmp_url || a.tmpUrl || "";
-          if (/^https?:\/\//i.test(u)) { out[i] = u; n++; }
-        }
-        diag.paths.push("D.getCellValue:" + n);
-      } catch (e) { diag.paths.push("D.err:" + (e && e.message || e)); }
-    }
-
-    // Path E: embedded url on cell value (in-memory).
-    fillFromEmbedded();
-
-    // Path F: base.batchGetTmpUrl — batch token resolver available in some SDK builds
-    if (out.some(u => !u) && tokens.length) {
-      const missingTokens = [];
-      const missingIdx = [];
-      for (let i = 0; i < images.length; i++) {
-        if (out[i]) continue;
-        const tk = images[i] && images[i].token;
-        if (tk) { missingTokens.push(tk); missingIdx.push(i); }
-      }
-      if (missingTokens.length) {
-        let resolved_f = false;
-        // Try base.batchGetTmpUrl
-        if (base && typeof base.batchGetTmpUrl === "function") {
-          try {
-            const map = await Promise.race([
-              base.batchGetTmpUrl(missingTokens),
-              new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000))
-            ]);
-            let n = 0;
-            if (map && typeof map === "object") {
-              for (let j = 0; j < missingTokens.length; j++) {
-                const u = map[missingTokens[j]] || (map.urls && map.urls[j]) || "";
-                if (u && !out[missingIdx[j]]) { out[missingIdx[j]] = u; n++; }
-              }
-            }
-            if (n) { diag.paths.push("F.batchGetTmpUrl:" + n); resolved_f = true; }
-            else diag.paths.push("F.batchGetTmpUrl:0");
-          } catch (e) { diag.paths.push("F.batch-err:" + (e && e.message || e)); }
-        }
-        // Try window.bitable bridge if available
-        if (!resolved_f && window.bitable && window.bitable.bridge && typeof window.bitable.bridge.call === "function") {
-          try {
-            const resp = await Promise.race([
-              window.bitable.bridge.call("getTemporaryUrls", { file_tokens: missingTokens }),
-              new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000))
-            ]);
-            let n = 0;
-            if (resp && resp.data && resp.data.tmp_urls) {
-              const tmp = resp.data.tmp_urls;
-              for (let j = 0; j < missingTokens.length; j++) {
-                const u = tmp[missingTokens[j]] || (Array.isArray(tmp) && tmp[j]) || "";
-                if (u && !out[missingIdx[j]]) { out[missingIdx[j]] = u; n++; }
-              }
-            }
-            if (n) diag.paths.push("F.bridge:" + n);
-            else diag.paths.push("F.bridge:0");
-          } catch (e) { diag.paths.push("F.bridge-err:" + (e && e.message || e)); }
-        } else if (!resolved_f) {
-          diag.paths.push("F.no-bridge");
-        }
+      } catch (e) {
+        console.warn("[AtomConsole] resolve Path A error:", e && e.message || e);
       }
     }
 
     const filled = out.filter(Boolean).length;
     if (filled < images.length) {
-      console.warn("[AtomConsole] resolveAttachmentUrls partial: scope=" + scope + " rec=" + recordId + " filled=" + filled + "/" + images.length + " paths=[" + diag.paths.join(" | ") + "]");
-    } else if (window.__atomConsoleVerbose) {
-      console.debug("[AtomConsole] resolveAttachmentUrls ok:", diag);
+      console.warn("[AtomConsole] resolve: filled " + filled + "/" + images.length + " for scope=" + scope + " rec=" + recordId);
     }
     return out;
   }
@@ -1454,18 +1301,33 @@ async function loadAtomCorpus() {
   var _resolveCache = window._atomResolveCache;
   function _cacheKey(scope, recordId) { return (scope || "case") + ":" + (recordId || ""); }
 
+  // resolveAttachmentUrls: single SDK call per record, cache full result, slice for caller.
+  // getAttachmentUrls(recordId) ALWAYS resolves ALL tokens on the record in one shot.
+  // So we call it once, cache the full URL array, and let callers map by position.
   function resolveAttachmentUrls(scope, recordId, images, opts) {
     var key = _cacheKey(scope, recordId);
-    // Priority (user actions): never use cache — always fresh.
+    // Priority (user actions like Copy keyframes): bypass cache for fresh resolve.
     if (opts && opts.priority) {
-      return _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images, opts); }, opts);
+      var freshP = _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images, opts); }, opts);
+      // Update cache with fresh result
+      _resolveCache.set(key, freshP);
+      freshP.catch(function () { _resolveCache.delete(key); });
+      return freshP;
     }
     if (_resolveCache.has(key)) {
-      return _resolveCache.get(key);
+      // Cache hit: re-map the cached full-record URLs to the caller's images slice
+      return _resolveCache.get(key).then(function(cachedUrls) {
+        if (!images || !images.length) return cachedUrls;
+        // If caller passes a subset (e.g. first 6 of 47), map from cached full array
+        // by matching tokens positionally
+        if (cachedUrls && cachedUrls.length >= images.length) {
+          return cachedUrls.slice(0, images.length);
+        }
+        return cachedUrls;
+      });
     }
     var p = _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images, opts); }, opts);
     _resolveCache.set(key, p);
-    // On failure, evict so a subsequent retry can re-attempt.
     p.catch(function () { _resolveCache.delete(key); });
     return p;
   }
@@ -3156,25 +3018,16 @@ function PayloadPane(props) {
     if (!hasImages) return;
     setImgState("resolving");
     let urls = [];
-    // Resolve in small batches (4 at a time) to avoid SDK ECONNABORTED on high-count records
+    // Resolve all keyframes in one call (getAttachmentUrls returns positional indices
+    // against the full record, so batching causes index misalignment).
     const KF_LIMIT = 12;
-    const BATCH = 4;
     const kfImages = pendingCase.images.slice(0, KF_LIMIT);
     try {
       if (imageMeta && typeof imageMeta.resolve === "function") {
-        const allUrls = new Array(kfImages.length).fill("");
-        for (let bi = 0; bi < kfImages.length; bi += BATCH) {
-          const batch = kfImages.slice(bi, bi + BATCH);
-          const batchUrls = await imageMeta.resolve("pending", pendingCase.record_id, batch, { priority: true, _totalOnRecord: pendingCase.images.length });
-          if (Array.isArray(batchUrls)) {
-            for (let j = 0; j < batchUrls.length; j++) {
-              if (batchUrls[j]) allUrls[bi + j] = batchUrls[j];
-            }
-          }
-          // Small delay between batches to let SDK connection pool recover
-          if (bi + BATCH < kfImages.length) await new Promise(r => setTimeout(r, 600));
+        const resolved = await imageMeta.resolve("pending", pendingCase.record_id, kfImages, { priority: true });
+        if (Array.isArray(resolved)) {
+          urls = resolved;
         }
-        urls = allUrls;
       }
       if (!Array.isArray(urls) || urls.filter(Boolean).length === 0) {
         urls = kfImages.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
@@ -4401,7 +4254,7 @@ function AtomTagger(props) {
           recordId: pendingCase.record_id,
           scope: "pending",
           resolve: corpus.image_meta && corpus.image_meta.resolve,
-          limit: 6,
+          limit: 12,
           label: "Pending images"
         })
       )
