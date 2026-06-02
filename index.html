@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.4-rationale";
+const PLUGIN_VERSION = "atom-mvp v0.17.5-resolve-fix";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1207,7 +1207,7 @@ async function loadAtomCorpus() {
   // - A 20s defensive watchdog releases the slot if fn() never settles.
   var _resolveQueue = [];
   var _resolveActive = 0;
-  var _RESOLVE_MAX_CONCURRENT = 8;
+  var _RESOLVE_MAX_CONCURRENT = 3;
 
   function _resolveNext() {
     while (_resolveActive < _RESOLVE_MAX_CONCURRENT && _resolveQueue.length > 0) {
@@ -1288,7 +1288,7 @@ async function loadAtomCorpus() {
       try {
         const arr = await Promise.race([
           field.getAttachmentUrls(recordId),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000))
         ]);
         if (Array.isArray(arr)) {
           let n = 0;
@@ -2229,7 +2229,7 @@ function ImagesPane(props) {
     if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
 
     var attemptResolve = function (attempt) {
-      resolve(scope || "case", recordId, images).then(function (urls) {
+      resolve(scope || "case", recordId, images, scope === "pending" ? { priority: true } : undefined).then(function (urls) {
         if (cancelled) return;
         var filledCount = 0;
         if (Array.isArray(urls)) {
@@ -3154,14 +3154,14 @@ function PayloadPane(props) {
     let urls = [];
     try {
       if (imageMeta && typeof imageMeta.resolve === "function") {
-        urls = await imageMeta.resolve("pending", pendingCase.record_id, pendingCase.images, { priority: true });
+        urls = await imageMeta.resolve("pending", pendingCase.record_id, pendingCase.images.slice(0, 12), { priority: true });
       }
       if (!Array.isArray(urls) || urls.length === 0) {
-        urls = pendingCase.images.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
+        urls = pendingCase.images.slice(0, 12).map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
       }
     } catch (e) {
       console.error("[AtomConsole] keyframe resolve failed:", e);
-      urls = pendingCase.images.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
+      urls = pendingCase.images.slice(0, 12).map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
     }
     urls = urls.filter(u => !!u);
     setResolvedImgUrls(urls);
