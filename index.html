@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.9-threshold-total";
+const PLUGIN_VERSION = "atom-mvp v0.17.10-stable-effect";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -2256,9 +2256,9 @@ function ImagesPane(props) {
         // (SDK might not be ready on initial mount)
         if (filledCount === 0 && attempt === 1 && images.length > 0) {
           console.warn("[AtomConsole] ImagesPane: 0 urls on attempt 1 (scope=" + scope + " rec=" + recordId + "), retrying in 3s…");
-          // Clear cache so retry goes through SDK again
+          // Invalidate cache so retry goes through SDK again
+          if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
           // IMPORTANT: flip done=true immediately so UI doesn't stay "loading..."
-          // The retry will update state later if it succeeds.
           clearTimeout(safetyTimer);
           setDone(true);
           setTimeout(function () {
@@ -2287,7 +2287,7 @@ function ImagesPane(props) {
     };
     attemptResolve(1);
     return () => { cancelled = true; clearTimeout(safetyTimer); };
-  }, [images, recordId, scope, resolve]);
+  }, [recordId, scope]);  // NOTE: images ref changes on every render; use recordId as stable key
 
   if (!images || !images.length) {
     return e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
