@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.3-ux";
+const PLUGIN_VERSION = "atom-mvp v0.17.4-rationale";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1689,6 +1689,28 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     if (rids.length && fId) {
       const linkedTableId = (idx.linkTableIds && idx.linkTableIds[fId]) || "";
       fields[fId] = { recordIds: rids, tableId: linkedTableId };
+    }
+  }
+
+  // Linked precedents: resolve applicable_precedent_ids (case_id strings)
+  // to Precedents-table record_ids for a DuplexLink field.
+  if (opts.applicablePrecedentIds && opts.applicablePrecedentIds.length && corpus.cases) {
+    const _caseIdToRid = {};
+    for (const c of corpus.cases) {
+      if (c.case_id && c.record_id) _caseIdToRid[c.case_id] = c.record_id;
+      if (c.source_video_id && c.record_id) _caseIdToRid[c.source_video_id] = c.record_id;
+    }
+    const _precRids = opts.applicablePrecedentIds
+      .map(function(cid) { return _caseIdToRid[cid]; })
+      .filter(Boolean);
+    const _lpFieldId = fid("linked_precedents");
+    if (_precRids.length && _lpFieldId) {
+      const _lpLinkedTableId = (idx.linkTableIds && idx.linkTableIds[_lpFieldId]) || "";
+      fields[_lpFieldId] = { recordIds: _precRids, tableId: _lpLinkedTableId };
+      console.log("[AtomConsole.save] linked_precedents: " + _precRids.length + " record(s) linked");
+    } else if (_precRids.length && !_lpFieldId) {
+      console.warn("[AtomConsole.save] applicable_precedent_ids resolved " + _precRids.length +
+        " rids but 'linked_precedents' field not found in Precedents table. Add the field to enable linking.");
     }
   }
 
@@ -3862,12 +3884,13 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       if (v === "APPROVE") setDecision("pass");
       else setDecision("flag");
       setPolicyTitle(verdictData.final_policy_title || pendingCase.policy_title || "");
-      // Preload rationale with the [VERDICT] section of `reason` when present,
-      // so the textarea isn't truncated mid-[VISUAL ANALYSIS]. Fall back to the
-      // first 500 chars of the raw reason when no sections are detected, and
-      // finally to the empty string.
+      // Preload rationale: prefer skill-generated `rationale_for_precedent`
+      // (concise, human-readable, max ~1200 chars, focused on decisive signals).
+      // Fall back to [VERDICT] section of `reason` for older skill versions.
       let _preloadRationale = "";
-      if (verdictData.reason) {
+      if (verdictData.rationale_for_precedent) {
+        _preloadRationale = verdictData.rationale_for_precedent;
+      } else if (verdictData.reason) {
         const _secs = _splitReason(verdictData.reason);
         if (_secs && _secs.VERDICT) {
           _preloadRationale = _secs.VERDICT;
@@ -3933,7 +3956,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         rationale: rationale,
         analyst: analyst,
         overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
-        _pendingRecordId: pendingCase.record_id
+        _pendingRecordId: pendingCase.record_id,
+        applicablePrecedentIds: verdictData && verdictData.applicable_precedent_ids ? verdictData.applicable_precedent_ids : []
       });
       const _drops = (_res && _res.droppedOptions) || [];
       if (_drops.length) {
