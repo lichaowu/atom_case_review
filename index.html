@@ -53,6 +53,11 @@
   .case-meta{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12px}
   .case-meta dt{color:var(--muted);font-weight:500}
   .case-meta dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+  .user-context{display:flex;flex-direction:column;gap:2px}
+  .user-nickname{font-weight:600;font-size:12px;line-height:1.4}
+  .user-bio{color:var(--muted);font-size:11px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .case-images-section{margin-top:8px;padding-top:8px;border-top:1px solid var(--hairline)}
+  .case-images-label{color:var(--muted);font-weight:500;font-size:12px;margin-bottom:6px}
   .text-block{background:var(--surface-soft);border:1px solid var(--hairline);border-radius:6px;padding:8px;margin:4px 0;white-space:pre-wrap;font-size:12px;max-height:120px;overflow:auto}
   .dim-row{display:grid;grid-template-columns:32px 1fr;gap:10px;align-items:start;padding:8px 0;border-top:1px solid var(--hairline)}
   .dim-row:first-child{border-top:none}
@@ -349,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.2-responsive";
+const PLUGIN_VERSION = "atom-mvp v0.17.3-ux";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4326,19 +4331,14 @@ function AtomTagger(props) {
       ),
       pendingCase && e("dl", { className: "case-meta" },
         e("dt", null, "item_id"),        e("dd", null, pendingCase.source_video_id || "—"),
-        e("dt", null, "issue / title"),  e("dd", null, (pendingCase.issue || "—") + " · " + (pendingCase.policy_title || "—")),
+        (pendingCase.issue || pendingCase.policy_title) && e("dt", null, "issue / title"),
+        (pendingCase.issue || pendingCase.policy_title) && e("dd", null, [pendingCase.issue, pendingCase.policy_title].filter(Boolean).join(" · ") || "—"),
         pendingCase.user_nickname && e("dt", null, "user"),
-        pendingCase.user_nickname && e("dd", null, pendingCase.user_nickname + (pendingCase.user_bio ? " — " + pendingCase.user_bio.slice(0, 80) : "")),
-        pendingCase.images && pendingCase.images.length > 0 && e("dt", null, "images"),
-        pendingCase.images && pendingCase.images.length > 0 && e("dd", null,
-          e(ImagesPane, {
-            images: pendingCase.images,
-            recordId: pendingCase.record_id,
-            scope: "pending",
-            resolve: corpus.image_meta && corpus.image_meta.resolve,
-            limit: 12,
-            label: "Pending images"
-          })
+        pendingCase.user_nickname && e("dd", null,
+          e("div", { className: "user-context" },
+            e("span", { className: "user-nickname" }, pendingCase.user_nickname),
+            pendingCase.user_bio && e("span", { className: "user-bio" }, pendingCase.user_bio.slice(0, 120))
+          )
         ),
         pendingCase.visual_summary && e("dt", null, "visual_summary"),
         pendingCase.visual_summary && e("dd", null, e("div", { className: "text-block" }, pendingCase.visual_summary)),
@@ -4348,6 +4348,17 @@ function AtomTagger(props) {
         pendingCase.asr_text && e("dd", null, e("div", { className: "text-block" }, pendingCase.asr_text)),
         pendingCase.ocr_text && e("dt", null, "ocr"),
         pendingCase.ocr_text && e("dd", null, e("div", { className: "text-block" }, pendingCase.ocr_text)),
+      ),
+      pendingCase && pendingCase.images && pendingCase.images.length > 0 && e("div", { className: "case-images-section" },
+        e("div", { className: "case-images-label" }, "images"),
+        e(ImagesPane, {
+          images: pendingCase.images,
+          recordId: pendingCase.record_id,
+          scope: "pending",
+          resolve: corpus.image_meta && corpus.image_meta.resolve,
+          limit: 12,
+          label: "Pending images"
+        })
       )
     ),
 
