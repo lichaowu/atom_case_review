@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.10-stable-effect";
+const PLUGIN_VERSION = "atom-mvp v0.17.11-no-threshold";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1255,19 +1255,12 @@ async function loadAtomCorpus() {
   async function _doResolveAttachmentUrls(scope, recordId, images, opts) {
     if (!images || !images.length) return [];
 
-    // === THRESHOLD GUARD (v0.17.8) ===
-    // field.getAttachmentUrls resolves ALL tokens on the record at once.
-    // With >8 attachments the SDK internal HTTP pool floods -> ECONNABORTED.
-    // For high-count records, use embedded urls only (no SDK calls).
-    // NOTE: totalOnRecord is the FULL count on the record, not the sliced display count.
-    var totalOnRecord = (opts && opts._totalOnRecord) || images.length;
-    if (totalOnRecord > 8) {
-      return images.map(function(im) {
-        var u = im && (im.url || im.tmp_url || im.tmpUrl) || "";
-        return /^https?:\/\//i.test(u) ? u : "";
-      });
-    }
-    // === END THRESHOLD GUARD ===
+    // === THRESHOLD NOTE (v0.17.11) ===
+    // No hard skip — let all records attempt SDK resolution.
+    // The 15s Path A timeout + stable useEffect (no infinite loop) + per-record cache
+    // prevent SDK flooding. Embedded URLs are always empty in this environment,
+    // so SDK resolution is the ONLY way to get working image URLs.
+    // === END THRESHOLD NOTE ===
 
     const tbl     = scope === "case" ? casesTbl   : pendingTbl;
     const fieldId = scope === "case" ? caseImgFieldId : pendingImgFieldId;
