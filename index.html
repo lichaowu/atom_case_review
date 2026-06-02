@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.5-resolve-fix";
+const PLUGIN_VERSION = "atom-mvp v0.17.6-skip-bulk-resolve";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1253,8 +1253,15 @@ async function loadAtomCorpus() {
     });
   }
 
-  async function _doResolveAttachmentUrls(scope, recordId, images) {
+  // Session-level kill switch: if first resolve returns 0 urls, skip future attempts.
+  var _resolveDisabled = false;
+
+  async function _doResolveAttachmentUrls(scope, recordId, images, totalOnRecord) {
     if (!images || !images.length) return [];
+    if (_resolveDisabled) {
+      console.debug("[AtomConsole] resolve skipped (disabled after prior total failure)");
+      return images.map(function() { return ""; });
+    }
     const tbl     = scope === "case" ? casesTbl   : pendingTbl;
     const fieldId = scope === "case" ? caseImgFieldId : pendingImgFieldId;
     const tableId = scope === "case" ? caseTableId    : pendingTableId;
@@ -1284,7 +1291,13 @@ async function loadAtomCorpus() {
     try { field = await tbl.getFieldById(fieldId); } catch (e) { diag.paths.push("getFieldById-err"); field = null; }
 
     // Path A: field.getAttachmentUrls(recordId) — Block SDK 2024+
-    if (field && typeof field.getAttachmentUrls === "function") {
+    // SKIP when record has >10 total attachments — SDK floods connection pool with ECONNABORTED.
+    var _skipBulk = (totalOnRecord || images.length) > 10;
+    if (_skipBulk) {
+      fillFromEmbedded();
+      diag.paths.push("skip-bulk(" + (totalOnRecord || images.length) + ")");
+    }
+    if (!_skipBulk && field && typeof field.getAttachmentUrls === "function") {
       try {
         const arr = await Promise.race([
           field.getAttachmentUrls(recordId),
@@ -1360,7 +1373,8 @@ async function loadAtomCorpus() {
     }
 
     // Path D: re-read the cell via SDK to get fresh embedded urls
-    if (out.some(u => !u) && tbl && typeof tbl.getCellValue === "function") {
+    // SKIP for high-count records — getCellValue on attachment fields also triggers bulk internal fetches.
+    if (!_skipBulk && out.some(u => !u) && tbl && typeof tbl.getCellValue === "function") {
       try {
         const cv = await Promise.race([
           tbl.getCellValue(fieldId, recordId),
@@ -1435,7 +1449,10 @@ async function loadAtomCorpus() {
     }
 
     const filled = out.filter(Boolean).length;
-    if (filled < images.length) {
+    if (filled === 0 && images.length > 0 && !_skipBulk) {
+      _resolveDisabled = true;
+      console.warn("[AtomConsole] resolveAttachmentUrls TOTAL FAILURE - disabling for session. scope=" + scope + " rec=" + recordId + " paths=[" + diag.paths.join(" | ") + "]");
+    } else if (filled < images.length) {
       console.warn("[AtomConsole] resolveAttachmentUrls partial: scope=" + scope + " rec=" + recordId + " filled=" + filled + "/" + images.length + " paths=[" + diag.paths.join(" | ") + "]");
     } else if (window.__atomConsoleVerbose) {
       console.debug("[AtomConsole] resolveAttachmentUrls ok:", diag);
@@ -1450,16 +1467,16 @@ async function loadAtomCorpus() {
   var _resolveCache = window._atomResolveCache;
   function _cacheKey(scope, recordId) { return (scope || "case") + ":" + (recordId || ""); }
 
-  function resolveAttachmentUrls(scope, recordId, images, opts) {
+  function resolveAttachmentUrls(scope, recordId, images, opts, totalOnRecord) {
     var key = _cacheKey(scope, recordId);
     // Priority (user actions): never use cache — always fresh.
     if (opts && opts.priority) {
-      return _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images); }, opts);
+      return _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images, totalOnRecord); }, opts);
     }
     if (_resolveCache.has(key)) {
       return _resolveCache.get(key);
     }
-    var p = _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images); }, opts);
+    var p = _enqueueResolve(function () { return _doResolveAttachmentUrls(scope, recordId, images, totalOnRecord); }, opts);
     _resolveCache.set(key, p);
     // On failure, evict so a subsequent retry can re-attempt.
     p.catch(function () { _resolveCache.delete(key); });
@@ -1981,6 +1998,7 @@ function PrecedentDetailModal(props) {
             recordId: r.record_id,
             scope: "case",
             resolve: imageMeta && imageMeta.resolve,
+            limit: 6,
             label: "precedent images"
           })),
 
@@ -2218,18 +2236,18 @@ function ImagesPane(props) {
       if (!cancelled) { setResolved(urls); setDone(true); }
       return;
     }
-    // Safety timeout: never stay in "loading…" forever — flip done after 18s.
+    // Safety timeout: never stay in "loading…" forever — flip done after 5s.
     var safetyTimer = setTimeout(function () {
       if (cancelled) return;
-      setError("resolve timeout (18s)");
+      setError("resolve timeout (5s)");
       setDone(true);
-    }, 18000);
+    }, 5000);
     // Invalidate cache for this record before resolving (ensures fresh SDK calls)
     var cacheKey = (scope || "case") + ":" + (recordId || "");
     if (window._atomResolveCache && window._atomResolveCache.has(cacheKey)) window._atomResolveCache.delete(cacheKey);
 
     var attemptResolve = function (attempt) {
-      resolve(scope || "case", recordId, images, scope === "pending" ? { priority: true } : undefined).then(function (urls) {
+      resolve(scope || "case", recordId, images, scope === "pending" ? { priority: true } : undefined, rawImages ? rawImages.length : images.length).then(function (urls) {
         if (cancelled) return;
         var filledCount = 0;
         if (Array.isArray(urls)) {
@@ -3152,16 +3170,32 @@ function PayloadPane(props) {
     if (!hasImages) return;
     setImgState("resolving");
     let urls = [];
+    // Resolve in small batches (4 at a time) to avoid SDK ECONNABORTED on high-count records
+    const KF_LIMIT = 12;
+    const BATCH = 4;
+    const kfImages = pendingCase.images.slice(0, KF_LIMIT);
     try {
       if (imageMeta && typeof imageMeta.resolve === "function") {
-        urls = await imageMeta.resolve("pending", pendingCase.record_id, pendingCase.images.slice(0, 12), { priority: true });
+        const allUrls = new Array(kfImages.length).fill("");
+        for (let bi = 0; bi < kfImages.length; bi += BATCH) {
+          const batch = kfImages.slice(bi, bi + BATCH);
+          const batchUrls = await imageMeta.resolve("pending", pendingCase.record_id, batch, { priority: true }, pendingCase.images.length);
+          if (Array.isArray(batchUrls)) {
+            for (let j = 0; j < batchUrls.length; j++) {
+              if (batchUrls[j]) allUrls[bi + j] = batchUrls[j];
+            }
+          }
+          // Small delay between batches to let SDK connection pool recover
+          if (bi + BATCH < kfImages.length) await new Promise(r => setTimeout(r, 600));
+        }
+        urls = allUrls;
       }
-      if (!Array.isArray(urls) || urls.length === 0) {
-        urls = pendingCase.images.slice(0, 12).map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
+      if (!Array.isArray(urls) || urls.filter(Boolean).length === 0) {
+        urls = kfImages.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
       }
     } catch (e) {
       console.error("[AtomConsole] keyframe resolve failed:", e);
-      urls = pendingCase.images.slice(0, 12).map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
+      urls = kfImages.map(im => (im && (im.url || im.tmp_url || im.tmpUrl)) || "");
     }
     urls = urls.filter(u => !!u);
     setResolvedImgUrls(urls);
@@ -4381,7 +4415,7 @@ function AtomTagger(props) {
           recordId: pendingCase.record_id,
           scope: "pending",
           resolve: corpus.image_meta && corpus.image_meta.resolve,
-          limit: 12,
+          limit: 6,
           label: "Pending images"
         })
       )
