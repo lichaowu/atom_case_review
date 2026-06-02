@@ -4324,8 +4324,9 @@ function AtomTagger(props) {
             "— pick a pending case (" + filteredPending.length +
             " of " + corpus.pending.length + ") —"),
           ...filteredPending.map(p => e("option", { key: p.record_id, value: p.record_id },
-            (p.issue || "?") + " · " + (p.policy_title || "(untitled)") + " · " + p.source_video_id +
-            (p.visual_summary ? " · " + p.visual_summary.slice(0, 60).replace(/\s+/g," ") : "")
+            p.source_video_id +
+            (p.visual_summary ? " · " + p.visual_summary.slice(0, 80).replace(/\s+/g," ") : "") +
+            (p.issue ? " [" + p.issue + "]" : "")
           ))
         )
       ),
