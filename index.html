@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.16-keyframes-from-cache";
+const PLUGIN_VERSION = "atom-mvp v0.17.17-ux-fixes";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -2048,12 +2048,14 @@ function ImageZoomOverlay(props) {
 // Falls back to the embedded url if available.
 function ImagesPane(props) {
   const { images: rawImages, recordId, scope, resolve, label, limit } = props;
+  const [expanded, setExpanded] = React.useState(false);
   // limit > 0: only render & resolve the first N images (list-view optimization)
-  const images = (limit && limit > 0 && rawImages && rawImages.length > limit)
-    ? rawImages.slice(0, limit)
+  const effectiveLimit = expanded ? null : limit;
+  const images = (effectiveLimit && effectiveLimit > 0 && rawImages && rawImages.length > effectiveLimit)
+    ? rawImages.slice(0, effectiveLimit)
     : rawImages;
-  const hiddenCount = (limit && limit > 0 && rawImages && rawImages.length > limit)
-    ? rawImages.length - limit
+  const hiddenCount = (effectiveLimit && effectiveLimit > 0 && rawImages && rawImages.length > effectiveLimit)
+    ? rawImages.length - effectiveLimit
     : 0;
   // Initialize with embedded urls from the cell value — shows immediately if usable.
   const [zoomSrc, setZoomSrc] = React.useState(null);
@@ -2141,7 +2143,7 @@ function ImagesPane(props) {
     };
     attemptResolve(1);
     return () => { cancelled = true; clearTimeout(safetyTimer); };
-  }, [recordId, scope]);  // NOTE: images ref changes on every render; use recordId as stable key
+  }, [recordId, scope, expanded]);  // stable deps: recordId+scope identify the record; expanded triggers re-resolve from cache
 
   if (!images || !images.length) {
     return e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
@@ -2199,7 +2201,9 @@ function ImagesPane(props) {
                borderRadius: 4, display: "flex", alignItems: "center",
                justifyContent: "center", flexDirection: "column",
                background: "var(--surface-soft)", color: "var(--muted)",
-               fontSize: 11, lineHeight: 1.3, padding: 4, textAlign: "center" }
+               fontSize: 11, lineHeight: 1.3, padding: 4, textAlign: "center",
+               cursor: "pointer" },
+      onClick: function() { setExpanded(true); }
     }, e("div", { style: { fontSize: 18, fontWeight: 500, color: "var(--body-strong)" }},
         "+" + hiddenCount),
        e("div", null, "more"),
@@ -3068,7 +3072,7 @@ function PayloadPane(props) {
                   : imgState === "ok"     ? "✓ composite copied — paste into chat"
                   : imgState === "newtab" ? "↗ opened in tab — right-click → Copy image"
                   : imgState === "err"    ? "✗ failed"
-                  : "2. Copy keyframes (" + imgCount + ")";
+                  : "2. Copy keyframes (" + Math.min(12, imgCount) + ")";
 
   return e("div", { className: "payload-card" },
     e("div", { className: "payload-head" },
@@ -3077,7 +3081,7 @@ function PayloadPane(props) {
         e("div", { className: "payload-meta" },
           payload.schema, " · ", payload.version, " · ", sizeKb, " KB · ",
           precCount, " precedent", precCount===1?"":"s",
-          hasImages ? " · " + imgCount + " keyframe" + (imgCount===1?"":"s") : ""
+          hasImages ? " · " + Math.min(12, imgCount) + " keyframe" + (Math.min(12, imgCount)===1?"":"s") : ""
         )
       ),
       e("div", { className: "payload-actions" },
