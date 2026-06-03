@@ -354,7 +354,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.15-minimal-resolver";
+const PLUGIN_VERSION = "atom-mvp v0.17.16-keyframes-from-cache";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1200,9 +1200,8 @@ async function loadAtomCorpus() {
   // Returns array of URL strings aligned to the input `images` array (same length, "" on failure).
   // Concurrency limiter for attachment URL resolution — prevents SDK overload
   // when many ImagesPane components mount simultaneously (e.g. 1 pending + 8 precedents).
-  // - Background thumbnail loads go through the queue (max 3 in flight).
-  // - User-initiated actions (Copy keyframes, etc.) use { priority: true } to bypass
-  //   the queue entirely, so the user is never blocked behind background work.
+  // - All loads go through the queue (max 2 in flight).
+  // - Per-record cache means each record only calls SDK once; subsequent reads are instant.
   // - A 20s defensive watchdog releases the slot if fn() never settles.
   var _resolveQueue = [];
   var _resolveActive = 0;
@@ -3018,13 +3017,13 @@ function PayloadPane(props) {
     if (!hasImages) return;
     setImgState("resolving");
     let urls = [];
-    // Resolve all keyframes in one call (getAttachmentUrls returns positional indices
-    // against the full record, so batching causes index misalignment).
     const KF_LIMIT = 12;
     const kfImages = pendingCase.images.slice(0, KF_LIMIT);
     try {
       if (imageMeta && typeof imageMeta.resolve === "function") {
-        const resolved = await imageMeta.resolve("pending", pendingCase.record_id, kfImages, { priority: true });
+        // Use cache (no priority) — images are already resolved for display.
+        // Only if cache miss, this triggers a fresh SDK call through the queue.
+        const resolved = await imageMeta.resolve("pending", pendingCase.record_id, kfImages);
         if (Array.isArray(resolved)) {
           urls = resolved;
         }
