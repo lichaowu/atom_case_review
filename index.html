@@ -559,6 +559,207 @@ const DIM_NAMES = {
 
 <script>
 // =============================================================================
+// stability.js (inlined) — Structural Stability Score v3.1
+// Deterministic confidence signal from engine internals. Zero LLM cost.
+// Contract per docs/defensibility-framework.md §4.1
+//   computeStability(engineResult, caseAtoms, claims) -> StabilityResult
+// =============================================================================
+(function (root) {
+  "use strict";
+  var SEVERITY = { VIOLATION: 4, NOT_RECOMMEND: 3, NOT_FOR_FEED: 2, APPROVE: 1 };
+
+  function isEnforcement(outcome) {
+    return (SEVERITY[outcome] || 0) >= 2;
+  }
+
+  function computeStability(engineResult, caseAtoms, claims) {
+    if (!engineResult) return null;
+
+    var fired = engineResult.gate_hits || [];
+    var suppressed = engineResult.suppressed || [];
+    var verdict = engineResult.verdict || "NO_CLAIM_FIRED";
+
+    // --- NO_CLAIM_FIRED handling ---
+    if (verdict === "NO_CLAIM_FIRED" || (verdict === "APPROVE" && fired.length === 0)) {
+      if (fired.length === 0 && suppressed.length === 0) {
+        return { score: 0.90, band: "L1", reason: "no_claims_in_scope", components: {} };
+      }
+      if (fired.length === 0 && suppressed.length > 0) {
+        var maxSev = 0;
+        var hasExcludedMod = false;
+        for (var si = 0; si < suppressed.length; si++) {
+          var sv = SEVERITY[suppressed[si].outcome_base] || 0;
+          if (sv > maxSev) maxSev = sv;
+          if (suppressed[si].suppress_reason === "modifier_excluded") hasExcludedMod = true;
+        }
+        var score;
+        if (maxSev >= 4 && hasExcludedMod) {
+          score = 0.40;
+        } else if (maxSev >= 3) {
+          score = 0.48;
+        } else {
+          score = 0.55;
+        }
+        var band = score >= 0.70 ? "L1" : (score >= 0.42 ? "L2" : "L3");
+        return { score: score, band: band, reason: "all_suppressed",
+          components: { max_suppressed_severity: maxSev, n_suppressed: suppressed.length } };
+      }
+      return { score: 0.55, band: "L2", reason: "no_claims_survived", components: {} };
+    }
+
+    if (fired.length === 0) {
+      return { score: 0.55, band: "L2", reason: "empty_fired", components: {} };
+    }
+
+    // --- ENFORCEMENT CONSENSUS MARGIN ---
+    var hasEnforce = false, hasApprove = false;
+    for (var i = 0; i < fired.length; i++) {
+      var o = fired[i].outcome_after_lifts;
+      if (isEnforcement(o)) hasEnforce = true;
+      else hasApprove = true;
+    }
+    var margin;
+    if (!hasApprove || !hasEnforce) {
+      margin = 1.0;
+    } else {
+      margin = 0.0;
+    }
+
+    // --- CONFLICT PRESSURE ---
+    var topOutcome = fired[0].outcome_after_lifts;
+    var topIsEnforce = isEnforcement(topOutcome);
+    var opposingCount = 0;
+    for (var ci = 1; ci < fired.length; ci++) {
+      if (isEnforcement(fired[ci].outcome_after_lifts) !== topIsEnforce) {
+        opposingCount++;
+      }
+    }
+    var conflict = opposingCount > 0 ? Math.min(1.0, opposingCount / 2.0) : 0.0;
+
+    // --- SPECIFICITY RATIO ---
+    var maxSpec = 4;
+    var topSpec = fired[0].specificity || 0;
+    var spec = Math.min(1.0, topSpec / maxSpec);
+
+    // --- LIFT FRAGILITY (boundary-aware + redundancy + protection) ---
+    var topClaim = fired[0];
+    var liftFragility = 0.0;
+
+    if (topClaim.lift) {
+      var baseOutcome = topClaim.outcome_base;
+      var liftedOutcome = topClaim.outcome_after_lifts;
+      var crossesBoundary = isEnforcement(baseOutcome) !== isEnforcement(liftedOutcome);
+
+      var baseFragility = crossesBoundary ? 1.0 : 0.4;
+
+      // Redundancy discount: count satisfied lift groups
+      var satisfiedGroups = 1;
+      if (claims && caseAtoms) {
+        var M = caseAtoms.M || [];
+        var claimDef = null;
+        for (var cd = 0; cd < claims.length; cd++) {
+          if (claims[cd].claim_id === topClaim.claim_id) { claimDef = claims[cd]; break; }
+        }
+        if (claimDef) {
+          if (topClaim.lift.indexOf("modifier") === 0) {
+            var dnf = claimDef.modifiers_lift_dnf || [];
+            satisfiedGroups = 0;
+            for (var gi = 0; gi < dnf.length; gi++) {
+              var grp = dnf[gi];
+              var allIn = true;
+              for (var ai = 0; ai < grp.length; ai++) {
+                if (M.indexOf(grp[ai]) < 0) { allIn = false; break; }
+              }
+              if (allIn) satisfiedGroups++;
+            }
+            if (satisfiedGroups < 1) satisfiedGroups = 1;
+          }
+          if (topClaim.lift.indexOf("exception:") === 0) {
+            var X = caseAtoms.X || [];
+            var exReq = claimDef.exceptions_required || [];
+            satisfiedGroups = 0;
+            for (var xi = 0; xi < exReq.length; xi++) {
+              if (X.indexOf(exReq[xi]) >= 0) satisfiedGroups++;
+            }
+            if (satisfiedGroups < 1) satisfiedGroups = 1;
+          }
+        }
+      }
+      var redundancyDiscount = 1.0 / (1.0 + 0.7 * (satisfiedGroups - 1));
+
+      // Protection check: non-lifted claim supporting same verdict (atom-independent)
+      var protectionDiscount = 1.0;
+      for (var pi = 1; pi < fired.length; pi++) {
+        var pc = fired[pi];
+        if (!pc.lift && pc.outcome_after_lifts === liftedOutcome) {
+          var isIndependent = true;
+          if (topClaim.lift.indexOf("exception:") === 0 && claimDef) {
+            var protClaimDef = null;
+            for (var pcd = 0; pcd < claims.length; pcd++) {
+              if (claims[pcd].claim_id === pc.claim_id) { protClaimDef = claims[pcd]; break; }
+            }
+            if (protClaimDef && protClaimDef.requires_exception_context) {
+              isIndependent = false;
+            }
+          }
+          if (isIndependent) {
+            protectionDiscount = 0.3;
+            break;
+          }
+        }
+      }
+
+      liftFragility = baseFragility * redundancyDiscount * protectionDiscount;
+    }
+
+    // --- SUPPRESSION PROXIMITY ---
+    var suppProx = 0.0;
+    if (suppressed.length > 0) {
+      var currentVerdictSev = SEVERITY[verdict] || 0;
+      for (var spi = 0; spi < suppressed.length; spi++) {
+        var sSev = SEVERITY[suppressed[spi].outcome_base] || 0;
+        if (sSev > currentVerdictSev) {
+          if (suppressed[spi].suppress_reason === "modifier_excluded") {
+            suppProx = Math.max(suppProx, 0.6);
+          } else {
+            suppProx = Math.max(suppProx, 0.25);
+          }
+        }
+      }
+    }
+
+    // --- CLEAN VERDICT BONUS ---
+    var isClean = (liftFragility === 0.0 && conflict === 0.0 && suppProx === 0.0);
+    var cleanBonus = isClean ? 0.15 : 0.0;
+
+    // --- FINAL SCORE ---
+    var finalScore = (0.25 * margin + 0.15 * spec + 0.20 * (1.0 - conflict) + cleanBonus)
+                   - (0.20 * liftFragility) - (0.10 * suppProx);
+    finalScore = Math.max(0.0, Math.min(1.0, finalScore));
+
+    var finalBand = finalScore >= 0.70 ? "L1" : (finalScore >= 0.42 ? "L2" : "L3");
+
+    return {
+      score: Math.round(finalScore * 1000) / 1000,
+      band: finalBand,
+      reason: isClean ? "clean_verdict" : (topClaim.lift ? "lift_present" : "standard"),
+      components: {
+        enforcement_consensus_margin: margin,
+        specificity_ratio: Math.round(spec * 1000) / 1000,
+        conflict_pressure: Math.round(conflict * 1000) / 1000,
+        lift_fragility: Math.round(liftFragility * 1000) / 1000,
+        suppression_proximity: Math.round(suppProx * 1000) / 1000,
+        clean_bonus: cleanBonus
+      }
+    };
+  }
+
+  root.computeStability = computeStability;
+})(window);
+</script>
+
+<script>
+// =============================================================================
 // RETRIEVER (Phase 4.5) — Dual-channel hybrid
 // Channels:
 //   visual = BM25(visual_summary)               + AtomJaccard
@@ -1489,6 +1690,15 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     setTextField("override_tag", opts.overrideTag);
   }
 
+  // Structural Stability Score (Phase A — defensibility framework)
+  if (opts.stabilityScore != null) {
+    // Number field: stability_score (0-1 float)
+    var _ssFieldId = fid("stability_score");
+    if (_ssFieldId) fields[_ssFieldId] = opts.stabilityScore;
+    // SingleSelect field: stability_band (L1/L2/L3)
+    if (opts.stabilityBand) setSmartField("stability_band", opts.stabilityBand);
+  }
+
   // Copy keyframe attachments from pending case (same base, tokens reusable)
   // v0.16.10: read attachment cell directly from the source row so we
   // preserve the SDK-native File handles. The normalized pendingCase.images
@@ -1645,6 +1855,114 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   return { recordId: result, droppedOptions: _dropped };
 }
 window.__saveConfirmedRecord = saveConfirmedRecord;
+
+// =============================================================================
+// WRITE-BACK: Update existing Precedent record (Precedent Review mode)
+// =============================================================================
+async function updateExistingRecord(corpus, precedentCase, tags, opts) {
+  const tbl = corpus._tables && corpus._tables.casesTbl;
+  if (!tbl) throw new Error("Precedents table not loaded.");
+  if (!tbl.setRecord) throw new Error("Bitable SDK table.setRecord not available.");
+  const idx = corpus._fieldIdx && corpus._fieldIdx.casesIdx;
+  if (!idx || !idx.byName) throw new Error("Precedents field index not available.");
+
+  const recordId = precedentCase.record_id;
+  if (!recordId) throw new Error("No record_id on precedent.");
+
+  const atomsByKey = {};
+  for (const a of (corpus._atomLookup && corpus._atomLookup.atoms || [])) {
+    atomsByKey[a.atom_key] = a.record_id;
+  }
+  function keysToRids(keys) {
+    return (keys || []).map(k => atomsByKey[k]).filter(Boolean);
+  }
+  function fid(name) { return idx.byName[name] || null; }
+
+  const FT_TEXT = 1, FT_SELECT = 3, FT_MULTI = 4, FT_USER = 11, FT_URL = 15;
+  const fields = {};
+
+  function setSmartField(name, val) {
+    const id = fid(name);
+    if (!id || val === undefined || val === null || val === "") return;
+    const t = (idx.types && idx.types[id]) || null;
+    if (t === FT_USER) {
+      const arr = Array.isArray(val) ? val : [val];
+      fields[id] = arr.filter(Boolean).map(function(v) {
+        if (typeof v === "object" && v.id) return v;
+        return { id: String(v), type: "user" };
+      });
+    } else if (t === FT_SELECT) {
+      const _opts = (idx.selectOptions && idx.selectOptions[id]) || null;
+      const _name = String(val);
+      const _optId = _opts && (_opts.byName[_name] || _opts.byName[_name.toLowerCase()]);
+      if (_optId) { fields[id] = { id: _optId, text: _name }; }
+      else { fields[id] = { text: _name }; }
+    } else if (t === FT_MULTI) {
+      const _opts = (idx.selectOptions && idx.selectOptions[id]) || null;
+      const _arr = Array.isArray(val) ? val : [val];
+      fields[id] = _arr.filter(Boolean).map(function(v) {
+        const _vname = (typeof v === "object" && v !== null) ? String(v.text || v.name || v.id || "") : String(v);
+        const _vid = _opts && (_opts.byName[_vname] || _opts.byName[_vname.toLowerCase()]);
+        if (_vid) return { id: _vid, text: _vname };
+        return { text: _vname };
+      });
+    } else if (t === FT_URL) {
+      fields[id] = { link: String(val), text: String(val) };
+    } else {
+      fields[id] = [{ type: "text", text: String(val) }];
+    }
+  }
+  function setTextField(name, val) {
+    const id = fid(name);
+    if (id && val) fields[id] = [{ type: "text", text: String(val) }];
+  }
+  function _normDecision(d) {
+    if (!d) return "FLAG";
+    var s = String(d).trim().toUpperCase();
+    if (s === "NOT_RECOMMEND" || s === "NOT_FOR_FEED" || s === "ESCALATE") return "FLAG";
+    return s;
+  }
+  function _splitMulti(v) {
+    if (v == null || v === "") return [];
+    if (Array.isArray(v)) return v.map(String).map(function(s){return s.trim();}).filter(Boolean);
+    return String(v).split(/[,;]\s*|\s{2,}/).map(function(s){return s.trim();}).filter(Boolean);
+  }
+
+  setSmartField("decision", _normDecision(opts.decision));
+  if (opts.decision && opts.decision.toLowerCase() !== "pass") {
+    setSmartField("policy_title", _splitMulti(opts.policyTitle || precedentCase.policy_title || ""));
+  }
+  setTextField("rationale", opts.rationale || "");
+  setSmartField("status", "Reviewed");
+  if (opts.reviewedBy) { setSmartField("reviewed_by", opts.reviewedBy); }
+  if (opts.overrideTag) { setTextField("override_tag", opts.overrideTag); }
+
+  if (opts.stabilityScore != null) {
+    var _ssFieldId = fid("stability_score");
+    if (_ssFieldId) fields[_ssFieldId] = opts.stabilityScore;
+    if (opts.stabilityBand) setSmartField("stability_band", opts.stabilityBand);
+  }
+
+  const dimFieldMap = {
+    C: "content_atoms", S: "subject_atoms", P: "portrayal_atoms",
+    R: "realism_atoms", E: "explicitness_atoms", M: "modifier_atoms",
+    X: "exception_atoms"
+  };
+  for (const [dim, fieldName] of Object.entries(dimFieldMap)) {
+    const rids = keysToRids(tags[dim] || []);
+    const fId = fid(fieldName);
+    if (fId) {
+      const linkedTableId = (idx.linkTableIds && idx.linkTableIds[fId]) || "";
+      fields[fId] = rids.length
+        ? { recordIds: rids, tableId: linkedTableId }
+        : { recordIds: [], tableId: linkedTableId };
+    }
+  }
+
+  await tbl.setRecord(recordId, { fields: fields });
+  return { recordId: recordId };
+}
+window.__updateExistingRecord = updateExistingRecord;
 </script>
 
 <script>
@@ -1657,6 +1975,38 @@ function StatCard(props) {
   return e("div", { className: "stat" },
     e("div", { className: "n" }, String(props.n)),
     e("div", { className: "l" }, props.label));
+}
+
+// ---- StabilityBadge: SSS band indicator (Phase A) --------------------------
+function StabilityBadge(props) {
+  var stability = props.stability;
+  if (!stability || !stability.band) return null;
+  var colors = {
+    L1: { bg: "#dcfce7", border: "#86efac", text: "#166534" },
+    L2: { bg: "#fef9c3", border: "#fde047", text: "#854d0e" },
+    L3: { bg: "#fee2e2", border: "#fca5a5", text: "#991b1b" }
+  };
+  var labels = { L1: "L1 Robust", L2: "L2 Plausible", L3: "L3 Fragile" };
+  var c = colors[stability.band] || colors.L2;
+  var label = labels[stability.band] || stability.band;
+  return e("span", {
+    title: "Structural Stability Score: " + stability.score +
+           " | " + (stability.reason || "") +
+           "\nMargin: " + ((stability.components || {}).enforcement_consensus_margin || "?") +
+           " | Spec: " + ((stability.components || {}).specificity_ratio || "?") +
+           " | Conflict: " + ((stability.components || {}).conflict_pressure || "?") +
+           " | Lift frag: " + ((stability.components || {}).lift_fragility || "?") +
+           " | Supp prox: " + ((stability.components || {}).suppression_proximity || "?"),
+    style: {
+      display: "inline-flex", alignItems: "center", gap: 4,
+      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+      background: c.bg, border: "1px solid " + c.border, color: c.text,
+      cursor: "help"
+    }
+  },
+    e("span", null, label),
+    e("span", { style: { fontWeight: 400, opacity: 0.8 }}, " " + stability.score)
+  );
 }
 
 // ---- VerdictPane: live engine output ---------------------------------------
@@ -1672,7 +2022,7 @@ function evidencePills(ev) {
 }
 
 function VerdictPane(props) {
-  const { result } = props;
+  const { result, stability } = props;
   if (!result) return e("div", { className: "verdict-card" },
     e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }},
       e("span", { className: "verdict-pill verdict-NO_CLAIM_FIRED" }, "AWAITING ATOMS"),
@@ -1688,6 +2038,7 @@ function VerdictPane(props) {
   return e("div", { className: "verdict-card" },
     e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }},
       e("span", { className: "verdict-pill verdict-" + verdict }, verdict),
+      stability && e(StabilityBadge, { stability: stability }),
       e("span", { className: "verdict-meta" },
         gate_hits.length, " gate hit", gate_hits.length===1?"":"s",
         " · ", suppressed.length, " suppressed",
@@ -2876,7 +3227,10 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
       outcome_base:    s.outcome_base,
       suppress_reason: s.suppress_reason,
       policy_titles:   s.policy_titles || []
-    }))
+    })),
+    structural_stability: window.computeStability
+      ? window.computeStability(engineResult, tags, corpus.claims || [])
+      : null
   } : null;
 
   // v0.9.0: Claims are now baked into the specialist skill (Appendix B).
@@ -3745,7 +4099,7 @@ function ReasonedVerdictPane(props) {
 
 // ---- AtomTagger: top-level pane --------------------------------------------
 // ---- Confirm & Save section -------------------------------------------------
-function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult }) {
+function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult, stabilityResult, reviewMode, precedentRid }) {
   const e = React.createElement;
   const [decision, setDecision] = React.useState("flag");
   const [policyTitle, setPolicyTitle] = React.useState("");
@@ -3822,27 +4176,44 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     })();
   }, []);
 
+  const isPrecedentReview = reviewMode === "precedent" && !!precedentRid;
+
   const handleSave = async () => {
     setSaving(true);
     setSaved(null);
     try {
-      const _res = await window.__saveConfirmedRecord(corpus, pendingCase, tags, {
-        decision: decision,
-        policyTitle: policyTitle,
-        rationale: rationale,
-        analyst: analyst,
-        overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
-        _pendingRecordId: pendingCase.record_id,
-        applicablePrecedentIds: verdictData && verdictData.applicable_precedent_ids ? verdictData.applicable_precedent_ids : []
-      });
-      const _drops = (_res && _res.droppedOptions) || [];
-      if (_drops.length) {
-        const _msg = "Saved, but these Select options were missing on the column and got dropped: " +
-          _drops.map(function(d){ return d.field + "=\'" + d.value + "\'"; }).join(", ") +
-          ". Add the option to the column in the Bitable, then re-save.";
-        setSaved({ ok: false, msg: _msg });
+      if (isPrecedentReview) {
+        await window.__updateExistingRecord(corpus, pendingCase, tags, {
+          decision: decision,
+          policyTitle: policyTitle,
+          rationale: rationale,
+          reviewedBy: analyst,
+          overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
+          stabilityScore: stabilityResult && stabilityResult.score,
+          stabilityBand: stabilityResult && stabilityResult.band
+        });
+        setSaved({ ok: true, msg: "Updated precedent (reviewed_by saved)" });
       } else {
-        setSaved({ ok: true, msg: "Saved to Precedents table" });
+        const _res = await window.__saveConfirmedRecord(corpus, pendingCase, tags, {
+          decision: decision,
+          policyTitle: policyTitle,
+          rationale: rationale,
+          analyst: analyst,
+          overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
+          stabilityScore: stabilityResult && stabilityResult.score,
+          stabilityBand: stabilityResult && stabilityResult.band,
+          _pendingRecordId: pendingCase.record_id,
+          applicablePrecedentIds: verdictData && verdictData.applicable_precedent_ids ? verdictData.applicable_precedent_ids : []
+        });
+        const _drops = (_res && _res.droppedOptions) || [];
+        if (_drops.length) {
+          const _msg = "Saved, but these Select options were missing on the column and got dropped: " +
+            _drops.map(function(d){ return d.field + "=\'" + d.value + "\'"; }).join(", ") +
+            ". Add the option to the column in the Bitable, then re-save.";
+          setSaved({ ok: false, msg: _msg });
+        } else {
+          setSaved({ ok: true, msg: "Saved to Precedents table" });
+        }
       }
     } catch(err) {
       setSaved({ ok: false, msg: String(err.message || err) });
@@ -3939,7 +4310,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
   }, [tags, decision, policyTitle, corpus, verdictData, pendingCase, escalate]);
 
   return e("div", { className: "save-section", style: { marginTop: 16, padding: 12, border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--surface-soft)" } },
-    e("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 8 } }, "Confirm & Save to Precedents"),
+    e("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 8 } },
+      isPrecedentReview ? "Update Precedent (re-review)" : "Confirm & Save to Precedents"),
 
     e("div", { className: "row", style: { gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 8 } },
       e("label", { style: { fontSize: 11, color: "var(--muted)" } }, "Decision:"),
@@ -4007,7 +4379,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         onClick: handleSave,
         disabled: saving || !hasAtoms,
         style: { fontSize: 12, padding: "4px 12px" }
-      }, saving ? "Saving…" : "Confirm & Save"),
+      }, saving ? "Saving…" : (isPrecedentReview ? "Update Precedent" : "Confirm & Save")),
       !hasAtoms && e("span", { style: { fontSize: 11, color: "var(--error)" } }, "Tag at least 1 atom first"),
       saved && e("span", { style: { fontSize: 11, color: saved.ok ? "var(--success)" : "var(--error)" } }, saved.msg)
     )
@@ -4015,10 +4387,15 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
 }
 
 function AtomTagger(props) {
-  const { corpus, tags, setTags, verdictData, pendingRid, setPendingRid, onVerdictParsed, onVerdictCleared } = props;
+  const { corpus, tags, setTags, verdictData, pendingRid, setPendingRid,
+          precedentRid, setPrecedentRid, reviewMode, setReviewMode,
+          onVerdictParsed, onVerdictCleared } = props;
   const [caseFilter, setCaseFilter] = React.useState("");
   const [titleFilter, setTitleFilter] = React.useState("");
   const [issueFilter, setIssueFilter] = React.useState("");
+  const [precFilter, setPrecFilter] = React.useState("");
+  const [precTitleFilter, setPrecTitleFilter] = React.useState("");
+  const [precIssueFilter, setPrecIssueFilter] = React.useState("");
 
   // Derive which atoms came from the skill verdict vs reviewer manual adds
   const skillProposed = React.useMemo(() => {
@@ -4066,7 +4443,47 @@ function AtomTagger(props) {
     });
   }, [corpus.pending, caseFilter, titleFilter, issueFilter]);
 
+  // Precedent Review: filtered precedent list
+  const precTitleOptions = React.useMemo(() => {
+    const s = new Set();
+    for (const c of corpus.cases) { if (c.policy_title) s.add(c.policy_title); }
+    return Array.from(s).sort();
+  }, [corpus.cases]);
+
+  const precIssueOptions = React.useMemo(() => {
+    const s = new Set();
+    for (const c of corpus.cases) { if (c.issue) s.add(c.issue); }
+    return Array.from(s).sort();
+  }, [corpus.cases]);
+
+  const filteredPrecedents = React.useMemo(() => {
+    const q = precFilter.trim().toLowerCase();
+    return corpus.cases.filter(c => {
+      if (precTitleFilter && (c.policy_title || "") !== precTitleFilter) return false;
+      if (precIssueFilter && (c.issue || "") !== precIssueFilter) return false;
+      if (!q) return true;
+      return (
+        (c.source_video_id || "").toLowerCase().includes(q) ||
+        (c.case_id || "").toLowerCase().includes(q) ||
+        (c.visual_summary || "").toLowerCase().includes(q) ||
+        (c.policy_title || "").toLowerCase().includes(q) ||
+        (c.issue || "").toLowerCase().includes(q)
+      );
+    });
+  }, [corpus.cases, precFilter, precTitleFilter, precIssueFilter]);
+
+  const precedentCase = corpus.cases.find(c => c.record_id === precedentRid) || null;
+
+  React.useEffect(() => {
+    if (precedentRid && !filteredPrecedents.find(c => c.record_id === precedentRid)) {
+      setPrecedentRid("");
+    }
+  }, [filteredPrecedents, precedentRid]);
+
   const pendingCase = corpus.pending.find(p => p.record_id === pendingRid) || null;
+
+  // The active case for tagging: depends on review mode
+  const activeCase = reviewMode === "precedent" ? precedentCase : pendingCase;
 
   // If the currently selected case is filtered out, clear the selection.
   React.useEffect(() => {
@@ -4085,6 +4502,12 @@ function AtomTagger(props) {
       policy_title: pendingCase.policy_title || undefined
     });
   }, [tags, pendingCase, corpus.claims, totalSelected]);
+
+  // Phase A: Structural Stability Score. Memoized on engineResult.
+  const stabilityResult = React.useMemo(() => {
+    if (!engineResult) return null;
+    return window.computeStability(engineResult, tags, corpus.claims || []);
+  }, [engineResult, tags, corpus.claims]);
 
   // Phase 4: hybrid retriever. Runs when a case is picked; uses pendingCase text +
   // current atom selection to find similar precedents in corpus.cases.
@@ -4214,7 +4637,22 @@ function AtomTagger(props) {
           style: { fontSize: 11 }
         }, "clear")
       ),
-      e("div", { className: "row" },
+      e("div", { className: "row", style: { marginBottom: 8, gap: 4 } },
+        e("button", {
+          className: reviewMode === "pending" ? "tab active" : "tab",
+          onClick: () => { setReviewMode("pending"); setPrecedentRid(""); },
+          style: { fontSize: 11, padding: "3px 10px" }
+        }, "Pending Cases"),
+        e("button", {
+          className: reviewMode === "precedent" ? "tab active" : "tab",
+          onClick: () => { setReviewMode("precedent"); setPendingRid(""); },
+          style: { fontSize: 11, padding: "3px 10px" }
+        }, "Precedent Review"),
+        e("span", { className: "muted", style: { fontSize: 10, marginLeft: 8 } },
+          reviewMode === "precedent" ? "Re-tag & score existing precedents" : "Review new cases")
+      ),
+
+      reviewMode === "pending" && e("div", { className: "row" },
         e("label", { style: { color: "var(--muted)", fontSize: 12, minWidth: 90 }}, "Pending case"),
         e("select", {
           className: "case-picker", value: pendingRid,
@@ -4230,32 +4668,82 @@ function AtomTagger(props) {
           ))
         )
       ),
-      pendingCase && e("dl", { className: "case-meta" },
-        e("dt", null, "item_id"),        e("dd", null, pendingCase.source_video_id || "—"),
-        (pendingCase.issue || pendingCase.policy_title) && e("dt", null, "issue / title"),
-        (pendingCase.issue || pendingCase.policy_title) && e("dd", null, [pendingCase.issue, pendingCase.policy_title].filter(Boolean).join(" · ") || "—"),
-        pendingCase.user_nickname && e("dt", null, "user"),
-        pendingCase.user_nickname && e("dd", null,
+
+      reviewMode === "precedent" && e("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+        e("div", { className: "row", style: { gap: 6, flexWrap: "wrap" } },
+          e("input", {
+            type: "text", placeholder: "Search precedents…",
+            value: precFilter, onChange: ev => setPrecFilter(ev.target.value),
+            style: { flex: "1 1 140px", fontSize: 12, padding: "3px 8px", minWidth: 100 }
+          }),
+          e("select", {
+            className: "case-picker",
+            style: { flex: "0 1 180px", minWidth: 140 },
+            value: precTitleFilter,
+            onChange: ev => setPrecTitleFilter(ev.target.value)
+          },
+            e("option", { value: "" }, "all titles (" + precTitleOptions.length + ")"),
+            ...precTitleOptions.map(t => e("option", { key: t, value: t }, t))
+          ),
+          e("select", {
+            className: "case-picker",
+            style: { flex: "0 1 180px", minWidth: 140 },
+            value: precIssueFilter,
+            onChange: ev => setPrecIssueFilter(ev.target.value)
+          },
+            e("option", { value: "" }, "all issues (" + precIssueOptions.length + ")"),
+            ...precIssueOptions.map(t => e("option", { key: t, value: t }, t))
+          ),
+          (precFilter || precTitleFilter || precIssueFilter) && e("button", {
+            className: "ghost",
+            onClick: () => { setPrecFilter(""); setPrecTitleFilter(""); setPrecIssueFilter(""); },
+            style: { fontSize: 11 }
+          }, "clear")
+        ),
+        e("div", { className: "row" },
+          e("label", { style: { color: "var(--muted)", fontSize: 12, minWidth: 90 }}, "Precedent"),
+          e("select", {
+            className: "case-picker", value: precedentRid,
+            onChange: ev => setPrecedentRid(ev.target.value)
+          },
+            e("option", { value: "" },
+              "— pick a precedent (" + filteredPrecedents.length +
+              " of " + corpus.cases.length + ") —"),
+            ...filteredPrecedents.map(c => e("option", { key: c.record_id, value: c.record_id },
+              (c.case_id || c.source_video_id) +
+              (c.decision ? " [" + c.decision + "]" : "") +
+              (c.policy_title ? " · " + c.policy_title : "") +
+              (c.visual_summary ? " · " + c.visual_summary.slice(0, 60).replace(/\s+/g," ") : "")
+            ))
+          )
+        )
+      ),
+      activeCase && e("dl", { className: "case-meta" },
+        e("dt", null, "item_id"),        e("dd", null, activeCase.source_video_id || "—"),
+        (activeCase.issue || activeCase.policy_title) && e("dt", null, "issue / title"),
+        (activeCase.issue || activeCase.policy_title) && e("dd", null, [activeCase.issue, activeCase.policy_title].filter(Boolean).join(" · ") || "—"),
+        activeCase.user_nickname && e("dt", null, "user"),
+        activeCase.user_nickname && e("dd", null,
           e("div", { className: "user-context" },
-            e("span", { className: "user-nickname" }, pendingCase.user_nickname),
-            pendingCase.user_bio && e("span", { className: "user-bio" }, pendingCase.user_bio.slice(0, 120))
+            e("span", { className: "user-nickname" }, activeCase.user_nickname),
+            activeCase.user_bio && e("span", { className: "user-bio" }, activeCase.user_bio.slice(0, 120))
           )
         ),
-        pendingCase.visual_summary && e("dt", null, "visual_summary"),
-        pendingCase.visual_summary && e("dd", null, e("div", { className: "text-block" }, pendingCase.visual_summary)),
-        pendingCase.caption_text && e("dt", null, "caption"),
-        pendingCase.caption_text && e("dd", null, e("div", { className: "text-block" }, pendingCase.caption_text)),
-        pendingCase.asr_text && e("dt", null, "asr"),
-        pendingCase.asr_text && e("dd", null, e("div", { className: "text-block" }, pendingCase.asr_text)),
-        pendingCase.ocr_text && e("dt", null, "ocr"),
-        pendingCase.ocr_text && e("dd", null, e("div", { className: "text-block" }, pendingCase.ocr_text)),
+        activeCase.visual_summary && e("dt", null, "visual_summary"),
+        activeCase.visual_summary && e("dd", null, e("div", { className: "text-block" }, activeCase.visual_summary)),
+        activeCase.caption_text && e("dt", null, "caption"),
+        activeCase.caption_text && e("dd", null, e("div", { className: "text-block" }, activeCase.caption_text)),
+        activeCase.asr_text && e("dt", null, "asr"),
+        activeCase.asr_text && e("dd", null, e("div", { className: "text-block" }, activeCase.asr_text)),
+        activeCase.ocr_text && e("dt", null, "ocr"),
+        activeCase.ocr_text && e("dd", null, e("div", { className: "text-block" }, activeCase.ocr_text)),
       ),
-      pendingCase && pendingCase.images && pendingCase.images.length > 0 && e("div", { className: "case-images-section" },
+      activeCase && activeCase.images && activeCase.images.length > 0 && e("div", { className: "case-images-section" },
         e("div", { className: "case-images-label" }, "images"),
         e(ImagesPane, {
-          images: pendingCase.images,
-          recordId: pendingCase.record_id,
-          scope: "pending",
+          images: activeCase.images,
+          recordId: activeCase.record_id,
+          scope: reviewMode === "precedent" ? "cases" : "pending",
           resolve: corpus.image_meta && corpus.image_meta.resolve,
           limit: 12,
           label: "Pending images"
@@ -4263,7 +4751,7 @@ function AtomTagger(props) {
       )
     ),
 
-    pendingCase && (function(){
+    (reviewMode === "pending" && pendingCase) && (function(){
       var n = 0;
       if (pendingCase.apv_draft_atoms) {
         for (var i = 0; i < DIMENSIONS.length; i++) n += (pendingCase.apv_draft_atoms[DIMENSIONS[i]] || []).length;
@@ -4283,13 +4771,13 @@ function AtomTagger(props) {
         " atoms loaded into tagger. Adjust as needed before confirming.")
     ),
 
-    pendingCase && payload && e(PayloadPane, {
+    activeCase && payload && e(PayloadPane, {
       payload: payload,
-      pendingCase: pendingCase,
+      pendingCase: activeCase,
       imageMeta: corpus.image_meta
     }),
 
-    pendingCase && payload && e(ReasonedVerdictPane, {
+    activeCase && payload && e(ReasonedVerdictPane, {
       engineSimulation: payload.engine_simulation,
       atomsByDim: corpus.atomsByDim,
       onVerdictParsed: onVerdictParsed,
@@ -4298,7 +4786,7 @@ function AtomTagger(props) {
       imageMeta: corpus.image_meta
     }),
 
-    pendingCase && e("div", { className: "tag-card" },
+    activeCase && e("div", { className: "tag-card" },
       e("div", { className: "row", style: { justifyContent: "space-between" }},
         e("strong", { style: { fontSize: 13 }}, "Atom tags"),
         e("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
@@ -4326,8 +4814,8 @@ function AtomTagger(props) {
     ),
 
     // Verdict summary — shows skill verdict vs live engine side by side when both exist.
-    pendingCase && !verdictData && e(VerdictPane, { result: engineResult }),
-    pendingCase && verdictData && (function() {
+    activeCase && !verdictData && e(VerdictPane, { result: engineResult, stability: stabilityResult }),
+    activeCase && verdictData && (function() {
       var skillV = verdictData.verdict || "?";
       var engineV = engineResult ? engineResult.verdict : (totalSelected === 0 ? "NO_CLAIM_FIRED" : null);
       var agree = engineV && ((skillV === "APPROVE") === (engineV === "APPROVE" || engineV === "NO_CLAIM_FIRED"));
@@ -4341,6 +4829,7 @@ function AtomTagger(props) {
           engineV
             ? e("span", { className: "verdict-pill verdict-" + engineV }, engineV)
             : e("span", { style: { fontSize: 11, color: "var(--muted)", fontStyle: "italic" } }, "evaluating…"),
+          stabilityResult && e(StabilityBadge, { stability: stabilityResult }),
           !agree && engineV && e("span", { style: { fontSize: 11, color: "var(--warning)", fontWeight: 500 } },
             "↕ differs from skill — your atom edits changed the outcome")
         ),
@@ -4350,24 +4839,31 @@ function AtomTagger(props) {
             : "The save decision below follows the engine (based on your current atoms). Override banner will track the discrepancy vs the skill.")
       );
     })(),
-    pendingCase && e(ConfirmSaveSection, {
+    activeCase && e(ConfirmSaveSection, {
       corpus: corpus,
-      pendingCase: pendingCase,
+      pendingCase: activeCase,
       tags: tags,
       verdictData: verdictData,
-      engineResult: engineResult
+      engineResult: engineResult,
+      stabilityResult: stabilityResult,
+      reviewMode: reviewMode,
+      precedentRid: precedentRid
     }),
 
-    pendingCase && e("details", { open: false, style: { marginTop: 16, fontSize: 11, color: "var(--muted)" } },
+    activeCase && e("details", { open: false, style: { marginTop: 16, fontSize: 11, color: "var(--muted)" } },
       e("summary", { style: { cursor: "pointer" } }, "Debug tools"),
       e("div", { style: { marginTop: 8 } },
         e("details", { open: false },
+          e("summary", null, "Structural Stability (SSS v3.1)"),
+          e("pre", null, JSON.stringify(stabilityResult, null, 2))
+        ),
+        e("details", { open: false, style: { marginTop: 8 } },
           e("summary", null, "Engine I/O JSON"),
           e("pre", null, JSON.stringify({
             candidate: {
-              id: pendingCase.record_id,
-              source_video_id: pendingCase.source_video_id,
-              policy_title: pendingCase.policy_title,
+              id: activeCase.record_id,
+              source_video_id: activeCase.source_video_id,
+              policy_title: activeCase.policy_title,
               atoms: tags
             },
             engine_result: engineResult,
@@ -4421,7 +4917,7 @@ function AtomTagger(props) {
       )
     ),
 
-    !pendingCase && e("div", { className: "muted", style: { padding: 20, textAlign: "center" }},
+    !activeCase && e("div", { className: "muted", style: { padding: 20, textAlign: "center" }},
       "Pick a pending case above to begin tagging.")
   );
 }
@@ -4563,6 +5059,8 @@ function App() {
 
   // Lifted state: tags + case selection + verdict overlay
   const [pendingRid, setPendingRid] = React.useState("");
+  const [precedentRid, setPrecedentRid] = React.useState("");
+  const [reviewMode, setReviewMode] = React.useState("pending"); // "pending" | "precedent"
   const [tags, setTags] = React.useState({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
   const [verdictData, setVerdictData] = React.useState(null);
 
@@ -4578,6 +5076,25 @@ function App() {
     }
     setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
   }, [pendingRid]);
+
+  // Precedent Review: read-back atoms when a precedent is selected
+  React.useEffect(() => {
+    setVerdictData(null);
+    if (reviewMode !== "precedent" || !precedentRid) {
+      if (reviewMode === "precedent") setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
+      return;
+    }
+    var pc = state.corpus && state.corpus.cases && state.corpus.cases.find(function(c) { return c.record_id === precedentRid; });
+    if (pc && pc.atoms) {
+      var readBack = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+      for (var d of ["C","S","P","R","E","M","X"]) {
+        readBack[d] = (pc.atoms[d] || []).slice();
+      }
+      setTags(readBack);
+    } else {
+      setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
+    }
+  }, [precedentRid, reviewMode]);
 
   // Callback: skill verdict parsed → pre-fill tags
   const onVerdictParsed = React.useCallback((v) => {
@@ -4629,6 +5146,7 @@ function App() {
     state.phase === "loading" && e("div", { className: "muted", style: { padding: 20 }}, "Loading corpus…"),
     state.phase === "loaded" && tab === "tagger" && c && e(AtomTagger, {
       corpus: c, tags, setTags, verdictData, pendingRid, setPendingRid,
+      precedentRid, setPrecedentRid, reviewMode, setReviewMode,
       onVerdictParsed, onVerdictCleared
     }),
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
