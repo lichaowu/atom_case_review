@@ -2,37 +2,38 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>Atom Console — case_review_atom_mvp</title>
+<title>Atlas Validator — case_review_atom_mvp</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+
+<link href="https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-sans/style.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-mono/style.css" rel="stylesheet"/>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <style>
   :root {
-    --primary:#cc785c; --primary-active:#a9583e; --primary-disabled:#e6dfd8;
-    --hairline:#e6dfd8; --hairline-soft:#ebe6df;
-    --ink:#141413; --body-strong:#252523; --body:#3d3d3a;
-    --muted:#6c6a64; --muted-soft:#8e8b82;
-    --canvas:#faf9f5; --surface-soft:#f5f0e8; --surface-card:#efe9de;
-    --surface-cream-strong:#e8e0d2;
-    --success:#5db872; --warning:#d4a017; --error:#c64545;
-    --serif:"Cormorant Garamond",Garamond,serif;
-    --sans:"Inter",-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
-    --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
-    --dim-C:#7c5cc4; --dim-S:#5b8def; --dim-P:#5db872; --dim-R:#e8a55a;
-    --dim-E:#d4a017; --dim-M:#5db8a6; --dim-X:#c64545;
+    --primary:#09090B; --primary-active:#252A33; --primary-disabled:#D1D7DE;
+    --hairline:#E8ECF0; --hairline-soft:#F4F6F8;
+    --ink:#09090B; --body-strong:#1A1D24; --body:#3A3F4B;
+    --muted:#5C6370; --muted-soft:#8B929E;
+    --canvas:#FFFFFF; --surface-soft:#F4F6F8; --surface-card:#E8ECF0;
+    --surface-cream-strong:#D1D7DE;
+    --success:#16A34A; --warning:#D97706; --error:#DC2626;
+    --serif:"Geist",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --sans:"Geist",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:"Geist Mono",ui-monospace,Menlo,Consolas,monospace;
+    --dim-C:#5C6370; --dim-S:#2563EB; --dim-P:#16A34A; --dim-R:#D97706;
+    --dim-E:#8B929E; --dim-M:#454B56; --dim-X:#DC2626;
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;background:var(--canvas);color:var(--body);font-family:var(--sans);font-size:13px;line-height:1.4}
   .shell{max-width:880px;margin:0 auto;padding:14px 18px 60px}
-  h1{font-family:var(--serif);font-weight:400;font-size:24px;letter-spacing:-0.4px;line-height:1.2;color:var(--ink);margin:0 0 4px}
+  h1{font-family:var(--sans);font-weight:600;font-size:22px;letter-spacing:-0.015em;line-height:1.27;color:var(--ink);margin:0 0 4px}
   .sub{color:var(--muted);font-size:12px;margin-bottom:14px}
   .pill{display:inline-block;padding:1px 6px;border-radius:4px;background:var(--surface-soft);font-size:10px;color:var(--muted);font-family:var(--mono);margin-right:6px}
   .stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
   .stat{background:var(--surface-card);border:1px solid var(--hairline);border-radius:8px;padding:10px}
-  .stat .n{font-family:var(--serif);font-size:22px;color:var(--ink);font-weight:400;letter-spacing:-0.3px}
+  .stat .n{font-family:var(--sans);font-size:22px;color:var(--ink);font-weight:600;letter-spacing:-0.02em}
   .stat .l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:3px}
   .row{display:flex;gap:8px;align-items:center;margin:10px 0}
   button{font-family:var(--sans);font-size:12px;padding:6px 11px;border-radius:6px;border:1px solid var(--hairline);background:var(--canvas);color:var(--ink);cursor:pointer}
@@ -42,10 +43,10 @@
   button.primary:disabled{background:var(--primary-disabled);color:var(--muted);border-color:var(--hairline);cursor:not-allowed}
   button.ghost{background:transparent}
   button.tab{background:transparent;border:1px solid transparent;border-bottom:1px solid transparent;border-radius:0;padding:6px 12px;color:var(--muted)}
-  button.tab.active{color:var(--ink);border-bottom-color:var(--primary)}
-  pre{background:#1f1d1a;color:#e8e0d2;font-family:var(--mono);font-size:11px;padding:10px;border-radius:6px;overflow:auto;max-height:280px}
-  .err{background:#fff3f0;border:1px solid #f0c0b8;color:var(--error);padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
-  .ok{background:#f0f7ed;border:1px solid #c8e0bd;color:#3d6b2a;padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
+  button.tab.active{color:var(--ink);border-bottom-color:#2563EB}
+  pre{background:#0F1115;color:#EAEDF0;font-family:var(--mono);font-size:11px;padding:10px;border-radius:6px;overflow:auto;max-height:280px}
+  .err{background:#FEF2F2;border:1px solid #FECACA;color:var(--error);padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
+  .ok{background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
   .muted{color:var(--muted)}
 
   /* Tagger */
@@ -79,65 +80,65 @@
   .chip:hover{background:var(--surface-cream-strong)}
   .chip.selected{background:var(--primary);color:#fff;border-color:var(--primary)}
   .chip.selected:hover{background:var(--primary-active)}
-  .chip.suggested{background:#fff7d6;border-color:#e0c97a}
-  .chip.suggested:hover{background:#ffeeb3}
+  .chip.suggested{background:#DBEAFE;border-color:#93C5FD}
+  .chip.suggested:hover{background:#BFDBFE}
   .chip-name{font-family:var(--sans);font-size:10px;color:inherit;opacity:.85;font-weight:400}
   .selected-strip{padding:6px;background:var(--canvas);border:1px solid var(--hairline);border-radius:6px;min-height:30px;display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
   .selected-strip:empty:before{content:"(none selected)";color:var(--muted);font-size:11px;font-style:italic}
   .case-picker{width:100%;font-family:var(--sans);font-size:13px;padding:7px 10px;border:1px solid var(--hairline);border-radius:8px;background:var(--canvas)}
-  .case-picker:focus{outline:2px solid var(--primary);outline-offset:-1px}
+  .case-picker:focus{outline:2px solid #2563EB;outline-offset:-1px}
   details{margin:8px 0}
   details summary{cursor:pointer;font-weight:500;padding:4px 0;font-size:12px}
 
   /* Phase 3 — Verdict UI */
   .verdict-card{background:var(--canvas);border:1px solid var(--hairline);border-radius:12px;padding:14px;margin:12px 0}
   .verdict-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:9999px;font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:.06em;line-height:1.3;border:1px solid transparent}
-  .verdict-VIOLATION{background:#fbe4e0;color:#a8332a;border:1px solid #f0c0b8}
-  .verdict-NOT_RECOMMEND{background:#fcecd6;color:#8a5a13;border:1px solid #ecd2a3}
-  .verdict-NOT_FOR_FEED{background:#fff5d6;color:#7a5b0a;border:1px solid #efddaa}
-  .verdict-APPROVE{background:#e6f3df;color:#3d6b2a;border:1px solid #c8e0bd}
-  .verdict-NO_CLAIM_FIRED{background:#ece8e1;color:#6c6a64;border:1px solid #d8d2c4}
-  .verdict-ESCALATE{background:#ffe4ef;color:#92265a;border:1px solid #eeb6cf}
-  /* ---- v0.7.1 phase6a: reasoned-verdict (paste-back) — Anthropic warm-canvas ----
-     Anchored on cream surfaces (no white card), hairline border, no coral fill
+  .verdict-VIOLATION{background:#FEF2F2;color:#DC2626;border:1px solid #FECACA}
+  .verdict-NOT_RECOMMEND{background:#FEF3C7;color:#92400E;border:1px solid #FDE68A}
+  .verdict-NOT_FOR_FEED{background:#FEF9C3;color:#854D0E;border:1px solid #FEF08A}
+  .verdict-APPROVE{background:#F0FDF4;color:#166534;border:1px solid #BBF7D0}
+  .verdict-NO_CLAIM_FIRED{background:#F4F6F8;color:#5C6370;border:1px solid #D1D7DE}
+  .verdict-ESCALATE{background:#FDF2F8;color:#9D174D;border:1px solid #FBCFE8}
+  /* ---- v0.7.1 phase6a: reasoned-verdict (paste-back) — bytesized brand system ----
+     Cool-gray surfaces, hairline border, no colored fill
      except inside the verdict pill (re-uses semantic verdict-* classes).
-     Coral border is reserved for primary-card emphasis when a verdict is rendered. */
+     Blue accent border reserved for primary-card emphasis when a verdict is rendered. */
   .reasoned-card{background:var(--surface-soft);border:1px solid var(--hairline);border-radius:12px;padding:16px;margin:12px 0}
   .reasoned-card.has-verdict{background:var(--canvas);border-color:var(--hairline)}
   .reasoned-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
-  .reasoned-title{font-family:var(--serif);font-weight:400;font-size:18px;color:var(--ink);letter-spacing:-0.3px;line-height:1.3}
+  .reasoned-title{font-family:var(--sans);font-weight:600;font-size:18px;color:var(--ink);letter-spacing:-0.01em;line-height:1.33}
   .reasoned-sub{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.45}
   .reasoned-paste{width:100%;font-family:var(--mono);font-size:11px;line-height:1.5;border:1px solid var(--hairline);border-radius:8px;padding:10px 12px;background:var(--canvas);color:var(--ink);resize:vertical;display:block;box-sizing:border-box}
-  .reasoned-paste:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(204,120,92,0.15)}
+  .reasoned-paste:focus{outline:none;border-color:#2563EB;box-shadow:0 0 0 3px rgba(37,99,235,0.12)}
   .reasoned-summary-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--canvas);border:1px solid var(--hairline);border-radius:8px;font-size:12px;color:var(--muted)}
   .reasoned-summary-bar .ok-dot{width:6px;height:6px;border-radius:50%;background:var(--success);display:inline-block;flex:0 0 6px}
-  .reasoned-err{background:#fdf0ee;border:1px solid #f0c0b8;color:var(--error);padding:8px 10px;border-radius:8px;font-size:12px;margin-top:8px;line-height:1.5}
-  .reasoned-warn{background:#fdf3e0;border:1px solid #ecd2a3;color:#8a5a13;padding:8px 10px;border-radius:8px;font-size:12px;margin-top:8px;line-height:1.5}
+  .reasoned-err{background:#FEF2F2;border:1px solid #FECACA;color:var(--error);padding:8px 10px;border-radius:8px;font-size:12px;margin-top:8px;line-height:1.5}
+  .reasoned-warn{background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;padding:8px 10px;border-radius:8px;font-size:12px;margin-top:8px;line-height:1.5}
   /* Atom chip — pill, caption type, dim-tinted backgrounds (warm-toned) */
   .atom-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:9999px;font-family:var(--sans);font-weight:500;font-size:11px;line-height:1.3;background:var(--surface-card);color:var(--ink);margin:2px;border:1px solid transparent;white-space:nowrap}
   .atom-chip .chip-dim{font-family:var(--mono);font-weight:600;font-size:10px;opacity:0.65;letter-spacing:0.5px}
   .atom-chip .chip-name{font-weight:500}
   .atom-chip.rejected{text-decoration:line-through;color:var(--muted-soft);background:var(--surface-soft);opacity:.85;border-color:var(--hairline-soft)}
   .atom-chip.unknown{background:#fdf0ee;color:var(--error);border-color:#f0c0b8}
-  .atom-chip.dim-C{background:#ede4d8;color:#3d3d3a}
-  .atom-chip.dim-S{background:#f3dcd0;color:#3d3d3a}
-  .atom-chip.dim-P{background:#e2e6dc;color:#3d3d3a}
-  .atom-chip.dim-R{background:#f1e4cd;color:#3d3d3a}
-  .atom-chip.dim-E{background:#e8dee6;color:#3d3d3a}
-  .atom-chip.dim-M{background:#dee5dc;color:#3d3d3a}
-  .atom-chip.dim-X{background:#f3dcd9;color:#3d3d3a}
+  .atom-chip.dim-C{background:#F4F6F8;color:#09090B}
+  .atom-chip.dim-S{background:#DBEAFE;color:#09090B}
+  .atom-chip.dim-P{background:#DCFCE7;color:#09090B}
+  .atom-chip.dim-R{background:#FEF3C7;color:#09090B}
+  .atom-chip.dim-E{background:#E8ECF0;color:#09090B}
+  .atom-chip.dim-M{background:#F1F5F9;color:#09090B}
+  .atom-chip.dim-X{background:#FEF2F2;color:#09090B}
   /* Dim row (scoped to the reasoned-verdict card so it does NOT clash with
      the AtomTagger DimRow grid layout above) */
   .reasoned-card .dim-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;font-size:12px;border-top:1px dashed var(--hairline-soft);grid-template-columns:none}
   .reasoned-card .dim-row:first-child{border-top:none;padding-top:0}
   .reasoned-card .dim-row .dim-bullet{flex:0 0 22px;width:22px;height:22px;border-radius:50%;background:var(--surface-card);color:var(--ink);display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:0;margin-top:1px}
-  .reasoned-card .dim-row .dim-bullet.dim-C{background:#ede4d8}
-  .reasoned-card .dim-row .dim-bullet.dim-S{background:#f3dcd0}
-  .reasoned-card .dim-row .dim-bullet.dim-P{background:#e2e6dc}
-  .reasoned-card .dim-row .dim-bullet.dim-R{background:#f1e4cd}
-  .reasoned-card .dim-row .dim-bullet.dim-E{background:#e8dee6}
-  .reasoned-card .dim-row .dim-bullet.dim-M{background:#dee5dc}
-  .reasoned-card .dim-row .dim-bullet.dim-X{background:#f3dcd9}
+  .reasoned-card .dim-row .dim-bullet.dim-C{background:#F4F6F8}
+  .reasoned-card .dim-row .dim-bullet.dim-S{background:#DBEAFE}
+  .reasoned-card .dim-row .dim-bullet.dim-P{background:#DCFCE7}
+  .reasoned-card .dim-row .dim-bullet.dim-R{background:#FEF3C7}
+  .reasoned-card .dim-row .dim-bullet.dim-E{background:#E8ECF0}
+  .reasoned-card .dim-row .dim-bullet.dim-M{background:#F1F5F9}
+  .reasoned-card .dim-row .dim-bullet.dim-X{background:#FEF2F2}
   .reasoned-card .dim-row .dim-meta{flex:0 0 auto;display:flex;flex-direction:column;gap:1px;min-width:80px}
   .reasoned-card .dim-row .dim-meta .dim-name{font-family:var(--sans);font-weight:500;font-size:12px;color:var(--ink)}
   .reasoned-card .dim-row .dim-meta .dim-count{font-family:var(--mono);font-size:10px;color:var(--muted)}
@@ -151,17 +152,17 @@
   .precedent-pa{padding:10px 12px;background:var(--canvas);border:1px solid var(--hairline);border-left:3px solid var(--hairline);border-radius:8px;margin:6px 0;font-size:12px;line-height:1.55;overflow:hidden}
   .precedent-pa.applicable{border-left-color:var(--success)}
   .precedent-pa.partial{border-left-color:var(--warning)}
-  .precedent-pa.non-applicable{border-left-color:var(--muted-soft,#8e8b82);opacity:0.85}
+  .precedent-pa.non-applicable{border-left-color:var(--muted-soft,#8B929E);opacity:0.85}
   .precedent-pa .pa-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .precedent-pa .pa-note{margin-top:4px;color:var(--body)}
   .precedent-pa .atom-chip{max-width:100%;overflow:hidden;text-overflow:ellipsis}
   /* Watch-out callouts */
-  .watch-out{padding:8px 10px;background:#fdf3e0;border-left:3px solid var(--warning);font-size:12px;margin:4px 0;border-radius:6px;line-height:1.5}
+  .watch-out{padding:8px 10px;background:#FFFBEB;border-left:3px solid var(--warning);font-size:12px;margin:4px 0;border-radius:6px;line-height:1.5}
   /* Confidence chip semantics */
   .conf-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:9999px;font-family:var(--mono);font-weight:600;font-size:11px;line-height:1.3;letter-spacing:0.5px;border:1px solid transparent}
-  .conf-chip.high{background:#e6f3df;color:#3d6b2a;border-color:#c8e0bd}
-  .conf-chip.mid{background:#fdf3e0;color:#8a5a13;border-color:#ecd2a3}
-  .conf-chip.low{background:#fdf0ee;color:var(--error);border-color:#f0c0b8}
+  .conf-chip.high{background:#F0FDF4;color:#166534;border-color:#BBF7D0}
+  .conf-chip.mid{background:#FEF3C7;color:#92400E;border-color:#FDE68A}
+  .conf-chip.low{background:#FEF2F2;color:var(--error);border-color:#FECACA}
   /* Reasoned card sub-section heads (caption-uppercase) */
   .reasoned-section-head{font-family:var(--sans);font-weight:500;font-size:11px;line-height:1.4;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
   .reasoned-section-head:first-child{margin-top:0}
@@ -198,7 +199,7 @@
   .prec-rationale{font-size:10px;line-height:1.4;color:var(--muted);font-style:italic}
   .prec-dim-grid{display:flex;gap:3px;flex-wrap:wrap;font-family:var(--mono);font-size:10px}
   .prec-dim-cell{padding:1px 5px;border-radius:4px;background:var(--canvas);border:1px solid var(--hairline);color:var(--muted)}
-  .prec-dim-cell.hit{background:#dcfce7;border-color:#86efac;color:#166534}
+  .prec-dim-cell.hit{background:#DCFCE7;border-color:#86EFAC;color:#166534}
   .lift-pill{display:inline-block;padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--success);color:#fff}
   .outcome-tag{font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:3px;background:var(--surface-cream-strong);color:var(--ink)}
   .routing-pill{display:inline-block;padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:11px;background:var(--surface-soft);color:var(--muted);margin-right:4px}
@@ -224,23 +225,23 @@
   .copy-btn:disabled{opacity:0.55;cursor:not-allowed}
 
 /* Skill-first chip states */
-.chip.skill-src { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, #fff); color: var(--primary); font-weight: 600; }
-.chip.reviewer-src { border-color: #6b7; background: color-mix(in srgb, #6b7 12%, #fff); color: #2a7a2a; font-weight: 600; }
-.chip.skill-proposed { border: 1.5px dashed var(--primary); opacity: 0.85; }
+.chip.skill-src { border-color: #2563EB; background: #EFF6FF; color: #2563EB; font-weight: 600; }
+.chip.reviewer-src { border-color: #16A34A; background: #F0FDF4; color: #166534; font-weight: 600; }
+.chip.skill-proposed { border: 1.5px dashed #2563EB; opacity: 0.85; }
 .chip.rejected-by-skill {
   text-decoration: line-through; opacity: 0.5;
-  border-color: #c66; background: color-mix(in srgb, #c66 5%, transparent);
+  border-color: #DC2626; background: #FEF2F2;
   cursor: pointer;
 }
 .chip.rejected-by-skill:hover { opacity: 0.8; text-decoration: none; }
 
   /* Precedent card — clickable affordance */
   .prec-card-clickable { cursor: pointer; transition: background 0.15s, border-color 0.15s; }
-  .prec-card-clickable:hover { background: var(--surface-soft); border-color: var(--primary); }
+  .prec-card-clickable:hover { background: var(--surface-soft); border-color: #2563EB; }
 
   /* Precedent detail modal */
   .prec-modal-backdrop {
-    position: fixed; inset: 0; background: rgba(20,20,19,0.55);
+    position: fixed; inset: 0; background: rgba(9,9,11,0.5);
     z-index: 9999; display: flex; align-items: center; justify-content: center;
     padding: 24px; animation: prec-modal-fade 0.15s ease-out;
   }
@@ -248,7 +249,7 @@
   .prec-modal {
     background: var(--canvas); border-radius: 8px; max-width: 880px; width: 100%;
     max-height: calc(100vh - 48px); display: flex; flex-direction: column;
-    box-shadow: 0 12px 48px rgba(0,0,0,0.25); border: 1px solid var(--hairline);
+    box-shadow: 0 12px 48px rgba(9,9,11,0.2); border: 1px solid var(--hairline);
   }
   .prec-modal-header {
     padding: 16px 20px; border-bottom: 1px solid var(--hairline);
@@ -354,7 +355,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.17.17-ux-fixes";
+const PLUGIN_VERSION = "atlas-validator v0.18.0";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -5134,7 +5135,7 @@ function App() {
   const c = state.corpus;
 
   return e("div", { className: "shell" },
-    e("h1", null, "Atom Console"),
+    e("h1", null, "Atlas Validator"),
     e("div", { className: "sub" },
       e("span", { className: "pill" }, PLUGIN_VERSION)
     ),
