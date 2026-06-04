@@ -2583,6 +2583,7 @@ function DimRow(props) {
   const sugSet = new Set(suggested || []);
   const hasSuggestions = sugSet.size > 0;
   const skillSet = new Set(skillProposed || []);
+  const [dismissedRej, setDismissedRej] = React.useState(new Set());
   const rejKeys = new Set((skillRejected || []).map(r => r.atom_key));
 
   // Issue/policy-scoped atom base: when relevantKeys is provided (non-null array),
@@ -2660,8 +2661,8 @@ function DimRow(props) {
             onClick: () => toggle(k)
           }, label, " ✕");
         }),
-        // Skill-rejected atoms (struck-through, click to override and add)
-        ...(skillRejected || []).filter(r => !sel.has(r.atom_key)).map(r => {
+        // Skill-rejected atoms (struck-through; click ✗ to dismiss, double-click to override and add)
+        ...(skillRejected || []).filter(r => !sel.has(r.atom_key) && !dismissedRej.has(r.atom_key)).map(r => {
           const a = atoms.find(x => x.atom_key === r.atom_key);
           const label = (a && a.atom_name) ? a.atom_name : r.atom_key;
           return e("span", {
@@ -2669,8 +2670,9 @@ function DimRow(props) {
             className: "chip rejected-by-skill",
             title: "[skill-rejected] " + r.atom_key +
               (a && a.serial_code ? " · " + a.serial_code : "") +
-              " — " + (r.reason || "no reason") + " — click to override",
-            onClick: () => toggle(r.atom_key)
+              " — " + (r.reason || "no reason") + " — double-click to override and select",
+            onClick: () => { setDismissedRej(prev => { const n = new Set(prev); n.add(r.atom_key); return n; }); },
+            onDoubleClick: () => toggle(r.atom_key)
           }, label, " ✗");
         })
       ),
@@ -2683,7 +2685,7 @@ function DimRow(props) {
       }),
       // Available chips (excludes selected). Suggested atoms get a subtle highlight.
       e("div", { className: "chips" },
-        ...pool.filter(a => !sel.has(a.atom_key) && !rejKeys.has(a.atom_key)).map(a => {
+        ...pool.filter(a => !sel.has(a.atom_key) && !(rejKeys.has(a.atom_key) && !dismissedRej.has(a.atom_key))).map(a => {
           const isSug = sugSet.has(a.atom_key);
           const isSkillProp = skillSet.has(a.atom_key);
           return e("span", {
@@ -4637,18 +4639,20 @@ function AtomTagger(props) {
           style: { fontSize: 11 }
         }, "clear")
       ),
-      e("div", { className: "row", style: { marginBottom: 8, gap: 4 } },
-        e("button", {
-          className: reviewMode === "pending" ? "tab active" : "tab",
-          onClick: () => { setReviewMode("pending"); setPrecedentRid(""); },
-          style: { fontSize: 11, padding: "3px 10px" }
-        }, "Pending Cases"),
-        e("button", {
-          className: reviewMode === "precedent" ? "tab active" : "tab",
-          onClick: () => { setReviewMode("precedent"); setPendingRid(""); },
-          style: { fontSize: 11, padding: "3px 10px" }
-        }, "Precedent Review"),
-        e("span", { className: "muted", style: { fontSize: 10, marginLeft: 8 } },
+      e("div", { style: { marginBottom: 8 } },
+        e("div", { className: "row", style: { gap: 4 } },
+          e("button", {
+            className: reviewMode === "pending" ? "tab active" : "tab",
+            onClick: () => { setReviewMode("pending"); setPrecedentRid(""); },
+            style: { fontSize: 11, padding: "3px 10px" }
+          }, "Pending Cases"),
+          e("button", {
+            className: reviewMode === "precedent" ? "tab active" : "tab",
+            onClick: () => { setReviewMode("precedent"); setPendingRid(""); },
+            style: { fontSize: 11, padding: "3px 10px" }
+          }, "Precedent Review")
+        ),
+        e("div", { className: "muted", style: { fontSize: 10, marginTop: 3 } },
           reviewMode === "precedent" ? "Re-tag & score existing precedents" : "Review new cases")
       ),
 
