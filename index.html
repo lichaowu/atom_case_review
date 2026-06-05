@@ -761,6 +761,138 @@ const DIM_NAMES = {
 
 <script>
 // =============================================================================
+// counterfactual.js (inlined) — Phase B: Structural Fragility
+// Deterministic counterfactual pass: checks whether removing/adding a single
+// gate-level atom (C/S/P/R/E) inverts the engine verdict.
+// Only tests evidence-based flips (Strategies 1-2). M/X flips are excluded
+// because they test rule-book design, not content ambiguity.
+// True ambiguity assessment is done skill-side (content-grounded reasoning).
+//   computeCounterfactual(caseAtoms, claims, currentVerdict, opts?) -> FragilityResult
+// =============================================================================
+(function (root) {
+  "use strict";
+  var SEVERITY = { VIOLATION: 4, NOT_RECOMMEND: 3, NOT_FOR_FEED: 2, APPROVE: 1 };
+  var ALL_DIMS = ["C", "S", "P", "R", "E", "M", "X"];
+  var MAX_EVALS = 20;
+
+  function isEnforcement(outcome) {
+    return (SEVERITY[outcome] || 0) >= 2;
+  }
+
+  function cloneAtoms(atoms) {
+    var out = {};
+    for (var i = 0; i < ALL_DIMS.length; i++) {
+      out[ALL_DIMS[i]] = (atoms[ALL_DIMS[i]] || []).slice();
+    }
+    return out;
+  }
+
+  function verdictFlipped(original, candidate) {
+    if (!original || !candidate) return false;
+    return isEnforcement(original) !== isEnforcement(candidate);
+  }
+
+  /**
+   * computeCounterfactual(caseAtoms, claims, currentVerdict, opts?)
+   *
+   * Returns:
+   *   { structurally_fragile: bool,
+   *     min_flips_to_inverse: number (1 or Infinity),
+   *     nearest_flip_path: [{action, dim, atom_key, resulting_verdict}] | null,
+   *     evals_run: number,
+   *     fragility_score: number (0.0 = fragile, 1.0 = robust) }
+   */
+  function computeCounterfactual(caseAtoms, claims, currentVerdict, opts) {
+    opts = opts || {};
+    var policyTitle = opts.policy_title || undefined;
+    var evaluate = root.AtomEngine && root.AtomEngine.evaluate;
+    if (!evaluate) return { structurally_fragile: false, min_flips_to_inverse: Infinity, nearest_flip_path: null, evals_run: 0, fragility_score: 1.0 };
+
+    var evalsRun = 0;
+    var flips = []; // successful single-atom flips
+
+    // Strategy 1: Remove each currently-tagged atom (most likely to weaken enforcement)
+    for (var di = 0; di < ALL_DIMS.length && evalsRun < MAX_EVALS; di++) {
+      var dim = ALL_DIMS[di];
+      var tagged = caseAtoms[dim] || [];
+      for (var ai = 0; ai < tagged.length && evalsRun < MAX_EVALS; ai++) {
+        var mutated = cloneAtoms(caseAtoms);
+        mutated[dim].splice(ai, 1);
+        var result = evaluate(mutated, claims, { policy_title: policyTitle });
+        evalsRun++;
+        if (verdictFlipped(currentVerdict, result.verdict)) {
+          flips.push({ action: "remove", dim: dim, atom_key: tagged[ai], resulting_verdict: result.verdict });
+        }
+      }
+    }
+
+    // Strategy 2: Add relevant atoms from claims that are near-misses
+    // Find claims that didn't fire because of exactly 1 missing gate atom
+    if (flips.length === 0 && evalsRun < MAX_EVALS) {
+      for (var ci = 0; ci < claims.length && evalsRun < MAX_EVALS; ci++) {
+        var claim = claims[ci];
+        if (policyTitle) {
+          var pt = claim.policy_titles || [];
+          if (pt.length && pt.indexOf(policyTitle) < 0) continue;
+        }
+        // Check how many gate dims are unsatisfied
+        var gates = claim.gates || {};
+        var missingDims = [];
+        for (var gdi = 0; gdi < 5; gdi++) { // C,S,P,R,E
+          var gDim = ALL_DIMS[gdi];
+          var need = gates[gDim] || [];
+          if (!need.length) continue;
+          var got = caseAtoms[gDim] || [];
+          var hasAny = false;
+          for (var ni = 0; ni < need.length; ni++) {
+            if (got.indexOf(need[ni]) >= 0) { hasAny = true; break; }
+          }
+          if (!hasAny) missingDims.push({ dim: gDim, candidates: need });
+        }
+        // Near-miss: exactly 1 dim unsatisfied
+        if (missingDims.length === 1) {
+          var md = missingDims[0];
+          // Try adding the first candidate atom from that dim
+          var addAtom = md.candidates[0];
+          if (addAtom && evalsRun < MAX_EVALS) {
+            var mutated2 = cloneAtoms(caseAtoms);
+            if (mutated2[md.dim].indexOf(addAtom) < 0) {
+              mutated2[md.dim].push(addAtom);
+              var result2 = evaluate(mutated2, claims, { policy_title: policyTitle });
+              evalsRun++;
+              if (verdictFlipped(currentVerdict, result2.verdict)) {
+                flips.push({ action: "add", dim: md.dim, atom_key: addAtom, resulting_verdict: result2.verdict });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // NOTE: Strategies 3 (modifier_excluded) and 4 (exception removal) removed.
+    // Those test rule-book escape paths that exist by design, not genuine content
+    // ambiguity. True ambiguity is assessed skill-side (content-grounded reasoning).
+
+    var structurallyFragile = flips.length > 0;
+    var minFlips = structurallyFragile ? 1 : Infinity;
+    var nearestPath = structurallyFragile ? [flips[0]] : null;
+
+    return {
+      structurally_fragile: structurallyFragile,
+      min_flips_to_inverse: minFlips,
+      nearest_flip_path: nearestPath,
+      evals_run: evalsRun,
+      // Fragility score: 0.0 = fragile (1 gate-atom flip inverts), 1.0 = robust
+      fragility_score: structurallyFragile ? 0.0 : 1.0
+    };
+  }
+
+  root.computeCounterfactual = computeCounterfactual;
+})(window);
+</script>
+
+<script>
+// =============================================================================
 // RETRIEVER (Phase 4.5) — Dual-channel hybrid
 // Channels:
 //   visual = BM25(visual_summary)               + AtomJaccard
@@ -1699,6 +1831,11 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     // SingleSelect field: stability_band (L1/L2/L3)
     if (opts.stabilityBand) setSmartField("stability_band", opts.stabilityBand);
   }
+  // Checkbox field: structurally_fragile (Phase B — counterfactual fragility)
+  if (opts.structurallyFragile != null) {
+    var _sfFieldId = fid("structurally_fragile");
+    if (_sfFieldId) fields[_sfFieldId] = !!opts.structurallyFragile;
+  }
 
   // Copy keyframe attachments from pending case (same base, tokens reusable)
   // v0.16.10: read attachment cell directly from the source row so we
@@ -1942,6 +2079,11 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
     var _ssFieldId = fid("stability_score");
     if (_ssFieldId) fields[_ssFieldId] = opts.stabilityScore;
     if (opts.stabilityBand) setSmartField("stability_band", opts.stabilityBand);
+  }
+  // Checkbox field: structurally_fragile (Phase B — counterfactual fragility)
+  if (opts.structurallyFragile != null) {
+    var _sfFieldId = fid("structurally_fragile");
+    if (_sfFieldId) fields[_sfFieldId] = !!opts.structurallyFragile;
   }
 
   const dimFieldMap = {
@@ -3231,9 +3373,19 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
       suppress_reason: s.suppress_reason,
       policy_titles:   s.policy_titles || []
     })),
-    structural_stability: window.computeStability
-      ? window.computeStability(engineResult, tags, corpus.claims || [])
-      : null
+    structural_stability: (function() {
+      var ss = window.computeStability
+        ? window.computeStability(engineResult, tags, corpus.claims || [])
+        : null;
+      var cf = window.computeCounterfactual
+        ? window.computeCounterfactual(tags, corpus.claims || [], engineResult.verdict, { policy_title: pendingCase && pendingCase.policy_title })
+        : null;
+      if (ss && cf) {
+        ss.counterfactual = { structurally_fragile: cf.structurally_fragile, min_flips_to_inverse: cf.min_flips_to_inverse, nearest_flip_path: cf.nearest_flip_path };
+        ss.fragility_score = cf.fragility_score;
+      }
+      return ss;
+    })()
   } : null;
 
   // v0.9.0: Claims are now baked into the specialist skill (Appendix B).
@@ -3710,6 +3862,7 @@ function ReasonedVerdictPane(props) {
   const align      = parsed && parsed.engine_alignment;
   const precs      = (parsed && parsed.precedent_analysis) || [];
   const watchOuts  = (parsed && parsed.watch_outs) || [];
+  const ambiguityAssessment = parsed && parsed.ambiguity_assessment;
   const verdictVertical = parsed && parsed.vertical;
   const activeDims = (verdictVertical && ATOM_DIMS_BY_VERTICAL[verdictVertical]) || ATOM_DIMS;
   const nextStep   = parsed && parsed.next_step;
@@ -4102,7 +4255,7 @@ function ReasonedVerdictPane(props) {
 
 // ---- AtomTagger: top-level pane --------------------------------------------
 // ---- Confirm & Save section -------------------------------------------------
-function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult, stabilityResult, reviewMode, precedentRid }) {
+function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult, stabilityResult, counterfactualResult, reviewMode, precedentRid }) {
   const e = React.createElement;
   const [decision, setDecision] = React.useState("flag");
   const [policyTitle, setPolicyTitle] = React.useState("");
@@ -4193,7 +4346,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           reviewedBy: analyst,
           overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
           stabilityScore: stabilityResult && stabilityResult.score,
-          stabilityBand: stabilityResult && stabilityResult.band
+          stabilityBand: stabilityResult && stabilityResult.band,
+          structurallyFragile: counterfactualResult && counterfactualResult.structurally_fragile
         });
         setSaved({ ok: true, msg: "Updated precedent (reviewed_by saved)" });
       } else {
@@ -4205,6 +4359,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
           stabilityScore: stabilityResult && stabilityResult.score,
           stabilityBand: stabilityResult && stabilityResult.band,
+          structurallyFragile: counterfactualResult && counterfactualResult.structurally_fragile,
           _pendingRecordId: pendingCase.record_id,
           applicablePrecedentIds: verdictData && verdictData.applicable_precedent_ids ? verdictData.applicable_precedent_ids : []
         });
@@ -4511,6 +4666,15 @@ function AtomTagger(props) {
     if (!engineResult) return null;
     return window.computeStability(engineResult, tags, corpus.claims || []);
   }, [engineResult, tags, corpus.claims]);
+
+  // Phase B: Counterfactual pass. Checks if a single-atom flip inverts the verdict.
+  const counterfactualResult = React.useMemo(() => {
+    if (!engineResult || !engineResult.verdict) return null;
+    if (!window.computeCounterfactual) return null;
+    return window.computeCounterfactual(tags, corpus.claims || [], engineResult.verdict, {
+      policy_title: activeCase && activeCase.policy_title || undefined
+    });
+  }, [engineResult, tags, corpus.claims, activeCase]);
 
   // Phase 4: hybrid retriever. Runs when a case is picked; uses pendingCase text +
   // current atom selection to find similar precedents in corpus.cases.
@@ -4835,6 +4999,14 @@ function AtomTagger(props) {
             ? e("span", { className: "verdict-pill verdict-" + engineV }, engineV)
             : e("span", { style: { fontSize: 11, color: "var(--muted)", fontStyle: "italic" } }, "evaluating…"),
           stabilityResult && e(StabilityBadge, { stability: stabilityResult }),
+          counterfactualResult && counterfactualResult.structurally_fragile && e("span", {
+            className: "pill",
+            style: { background: "var(--warning)", color: "#fff", fontSize: 10, marginLeft: 4 }
+          }, "fragile (1-flip)"),
+          verdictData && verdictData.ambiguity_assessment && e("span", {
+            className: "pill",
+            style: { background: verdictData.ambiguity_assessment.classification === "L3" ? "var(--error)" : "var(--warning)", color: "#fff", fontSize: 10, marginLeft: 4 }
+          }, "skill: " + (verdictData.ambiguity_assessment.classification || "?")),
           !agree && engineV && e("span", { style: { fontSize: 11, color: "var(--warning)", fontWeight: 500 } },
             "↕ differs from skill — your atom edits changed the outcome")
         ),
@@ -4851,6 +5023,7 @@ function AtomTagger(props) {
       verdictData: verdictData,
       engineResult: engineResult,
       stabilityResult: stabilityResult,
+      counterfactualResult: counterfactualResult,
       reviewMode: reviewMode,
       precedentRid: precedentRid
     }),
@@ -4861,6 +5034,27 @@ function AtomTagger(props) {
         e("details", { open: false },
           e("summary", null, "Structural Stability (SSS v3.1)"),
           e("pre", null, JSON.stringify(stabilityResult, null, 2))
+        ),
+        e("details", { open: false, style: { marginTop: 8 } },
+          e("summary", null, "Structural Fragility (Phase B" + (counterfactualResult ? " — " + (counterfactualResult.structurally_fragile ? "FRAGILE" : "ROBUST") + ")" : ")")),
+          e("pre", null, JSON.stringify(counterfactualResult, null, 2))
+        ),
+        e("details", { open: false, style: { marginTop: 8 } },
+          e("summary", null, "Ambiguity Assessment (skill-side" + (verdictData && verdictData.ambiguity_assessment ? " — " + verdictData.ambiguity_assessment.classification : " — not provided") + ")"),
+          verdictData && verdictData.ambiguity_assessment
+            ? e("div", { style: { padding: "6px 0" } },
+                e("div", { style: { marginBottom: 4 } },
+                  e("strong", null, "Classification: "), verdictData.ambiguity_assessment.classification || "n/a",
+                  " | ",
+                  e("strong", null, "Flip plausibility: "), String(verdictData.ambiguity_assessment.flip_plausibility != null ? verdictData.ambiguity_assessment.flip_plausibility : "n/a")),
+                (verdictData.ambiguity_assessment.factors || []).length > 0 && e("ul", { style: { margin: "4px 0", paddingLeft: 18 } },
+                  ...(verdictData.ambiguity_assessment.factors || []).map(function(f, i) { return e("li", { key: i }, f); })
+                ),
+                (verdictData.ambiguity_assessment.weakest_atoms || []).length > 0 && e("div", null,
+                  e("strong", null, "Weakest atoms: "), (verdictData.ambiguity_assessment.weakest_atoms || []).join(", "))
+              )
+            : e("div", { style: { color: "var(--muted)", padding: "6px 0", fontStyle: "italic" } },
+                "Skill did not provide ambiguity_assessment. This field is populated when the skill runs Phase 3.5 defensibility assessment (requires payload v0.8+ with structural_stability).")
         ),
         e("details", { open: false, style: { marginTop: 8 } },
           e("summary", null, "Engine I/O JSON"),
