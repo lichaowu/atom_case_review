@@ -355,7 +355,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atlas-validator v0.18.0";
+const PLUGIN_VERSION = "atom-mvp v0.18.0-defensibility";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -889,6 +889,35 @@ const DIM_NAMES = {
 
   root.computeCounterfactual = computeCounterfactual;
 })(window);
+</script>
+
+<script>
+// === Defensibility merge (v0.18) ===
+// Merges Decision Rule Stability (engine-side) + Content Ambiguity (skill-side) into a single tier.
+function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAssessment) {
+  // Pillar A: Decision Rule Stability
+  var ruleStable = stabilityResult && stabilityResult.band === "L1";
+  var ruleShaky = stabilityResult && stabilityResult.band === "L2";
+  var fragile = counterfactualResult && counterfactualResult.structurally_fragile;
+  
+  // Pillar B: Content Ambiguity
+  var ambigClass = ambiguityAssessment && ambiguityAssessment.classification;
+  var precSupport = ambiguityAssessment && ambiguityAssessment.precedent_support;
+  
+  // Merge logic
+  if (ambigClass === "L3") return { tier: "LOW", label: "Low", reason: "Content ambiguity L3 (genuinely contested)" };
+  if ((ruleShaky || fragile) && ambigClass === "L2") return { tier: "LOW", label: "Low", reason: "Shaky structure + moderate content ambiguity" };
+  if (stabilityResult && stabilityResult.band === "L3") return { tier: "LOW", label: "Low", reason: "Decision rule stability L3 (fragile structure)" };
+  if (fragile && ambigClass !== "L1") return { tier: "LOW", label: "Low", reason: "Structurally fragile + non-trivial ambiguity" };
+  if (ambigClass === "L2") return { tier: "MEDIUM", label: "Medium", reason: "Moderate content ambiguity" };
+  if (ruleShaky || fragile) return { tier: "MEDIUM", label: "Medium", reason: "Structural concern (shaky or 1-flip fragile)" };
+  if (precSupport === "none") return { tier: "MEDIUM", label: "Medium", reason: "No applicable precedent support" };
+  if (precSupport === "partial") return { tier: "MEDIUM", label: "Medium", reason: "Partial precedent support" };
+  if (ruleStable && ambigClass === "L1") return { tier: "HIGH", label: "High", reason: "Stable rules + clear content" };
+  // Fallback: if no ambiguity data yet
+  if (!ambiguityAssessment) return null;
+  return { tier: "HIGH", label: "High", reason: "All signals favorable" };
+}
 </script>
 
 <script>
@@ -3958,7 +3987,7 @@ function ReasonedVerdictPane(props) {
         Math.round(raw.length / 1024 * 10) / 10 + " KB"),
       " of verdict JSON · ",
       verdict || "?",
-      (typeof conf === "number") ? " · conf " + conf + "/10" : "",
+      "",
       " · ",
       (tags ? activeDims.reduce((n, d) => n + ((tags[d] || []).length), 0) : 0),
       " atoms across ",
@@ -3982,9 +4011,6 @@ function ReasonedVerdictPane(props) {
       e("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 4 } },
         e("span", { className: "verdict-pill verdict-" + (verdict || "NO_CLAIM_FIRED") },
           verdict || "?"),
-        confKind && e("span", { className: "conf-chip " + confKind,
-          title: "Specialist confidence (1–10)" },
-          "conf " + conf + "/10"),
         grey && e("span", { className: "verdict-pill verdict-VIOLATION",
           style: { fontSize: 11, padding: "4px 10px" } }, "GREY"),
         pattern && e("span", { className: "atom-chip",
@@ -4988,32 +5014,53 @@ function AtomTagger(props) {
       var skillV = verdictData.verdict || "?";
       var engineV = engineResult ? engineResult.verdict : (totalSelected === 0 ? "NO_CLAIM_FIRED" : null);
       var agree = engineV && ((skillV === "APPROVE") === (engineV === "APPROVE" || engineV === "NO_CLAIM_FIRED"));
+      var ambig = verdictData.ambiguity_assessment;
+      var def = computeDefensibility(stabilityResult, counterfactualResult, ambig);
+      var defColors = { HIGH: { bg: "#dcfce7", border: "#86efac", text: "#166534" }, MEDIUM: { bg: "#fef9c3", border: "#fde047", text: "#854d0e" }, LOW: { bg: "#fee2e2", border: "#fca5a5", text: "#991b1b" } };
+      var dc = def ? defColors[def.tier] : { bg: "#f3f4f6", border: "#d1d5db", text: "#6b7280" };
       return e("div", { className: "verdict-card" },
-        e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 6 } },
-          e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", letterSpacing: 0.5, minWidth: 60 } }, "AI SKILL"),
-          e("span", { className: "verdict-pill verdict-" + skillV }, skillV)
+        // Main row: verdict + defensibility pill
+        e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 } },
+          e("span", { className: "verdict-pill verdict-" + skillV }, skillV),
+          def && e("span", {
+            title: def.reason,
+            style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: dc.bg, border: "1px solid " + dc.border, color: dc.text, cursor: "help" }
+          }, "Defensibility: " + def.label),
+          verdictData.final_policy_title && e("span", { className: "pill", style: { background: "#f3f4f6", color: "#374151", fontSize: 10, border: "1px solid #d1d5db" } }, verdictData.final_policy_title)
         ),
-        e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 } },
-          e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", letterSpacing: 0.5, minWidth: 60 } }, "ENGINE"),
-          engineV
-            ? e("span", { className: "verdict-pill verdict-" + engineV }, engineV)
-            : e("span", { style: { fontSize: 11, color: "var(--muted)", fontStyle: "italic" } }, "evaluating…"),
-          stabilityResult && e(StabilityBadge, { stability: stabilityResult }),
-          counterfactualResult && counterfactualResult.structurally_fragile && e("span", {
-            className: "pill",
-            style: { background: "var(--warning)", color: "#fff", fontSize: 10, marginLeft: 4 }
-          }, "fragile (1-flip)"),
-          verdictData && verdictData.ambiguity_assessment && e("span", {
-            className: "pill",
-            style: { background: verdictData.ambiguity_assessment.classification === "L3" ? "var(--error)" : "var(--warning)", color: "#fff", fontSize: 10, marginLeft: 4 }
-          }, "skill: " + (verdictData.ambiguity_assessment.classification || "?")),
-          !agree && engineV && e("span", { style: { fontSize: 11, color: "var(--warning)", fontWeight: 500 } },
-            "↕ differs from skill — your atom edits changed the outcome")
+        // Expandable detail: two pillars
+        e("details", { style: { marginTop: 4, fontSize: 11, color: "var(--muted)" } },
+          e("summary", { style: { cursor: "pointer", userSelect: "none" } }, "Decision Rule Stability · Content Ambiguity"),
+          e("div", { style: { marginTop: 6, padding: "6px 10px", background: "#f9fafb", borderRadius: 4, display: "flex", flexDirection: "column", gap: 4 } },
+            // Pillar A: Decision Rule Stability
+            e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+              e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", minWidth: 140, letterSpacing: 0.3 } }, "RULE STABILITY"),
+              stabilityResult && e(StabilityBadge, { stability: stabilityResult }),
+              counterfactualResult && counterfactualResult.structurally_fragile && e("span", { className: "pill", style: { background: "var(--warning)", color: "#fff", fontSize: 10 } }, "⚠ fragile (1-flip)")
+            ),
+            // Pillar B: Content Ambiguity
+            e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+              e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", minWidth: 140, letterSpacing: 0.3 } }, "CONTENT AMBIGUITY"),
+              ambig && e("span", {
+                style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: ambig.classification === "L1" ? "#dcfce7" : ambig.classification === "L2" ? "#fef9c3" : "#fee2e2", border: "1px solid " + (ambig.classification === "L1" ? "#86efac" : ambig.classification === "L2" ? "#fde047" : "#fca5a5"), color: ambig.classification === "L1" ? "#166534" : ambig.classification === "L2" ? "#854d0e" : "#991b1b" }
+              }, ambig.classification === "L1" ? "Clear" : ambig.classification === "L2" ? "Borderline" : "Contested"),
+              ambig && ambig.precedent_support && e("span", { style: { fontSize: 10, color: "var(--muted)" } }, "prec: " + ambig.precedent_support),
+              ambig && ambig.flip_plausibility != null && e("span", { style: { fontSize: 10, color: "var(--muted)" } }, "flip: " + ambig.flip_plausibility.toFixed(2))
+            ),
+            // Factors (if any)
+            ambig && ambig.factors && ambig.factors.length > 0 && e("div", { style: { marginTop: 2, fontSize: 10, color: "#6b7280", paddingLeft: 148 } },
+              ambig.factors.map(function(f, i) { return e("div", { key: i }, "• " + f); })
+            )
+          )
         ),
+        // Atom alignment note
         e("div", { style: { marginTop: 6, fontSize: 11, color: "var(--muted)", lineHeight: 1.4 } },
           agree
-            ? "Both agree. The save decision below follows the engine (based on your current atoms)."
-            : "The save decision below follows the engine (based on your current atoms). Override banner will track the discrepancy vs the skill.")
+            ? "Your atoms → " + (engineV || "?") + " (aligned with skill recommendation). Save decision follows your atoms."
+            : engineV
+              ? "↑↓ Your atom edits changed the outcome: skill=" + skillV + " but your atoms → " + engineV + ". Override will be tracked."
+              : "Engine evaluating…"
+        )
       );
     })(),
     activeCase && e(ConfirmSaveSection, {
