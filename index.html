@@ -908,7 +908,7 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
   if (ambigClass === "L3") return { tier: "LOW", label: "Low", reason: "Content ambiguity L3 (genuinely contested)" };
   if ((ruleShaky || fragile) && ambigClass === "L2") return { tier: "LOW", label: "Low", reason: "Shaky structure + moderate content ambiguity" };
   if (stabilityResult && stabilityResult.band === "L3") return { tier: "LOW", label: "Low", reason: "Decision rule stability L3 (fragile structure)" };
-  if (fragile && ambigClass !== "L1") return { tier: "LOW", label: "Low", reason: "Structurally fragile + non-trivial ambiguity" };
+  if (fragile && !ruleStable && ambigClass !== "L1") return { tier: "LOW", label: "Low", reason: "Structurally fragile + non-trivial ambiguity" };
   if (ambigClass === "L2") return { tier: "MEDIUM", label: "Medium", reason: "Moderate content ambiguity" };
   if (ruleShaky || fragile) return { tier: "MEDIUM", label: "Medium", reason: "Structural concern (shaky or 1-flip fragile)" };
   if (precSupport === "none") return { tier: "MEDIUM", label: "Medium", reason: "No applicable precedent support" };
@@ -3407,7 +3407,12 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
         ? window.computeStability(engineResult, tags, corpus.claims || [])
         : null;
       var cf = window.computeCounterfactual
-        ? window.computeCounterfactual(tags, corpus.claims || [], engineResult.verdict, { policy_title: pendingCase && pendingCase.policy_title })
+        ? (function() {
+            var ac = corpus.claims || [];
+            var pa = pendingCase && pendingCase.issue ? resolvePolicyArea(pendingCase.issue) : null;
+            var sc = pa ? ac.filter(function(c) { return matchesPolicyArea(c.issue, pa); }) : ac;
+            return window.computeCounterfactual(tags, sc, engineResult.verdict, { policy_title: pendingCase && pendingCase.policy_title });
+          })()
         : null;
       if (ss && cf) {
         ss.counterfactual = { structurally_fragile: cf.structurally_fragile, min_flips_to_inverse: cf.min_flips_to_inverse, nearest_flip_path: cf.nearest_flip_path };
@@ -4694,10 +4699,18 @@ function AtomTagger(props) {
   }, [engineResult, tags, corpus.claims]);
 
   // Phase B: Counterfactual pass. Checks if a single-atom flip inverts the verdict.
+  // Scope-filter: only test fragility against claims within the active policy_area
+  // to prevent cross-vertical claims (e.g., MBL.004/HHB in an NSA case) from
+  // producing spurious fragility signals.
   const counterfactualResult = React.useMemo(() => {
     if (!engineResult || !engineResult.verdict) return null;
     if (!window.computeCounterfactual) return null;
-    return window.computeCounterfactual(tags, corpus.claims || [], engineResult.verdict, {
+    var allClaims = corpus.claims || [];
+    var pArea = activeCase && activeCase.issue ? resolvePolicyArea(activeCase.issue) : null;
+    var scopedClaims = pArea
+      ? allClaims.filter(function(c) { return matchesPolicyArea(c.issue, pArea); })
+      : allClaims;
+    return window.computeCounterfactual(tags, scopedClaims, engineResult.verdict, {
       policy_title: activeCase && activeCase.policy_title || undefined
     });
   }, [engineResult, tags, corpus.claims, activeCase]);
@@ -5036,7 +5049,7 @@ function AtomTagger(props) {
             e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
               e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", minWidth: 140, letterSpacing: 0.3 } }, "RULE STABILITY"),
               stabilityResult && e(StabilityBadge, { stability: stabilityResult }),
-              counterfactualResult && counterfactualResult.structurally_fragile && e("span", { className: "pill", style: { background: "var(--warning)", color: "#fff", fontSize: 10 } }, "⚠ fragile (1-flip)")
+              counterfactualResult && counterfactualResult.structurally_fragile && !(stabilityResult && stabilityResult.band === "L1" && stabilityResult.score >= 0.8) && e("span", { className: "pill", style: { background: "var(--warning)", color: "#fff", fontSize: 10 } }, "⚠ fragile (1-flip)")
             ),
             // Pillar B: Content Ambiguity
             e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
