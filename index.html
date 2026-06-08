@@ -42,8 +42,9 @@
   button.primary:hover:not(:disabled){background:var(--primary-active);border-color:var(--primary-active)}
   button.primary:disabled{background:var(--primary-disabled);color:var(--muted);border-color:var(--hairline);cursor:not-allowed}
   button.ghost{background:transparent}
-  button.tab{background:transparent;border:1px solid transparent;border-bottom:1px solid transparent;border-radius:0;padding:6px 12px;color:var(--muted)}
-  button.tab.active{color:var(--ink);border-bottom-color:#2563EB}
+  button.tab{background:transparent;border:1px solid var(--hairline);border-radius:6px;padding:6px 14px;color:var(--muted);font-weight:500;transition:all .15s}
+  button.tab:hover{background:#f3f4f6;color:var(--ink)}
+  button.tab.active{background:#2563EB;color:#fff;border-color:#2563EB;font-weight:600}
   pre{background:#0F1115;color:#EAEDF0;font-family:var(--mono);font-size:11px;padding:10px;border-radius:6px;overflow:auto;max-height:280px}
   .err{background:#FEF2F2;border:1px solid #FECACA;color:var(--error);padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
   .ok{background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;padding:10px;border-radius:6px;font-size:12px;margin:10px 0}
@@ -93,8 +94,12 @@
   details summary{cursor:pointer;font-weight:500;padding:4px 0;font-size:12px}
 
   /* Phase 3 — Verdict UI */
-  .verdict-card{background:var(--canvas);border:1px solid var(--hairline);border-radius:12px;padding:14px;margin:12px 0}
+  .verdict-card{background:var(--canvas);border:1px solid var(--hairline);border-radius:12px;padding:14px;margin:12px 0;overflow:visible}
   .verdict-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:9999px;font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:.06em;line-height:1.3;border:1px solid transparent;cursor:help}
+  [data-tip]{position:relative;cursor:help}
+  [data-tip]::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;font-size:11px;font-weight:400;font-family:var(--sans);line-height:1.4;padding:6px 10px;border-radius:6px;white-space:normal;width:max-content;max-width:280px;z-index:9999;opacity:0;visibility:hidden;transition:opacity .15s,visibility .15s;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.15);text-align:left;letter-spacing:normal}
+  [data-tip]:hover::after{opacity:1;visibility:visible}
+  [data-tip].tip-down::after{bottom:auto;top:calc(100% + 6px)}
   .verdict-VIOLATION{background:#FEF2F2;color:#DC2626;border:1px solid #FECACA}
   .verdict-NOT_RECOMMEND{background:#FEF3C7;color:#92400E;border:1px solid #FDE68A}
   .verdict-NOT_FOR_FEED{background:#FEF9C3;color:#854D0E;border:1px solid #FEF08A}
@@ -1216,6 +1221,31 @@ function cellText(v) {
   }
   return "";
 }
+// cellUrl: extract full URL from a Bitable URL-type field value.
+// URL fields return [{type:"url", text:"...", link:"..."}] or a plain string.
+// Always prefer .link over .text (SDK may truncate display text).
+function cellUrl(v) {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) {
+    for (var i = 0; i < v.length; i++) {
+      var seg = v[i];
+      if (seg && typeof seg === "object") {
+        if (seg.link) return String(seg.link);
+        if (seg.text && /^https?:\/\//i.test(seg.text)) return String(seg.text);
+      }
+      if (typeof seg === "string" && /^https?:\/\//i.test(seg)) return seg;
+    }
+    // Fallback: join all text segments (might be a rich-text URL cell)
+    return v.map(function(s) { return (s && (s.link || s.text)) || ""; }).join("");
+  }
+  if (typeof v === "object") {
+    if (v.link) return String(v.link);
+    if (v.text) return String(v.text);
+    if (v.value != null) return cellUrl(v.value);
+  }
+  return "";
+}
 function cellArr(v) {
   if (v == null) return [];
   if (Array.isArray(v)) return v.map(x => (typeof x === "string" ? x : (x.text || x.name || ""))).filter(Boolean);
@@ -1492,7 +1522,7 @@ async function loadAtomCorpus() {
       rationale: get(f, casesIdx, "rationale"),
       user_nickname: HAS_USER_NICKNAME ? get(f, casesIdx, "user_nickname") : null,
       user_bio: HAS_USER_BIO ? get(f, casesIdx, "user_bio") : null,
-      case_url: HAS_CASE_URL ? get(f, casesIdx, "case_url") : null,
+      case_url: HAS_CASE_URL ? cellUrl(readCell(f, casesIdx, "case_url")) : null,
       images: getImages(f, casesIdx),
       atoms: {
         C: ridsToKeys(getLnk(f, casesIdx, "content_atoms")),
@@ -1523,7 +1553,7 @@ async function loadAtomCorpus() {
       caption_text: get(f, pendingIdx, "caption_text"),
       user_nickname: HAS_USER_NICKNAME ? get(f, pendingIdx, "user_nickname") : null,
       user_bio: HAS_USER_BIO ? get(f, pendingIdx, "user_bio") : null,
-      case_url: HAS_CASE_URL ? get(f, pendingIdx, "case_url") : null,
+      case_url: HAS_CASE_URL ? cellUrl(readCell(f, pendingIdx, "case_url")) : null,
       images: getImages(f, pendingIdx),
       pending_table_id: pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null,
       atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
@@ -2167,13 +2197,7 @@ function StabilityBadge(props) {
   var c = colors[stability.band] || colors.L2;
   var label = labels[stability.band] || stability.band;
   return e("span", {
-    title: "Structural Stability Score: " + stability.score +
-           " | " + (stability.reason || "") +
-           "\nMargin: " + ((stability.components || {}).enforcement_consensus_margin || "?") +
-           " | Spec: " + ((stability.components || {}).specificity_ratio || "?") +
-           " | Conflict: " + ((stability.components || {}).conflict_pressure || "?") +
-           " | Lift frag: " + ((stability.components || {}).lift_fragility || "?") +
-           " | Supp prox: " + ((stability.components || {}).suppression_proximity || "?"),
+    "data-tip": (stability.band === "L1" ? "Robust: decision well-supported" : stability.band === "L2" ? "Plausible but some structural weakness" : "Fragile: high flip risk") + " (score: " + stability.score + ")",
     style: {
       display: "inline-flex", alignItems: "center", gap: 4,
       padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
@@ -4849,32 +4873,35 @@ function AtomTagger(props) {
           style: { fontSize: 11 }
         }, "clear")
       ),
-      e("div", { style: { marginBottom: 8 } },
-        e("div", { className: "row", style: { gap: 4 } },
+      e("div", { style: { marginBottom: 12 } },
+        e("div", { className: "row", style: { gap: 6 } },
           e("button", {
             className: reviewMode === "pending" ? "tab active" : "tab",
             onClick: () => { setReviewMode("pending"); setPrecedentRid(""); },
-            style: { fontSize: 11, padding: "3px 10px" }
-          }, "Pending Cases"),
+            title: "Select a new pending case to review, tag atoms, and get a skill verdict"
+          }, "✏️ New Review"),
           e("button", {
             className: reviewMode === "precedent" ? "tab active" : "tab",
             onClick: () => { setReviewMode("precedent"); setPendingRid(""); },
-            style: { fontSize: 11, padding: "3px 10px" }
-          }, "Precedent Review")
+            title: "Re-examine an existing precedent: verify its atom tags and re-score"
+          }, "📚 Precedent Re-check")
         ),
-        e("div", { className: "muted", style: { fontSize: 10, marginTop: 3 } },
-          reviewMode === "precedent" ? "Re-tag & score existing precedents" : "Review new cases")
+        e("div", { style: { fontSize: 11, marginTop: 6, color: "var(--ink)", opacity: 0.7, lineHeight: 1.4 } },
+          reviewMode === "pending"
+            ? "▶ Pick a pending case below, tag its atoms, retrieve precedents, then send to the AI skill for a reasoned verdict."
+            : "▶ Pick an existing precedent to verify or correct its atom tags and re-run the engine.")
       ),
 
-      reviewMode === "pending" && e("div", { className: "row" },
-        e("label", { style: { color: "var(--muted)", fontSize: 12, minWidth: 90 }}, "Pending case"),
+      reviewMode === "pending" && e("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+        e("label", { style: { color: "var(--ink)", fontSize: 12, fontWeight: 600 }}, "Select case to review"),
         e("select", {
           className: "case-picker", value: pendingRid,
-          onChange: ev => setPendingRid(ev.target.value)
+          onChange: ev => setPendingRid(ev.target.value),
+          style: { borderColor: pendingRid ? "#2563EB" : undefined }
         },
           e("option", { value: "" },
-            "— pick a pending case (" + filteredPending.length +
-            " of " + corpus.pending.length + ") —"),
+            "Select a case... (" + filteredPending.length +
+            " available" + (filteredPending.length < corpus.pending.length ? " of " + corpus.pending.length + " total" : "") + ")"),
           ...filteredPending.map(p => e("option", { key: p.record_id, value: p.record_id },
             p.source_video_id +
             (p.visual_summary ? " · " + p.visual_summary.slice(0, 80).replace(/\s+/g," ") : "") +
@@ -4915,14 +4942,14 @@ function AtomTagger(props) {
           }, "clear")
         ),
         e("div", { className: "row" },
-          e("label", { style: { color: "var(--muted)", fontSize: 12, minWidth: 90 }}, "Precedent"),
+          e("label", { style: { color: "var(--ink)", fontSize: 12, fontWeight: 600, minWidth: 90 }}, "Select precedent"),
           e("select", {
             className: "case-picker", value: precedentRid,
             onChange: ev => setPrecedentRid(ev.target.value)
           },
             e("option", { value: "" },
-              "— pick a precedent (" + filteredPrecedents.length +
-              " of " + corpus.cases.length + ") —"),
+              "Select a precedent... (" + filteredPrecedents.length +
+              " available" + (filteredPrecedents.length < corpus.cases.length ? " of " + corpus.cases.length + " total" : "") + ")"),
             ...filteredPrecedents.map(c => e("option", { key: c.record_id, value: c.record_id },
               (c.case_id || c.source_video_id) +
               (c.decision ? " [" + c.decision + "]" : "") +
@@ -5044,31 +5071,31 @@ function AtomTagger(props) {
       return e("div", { className: "verdict-card" },
         // Main row: verdict + defensibility pill
         e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 } },
-          e("span", { className: "verdict-pill verdict-" + skillV, title: skillV === "VIOLATION" ? "Content violates policy — should be removed" : skillV === "NOT_RECOMMEND" ? "Content should not be recommended/distributed to users" : skillV === "NOT_FOR_FEED" ? "Content is acceptable but should not appear in recommendation feeds" : skillV === "APPROVE" ? "Content passes policy review — no action needed" : "Verdict: " + skillV }, skillV),
+          e("span", { className: "verdict-pill verdict-" + skillV, "data-tip": skillV === "VIOLATION" ? "Content violates policy — should be removed" : skillV === "NOT_RECOMMEND" ? "Content should not be recommended/distributed to users" : skillV === "NOT_FOR_FEED" ? "Content is acceptable but should not appear in recommendation feeds" : skillV === "APPROVE" ? "Content passes policy review — no action needed" : "Verdict: " + skillV }, skillV),
           def && e("span", {
-            title: def.reason,
+            "data-tip": def.reason,
             style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: dc.bg, border: "1px solid " + dc.border, color: dc.text, cursor: "help" }
           }, "Defensibility: " + def.label),
           verdictData.final_policy_title && e("span", { className: "pill", style: { background: "#f3f4f6", color: "#374151", fontSize: 10, border: "1px solid #d1d5db" } }, verdictData.final_policy_title)
         ),
         // Expandable detail: two pillars
         e("details", { style: { marginTop: 4, fontSize: 11, color: "var(--muted)" } },
-          e("summary", { style: { cursor: "pointer", userSelect: "none" }, title: "Two pillars that determine how defensible this decision is: (1) whether the rule structure is robust to small tagging changes, and (2) whether the content clearly maps to the applied atoms" }, "Decision Rule Stability · Content Ambiguity"),
+          e("summary", { className: "tip-down", style: { cursor: "pointer", userSelect: "none" }, "data-tip": "Two pillars: (1) rule structure robustness to small tagging changes, (2) how clearly content maps to applied atoms" }, "Decision Rule Stability · Content Ambiguity"),
           e("div", { style: { marginTop: 6, padding: "6px 10px", background: "#f9fafb", borderRadius: 4, display: "flex", flexDirection: "column", gap: 4 } },
             // Pillar A: Decision Rule Stability
             e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
-              e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", minWidth: 140, letterSpacing: 0.3, cursor: "help" }, title: "How structurally stable the decision is. Tests whether changing a single atom tag would flip the enforcement outcome. High stability means the decision is well-supported by multiple atoms." }, "RULE STABILITY"),
+              e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", minWidth: 140, letterSpacing: 0.3, cursor: "help" }, "data-tip": "How structurally stable the decision is. Tests whether changing one atom tag would flip the outcome. High = well-supported by multiple atoms." }, "RULE STABILITY"),
               stabilityResult && e(StabilityBadge, { stability: stabilityResult }),
-              counterfactualResult && counterfactualResult.structurally_fragile && !(stabilityResult && stabilityResult.band === "L1" && stabilityResult.score >= 0.8) && e("span", { className: "pill", style: { background: "var(--warning)", color: "#fff", fontSize: 10 }, title: "Removing just one tagged atom would flip the verdict from enforce to approve. The decision hinges on a single classification judgment." }, "⚠ fragile (1-flip)")
+              counterfactualResult && counterfactualResult.structurally_fragile && !(stabilityResult && stabilityResult.band === "L1" && stabilityResult.score >= 0.8) && e("span", { className: "pill", style: { background: "var(--warning)", color: "#fff", fontSize: 10 }, "data-tip": "Removing one tagged atom would flip the verdict. The decision hinges on a single classification." }, "⚠ fragile (1-flip)")
             ),
             // Pillar B: Content Ambiguity
             e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
-              e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", minWidth: 140, letterSpacing: 0.3, cursor: "help" }, title: "How clearly the content matches the applied atom tags. Assessed by the AI skill based on visual/textual evidence and precedent alignment. Clear = unambiguous; Borderline = reasonable disagreement possible; Contested = genuinely arguable either way." }, "CONTENT AMBIGUITY"),
+              e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", minWidth: 140, letterSpacing: 0.3, cursor: "help" }, "data-tip": "How clearly content matches the atoms. Clear = unambiguous; Borderline = reasonable disagreement possible; Contested = genuinely arguable." }, "CONTENT AMBIGUITY"),
               ambig && e("span", {
                 style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: ambig.classification === "L1" ? "#dcfce7" : ambig.classification === "L2" ? "#fef9c3" : "#fee2e2", border: "1px solid " + (ambig.classification === "L1" ? "#86efac" : ambig.classification === "L2" ? "#fde047" : "#fca5a5"), color: ambig.classification === "L1" ? "#166534" : ambig.classification === "L2" ? "#854d0e" : "#991b1b" }
-              , title: ambig.classification === "L1" ? "Clear: The content unambiguously matches the tagged atoms. Low risk of reviewer disagreement." : ambig.classification === "L2" ? "Borderline: A reasonable reviewer could plausibly tag differently. Some aspects are open to interpretation." : "Contested: Genuinely arguable — multiple valid interpretations exist. May need escalation or policy clarification." }, ambig.classification === "L1" ? "Clear" : ambig.classification === "L2" ? "Borderline" : "Contested"),
-              ambig && ambig.precedent_support && e("span", { style: { fontSize: 10, color: "var(--muted)", cursor: "help" }, title: "Precedent support — how well past cases with similar atoms and content align with this verdict. Values: strong (clear match), partial (some alignment), none (no supporting precedent found)." }, "prec: " + ambig.precedent_support),
-              ambig && ambig.flip_plausibility != null && e("span", { style: { fontSize: 10, color: "var(--muted)", cursor: "help" }, title: "Flip plausibility (0.00–1.00) — estimated probability that a reasonable reviewer could argue the opposite verdict. Lower = more defensible. Above 0.30 suggests meaningful ambiguity." }, "flip: " + ambig.flip_plausibility.toFixed(2))
+              , "data-tip": ambig.classification === "L1" ? "Clear: Content unambiguously matches atoms. Low disagreement risk." : ambig.classification === "L2" ? "Borderline: A reviewer could plausibly tag differently." : "Contested: Multiple valid interpretations exist. May need escalation." }, ambig.classification === "L1" ? "Clear" : ambig.classification === "L2" ? "Borderline" : "Contested"),
+              ambig && ambig.precedent_support && e("span", { style: { fontSize: 10, color: "var(--muted)", cursor: "help" }, "data-tip": "Precedent support: how well past similar cases align. strong = clear match, partial = some alignment, none = no match." }, "prec: " + ambig.precedent_support),
+              ambig && ambig.flip_plausibility != null && e("span", { style: { fontSize: 10, color: "var(--muted)", cursor: "help" }, "data-tip": "Flip plausibility (0–1): probability a reviewer could argue the opposite. Lower = more defensible. >0.30 = meaningful ambiguity." }, "flip: " + ambig.flip_plausibility.toFixed(2))
             ),
             // Factors (if any)
             ambig && ambig.factors && ambig.factors.length > 0 && e("div", { style: { marginTop: 2, fontSize: 10, color: "#6b7280", paddingLeft: 148 } },
