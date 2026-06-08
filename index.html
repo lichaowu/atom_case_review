@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.2-validator-fix";
+const PLUGIN_VERSION = "atom-mvp v0.18.4-prec-images-fix";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4608,9 +4608,7 @@ function AtomTagger(props) {
   const [caseFilter, setCaseFilter] = React.useState("");
   const [titleFilter, setTitleFilter] = React.useState("");
   const [issueFilter, setIssueFilter] = React.useState("");
-  const [precFilter, setPrecFilter] = React.useState("");
-  const [precTitleFilter, setPrecTitleFilter] = React.useState("");
-  const [precIssueFilter, setPrecIssueFilter] = React.useState("");
+
 
   // Derive which atoms came from the skill verdict vs reviewer manual adds
   const skillProposed = React.useMemo(() => {
@@ -4622,23 +4620,20 @@ function AtomTagger(props) {
     return verdictData.rejected_draft_atoms;
   }, [verdictData]);
 
-  // Distinct policy_titles for the filter <select>, sorted
+  // Distinct titles & issues for the unified filter, based on active mode
   const titleOptions = React.useMemo(() => {
+    const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
     const s = new Set();
-    for (const p of corpus.pending) {
-      if (p.policy_title) s.add(p.policy_title);
-    }
+    for (const p of src) { if (p.policy_title) s.add(p.policy_title); }
     return Array.from(s).sort();
-  }, [corpus.pending]);
+  }, [corpus.cases, corpus.pending, reviewMode]);
 
-  // Distinct issues for the filter <select>, sorted
   const issueOptions = React.useMemo(() => {
+    const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
     const s = new Set();
-    for (const p of corpus.pending) {
-      if (p.issue) s.add(p.issue);
-    }
+    for (const p of src) { if (p.issue) s.add(p.issue); }
     return Array.from(s).sort();
-  }, [corpus.pending]);
+  }, [corpus.cases, corpus.pending, reviewMode]);
 
   // Filtered pending list — text search across video_id / visual_summary / policy_title,
   // plus optional policy_title and issue equality narrowing.
@@ -4659,23 +4654,13 @@ function AtomTagger(props) {
   }, [corpus.pending, caseFilter, titleFilter, issueFilter]);
 
   // Precedent Review: filtered precedent list
-  const precTitleOptions = React.useMemo(() => {
-    const s = new Set();
-    for (const c of corpus.cases) { if (c.policy_title) s.add(c.policy_title); }
-    return Array.from(s).sort();
-  }, [corpus.cases]);
 
-  const precIssueOptions = React.useMemo(() => {
-    const s = new Set();
-    for (const c of corpus.cases) { if (c.issue) s.add(c.issue); }
-    return Array.from(s).sort();
-  }, [corpus.cases]);
 
   const filteredPrecedents = React.useMemo(() => {
-    const q = precFilter.trim().toLowerCase();
+    const q = caseFilter.trim().toLowerCase();
     return corpus.cases.filter(c => {
-      if (precTitleFilter && (c.policy_title || "") !== precTitleFilter) return false;
-      if (precIssueFilter && (c.issue || "") !== precIssueFilter) return false;
+      if (titleFilter && (c.policy_title || "") !== titleFilter) return false;
+      if (issueFilter && (c.issue || "") !== issueFilter) return false;
       if (!q) return true;
       return (
         (c.source_video_id || "").toLowerCase().includes(q) ||
@@ -4685,7 +4670,7 @@ function AtomTagger(props) {
         (c.issue || "").toLowerCase().includes(q)
       );
     });
-  }, [corpus.cases, precFilter, precTitleFilter, precIssueFilter]);
+  }, [corpus.cases, caseFilter, titleFilter, issueFilter]);
 
   const precedentCase = corpus.cases.find(c => c.record_id === precedentRid) || null;
 
@@ -4835,14 +4820,14 @@ function AtomTagger(props) {
 
   return e("div", null,
     e("div", { className: "tag-card" },
-      // Filter row: text search + policy_title narrowing
+      // Filter row: unified for both modes (filters pending or precedent based on active mode)
       e("div", { className: "row", style: { gap: 8, flexWrap: "wrap" }},
         e("label", { style: { color: "var(--muted)", fontSize: 12, minWidth: 90 }}, "Filter cases"),
         e("input", {
           className: "filter",
           style: { flex: "1 1 220px", minWidth: 180 },
           value: caseFilter,
-          placeholder: "search video_id / visual_summary / caption / title…",
+          placeholder: reviewMode === "precedent" ? "search case_id / video_id / summary…" : "search video_id / visual_summary / caption / title…",
           onChange: ev => setCaseFilter(ev.target.value)
         }),
         e("select", {
@@ -4873,12 +4858,12 @@ function AtomTagger(props) {
         e("div", { className: "row", style: { gap: 6 } },
           e("button", {
             className: reviewMode === "pending" ? "tab active" : "tab",
-            onClick: () => { setReviewMode("pending"); setPrecedentRid(""); },
+            onClick: () => { setReviewMode("pending"); setPrecedentRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); },
             title: "Select a new pending case to review, tag atoms, and get a skill verdict"
           }, "✏️ New Review"),
           e("button", {
             className: reviewMode === "precedent" ? "tab active" : "tab",
-            onClick: () => { setReviewMode("precedent"); setPendingRid(""); },
+            onClick: () => { setReviewMode("precedent"); setPendingRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); },
             title: "Re-examine an existing precedent: verify its atom tags and re-score"
           }, "📚 Precedent Re-check")
         ),
@@ -4907,52 +4892,20 @@ function AtomTagger(props) {
       ),
 
       reviewMode === "precedent" && e("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
-        e("div", { className: "row", style: { gap: 6, flexWrap: "wrap" } },
-          e("input", {
-            type: "text", placeholder: "Search precedents…",
-            value: precFilter, onChange: ev => setPrecFilter(ev.target.value),
-            style: { flex: "1 1 140px", fontSize: 12, padding: "3px 8px", minWidth: 100 }
-          }),
-          e("select", {
-            className: "case-picker",
-            style: { flex: "0 1 180px", minWidth: 140 },
-            value: precTitleFilter,
-            onChange: ev => setPrecTitleFilter(ev.target.value)
-          },
-            e("option", { value: "" }, "all titles (" + precTitleOptions.length + ")"),
-            ...precTitleOptions.map(t => e("option", { key: t, value: t }, t))
-          ),
-          e("select", {
-            className: "case-picker",
-            style: { flex: "0 1 180px", minWidth: 140 },
-            value: precIssueFilter,
-            onChange: ev => setPrecIssueFilter(ev.target.value)
-          },
-            e("option", { value: "" }, "all issues (" + precIssueOptions.length + ")"),
-            ...precIssueOptions.map(t => e("option", { key: t, value: t }, t))
-          ),
-          (precFilter || precTitleFilter || precIssueFilter) && e("button", {
-            className: "ghost",
-            onClick: () => { setPrecFilter(""); setPrecTitleFilter(""); setPrecIssueFilter(""); },
-            style: { fontSize: 11 }
-          }, "clear")
-        ),
-        e("div", { className: "row" },
-          e("label", { style: { color: "var(--ink)", fontSize: 12, fontWeight: 600, minWidth: 90 }}, "Select precedent"),
-          e("select", {
-            className: "case-picker", value: precedentRid,
-            onChange: ev => setPrecedentRid(ev.target.value)
-          },
-            e("option", { value: "" },
-              "Select a precedent... (" + filteredPrecedents.length +
-              " available" + (filteredPrecedents.length < corpus.cases.length ? " of " + corpus.cases.length + " total" : "") + ")"),
-            ...filteredPrecedents.map(c => e("option", { key: c.record_id, value: c.record_id },
-              (c.case_id || c.source_video_id) +
-              (c.decision ? " [" + c.decision + "]" : "") +
-              (c.policy_title ? " · " + c.policy_title : "") +
-              (c.visual_summary ? " · " + c.visual_summary.slice(0, 60).replace(/\s+/g," ") : "")
-            ))
-          )
+        e("label", { style: { color: "var(--ink)", fontSize: 12, fontWeight: 600 }}, "Select precedent"),
+        e("select", {
+          className: "case-picker", value: precedentRid,
+          onChange: ev => setPrecedentRid(ev.target.value)
+        },
+          e("option", { value: "" },
+            "Select a precedent... (" + filteredPrecedents.length +
+            " available" + (filteredPrecedents.length < corpus.cases.length ? " of " + corpus.cases.length + " total" : "") + ")"),
+          ...filteredPrecedents.map(c => e("option", { key: c.record_id, value: c.record_id },
+            (c.case_id || c.source_video_id) +
+            (c.decision ? " [" + c.decision + "]" : "") +
+            (c.policy_title ? " · " + c.policy_title : "") +
+            (c.visual_summary ? " · " + c.visual_summary.slice(0, 60).replace(/\s+/g," ") : "")
+          ))
         )
       ),
       activeCase && e("dl", { className: "case-meta" },
@@ -4983,7 +4936,7 @@ function AtomTagger(props) {
           key: "img-" + (activeCase.record_id || ""),
           images: activeCase.images,
           recordId: activeCase.record_id,
-          scope: reviewMode === "precedent" ? "cases" : "pending",
+          scope: reviewMode === "precedent" ? "case" : "pending",
           resolve: corpus.image_meta && corpus.image_meta.resolve,
           limit: 12,
           label: "Pending images"
