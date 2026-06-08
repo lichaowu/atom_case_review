@@ -1,0 +1,149 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "atom-verdict",
+  "type": "object",
+  "required": [
+    "verdict",
+    "applied_claim_chain",
+    "lifts_applied",
+    "rationale",
+    "agreements",
+    "disagreements",
+    "engine_validated",
+    "ambiguity_assessment"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "VIOLATION",
+        "NOT_RECOMMEND",
+        "NOT_FOR_FEED",
+        "APPROVE",
+        "NO_CLAIM_FIRED"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "deprecated": true,
+      "description": "DEPRECATED in v1.7/v1.3. Superseded by ambiguity_assessment. Retained for backward-compat parsing only."
+    },
+    "applied_claim_chain": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "lifts_applied": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["claim_id", "lift"],
+        "properties": {
+          "claim_id": { "type": "string" },
+          "lift": { "type": "string" }
+        }
+      }
+    },
+    "rationale": { "type": "string" },
+    "agreements": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "disagreements": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "routing_notes": { "type": ["string", "null"] },
+    "engine_validated": { "type": "boolean" },
+    "rationale_for_precedent": {
+      "type": "string",
+      "maxLength": 1200,
+      "description": "Concise human-readable rationale for the verdict, focused on the decisive signal. Max 1200 chars."
+    },
+    "applicable_precedent_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "case_id strings of APPLICABLE precedents for bidirectional linking."
+    },
+    "proposed_atom_tags": {
+      "type": "object",
+      "description": "Skill's proposed atom tags across 7 dimensions (C/S/P/R/E/M/X).",
+      "properties": {
+        "C": { "type": "array", "items": { "type": "string" } },
+        "S": { "type": "array", "items": { "type": "string" } },
+        "P": { "type": "array", "items": { "type": "string" } },
+        "R": { "type": "array", "items": { "type": "string" } },
+        "E": { "type": "array", "items": { "type": "string" } },
+        "M": { "type": "array", "items": { "type": "string" } },
+        "X": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "simulated_claim_chain": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Claim IDs from the skill's re-evaluation of the case against the proposed atoms."
+    },
+    "engine_alignment": {
+      "type": "object",
+      "description": "Comparison between skill verdict and engine simulation from the input payload.",
+      "properties": {
+        "engine_verdict": { "type": "string" },
+        "skill_verdict": { "type": "string" },
+        "aligned": { "type": "boolean" },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "precedent_analysis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["case_id", "applicability", "rationale"],
+        "properties": {
+          "case_id": { "type": "string" },
+          "applicability": { "type": "string", "enum": ["APPLICABLE", "PARTIAL", "NON-APPLICABLE"] },
+          "rationale": { "type": "string" }
+        }
+      },
+      "description": "Per-precedent applicability assessment with rationale."
+    },
+    "watch_outs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Potential issues or edge cases the reviewer should be aware of."
+    },
+    "ambiguity_assessment": {
+      "type": "object",
+      "description": "Content Ambiguity assessment (Defensibility Pillar B). Evaluates how genuinely ambiguous the content is, absorbing the old confidence rubric signals and content-boundary analysis into a single structured object.",
+      "required": ["classification", "flip_plausibility", "factors", "weakest_atoms", "precedent_support"],
+      "properties": {
+        "classification": {
+          "type": "string",
+          "enum": ["L1", "L2", "L3"],
+          "description": "L1 = low ambiguity (clear-cut), L2 = moderate (reasonable people could disagree), L3 = high (genuinely borderline, escalation-worthy)"
+        },
+        "flip_plausibility": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How plausible is it that the content genuinely supports the alternate verdict? 0.0 = implausible, 1.0 = equally valid."
+        },
+        "factors": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "1-4 human-readable reasons for the ambiguity classification."
+        },
+        "weakest_atoms": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Atom keys with lowest tagging confidence."
+        },
+        "precedent_support": {
+          "type": "string",
+          "enum": ["strong", "partial", "none"],
+          "description": "Precedent backing strength. strong = >=2 APPLICABLE agree. partial = 1 APPLICABLE or split. none = 0 APPLICABLE."
+        }
+      }
+    }
+  }
+}

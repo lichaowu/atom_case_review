@@ -1,0 +1,10 @@
+{
+  "name": "Atlas Validator",
+  "key": "case_review_atom_mvp",
+  "version": "0.18.0",
+  "description": "Atom-rule case review console for the ATLAS Atom Rules model \u2014 multi-feature (Short Video + LIVE). Supports NSA, HHB, HRA verticals. Lets reviewers tag a pending case across 7 atom dimensions (C/S/P/R/E/M/X), retrieve precedents via dual-channel BM25 + atom-Jaccard similarity, build a case-review-payload v0.7 (claims baked in skill) routed to the nsa/hhb-atom-precedent-review skill, render the skill's reasoned verdict, and confirm & save reviewed cases to the Precedents table with decision override tracking for discrepancy analysis.",
+  "entry": "dist/index.html",
+  "engine": {
+    "lark-base-sdk": "^1.0.2"
+  }
+}

@@ -1,0 +1,524 @@
+{
+  "schema": "atom-catalog",
+  "version": "v1.1",
+  "policy_area": "NSA",
+  "atoms_total": 76,
+  "atoms_per_dim": {
+    "C": 35,
+    "S": 4,
+    "P": 9,
+    "R": 5,
+    "E": 2,
+    "M": 15,
+    "X": 6
+  },
+  "dimensions": {
+    "C": {
+      "name": "Content",
+      "weight": 1,
+      "role": "primary gate"
+    },
+    "S": {
+      "name": "Subject",
+      "weight": 1,
+      "role": "primary gate"
+    },
+    "P": {
+      "name": "Portrayal",
+      "weight": 1,
+      "role": "primary gate"
+    },
+    "R": {
+      "name": "Realism",
+      "weight": 0.7,
+      "role": "secondary gate; affects routing"
+    },
+    "E": {
+      "name": "Explicitness",
+      "weight": 0.7,
+      "role": "secondary gate"
+    },
+    "M": {
+      "name": "Modifier",
+      "weight": 0.5,
+      "role": "lift / suppress claim outcome"
+    },
+    "X": {
+      "name": "Exception",
+      "weight": 0.5,
+      "role": "lift / context-required"
+    }
+  },
+  "atoms_catalog": {
+    "C": [
+      {
+        "atom_key": "atom.exposure.genitalia.full",
+        "atom_name": "Full or partial exposure of genitalia",
+        "serial_code": "C1 \u2014 Full or partial exposure of genitalia",
+        "description": "Genitalia visible with no clothing or covering, in whole or in part."
+      },
+      {
+        "atom_key": "atom.exposure.outline.penis_bulge",
+        "atom_name": "Penis bulge",
+        "serial_code": "C10 \u2014 Penis bulge",
+        "description": "Visible outline of penis through clothing."
+      },
+      {
+        "atom_key": "atom.exposure.outline.protruding_nipple",
+        "atom_name": "Protruding nipples",
+        "serial_code": "C11 \u2014 Protruding nipples",
+        "description": "Visible nipple outline through clothing."
+      },
+      {
+        "atom_key": "atom.exposure.outline.protruding_vulva",
+        "atom_name": "Protruding outer lips of vulva",
+        "serial_code": "C12 \u2014 Protruding outer lips of vulva",
+        "description": "Visible outline of vulva through clothing."
+      },
+      {
+        "atom_key": "atom.exposure.outline.inverted_v",
+        "atom_name": "Exposure of inverted V",
+        "serial_code": "C13 \u2014 Exposure of inverted V",
+        "description": "Visible inverted-V shape at groin (suggests genital outline) through clothing."
+      },
+      {
+        "atom_key": "atom.exposure.thigh.upper_inner",
+        "atom_name": "Upper inner thigh exposure",
+        "serial_code": "C14 \u2014 Upper inner thigh exposure",
+        "description": "Upper inner thigh visible due to crotch-length bottoms + body positioning/motions involving leg spreading."
+      },
+      {
+        "atom_key": "atom.exposure.intergluteal_cleft",
+        "atom_name": "Intergluteal cleft exposure",
+        "serial_code": "C15 \u2014 Intergluteal cleft exposure",
+        "description": "Visible cleavage between buttocks."
+      },
+      {
+        "atom_key": "atom.sexual_activity.penetrative",
+        "atom_name": "Penetrative sex",
+        "serial_code": "C16 \u2014 Penetrative sex",
+        "description": "Penetrative sexual activity (oral, vaginal, anal, etc.). Pair with explicitness dimension to distinguish directly visible vs obstructed-from-view."
+      },
+      {
+        "atom_key": "atom.sexual_activity.non_penetrative",
+        "atom_name": "Non-penetrative sex",
+        "serial_code": "C17 \u2014 Non-penetrative sex",
+        "description": "Non-penetrative sexual acts (e.g., manual stimulation). Pair with explicitness dimension to distinguish directly visible vs obstructed."
+      },
+      {
+        "atom_key": "atom.sexual_content.fetish_with_sexual_fixation",
+        "atom_name": "Fetish with sexual fixation",
+        "serial_code": "C18 \u2014 Fetish with sexual fixation",
+        "description": "Fetish content, sexual fixation, or kinks. Atom fires only when fetish content is paired with sexual fixation. Plain fetish without sexual fixation does not fire this atom (no violation triggers; approve catch-all). Per Canon Review 2026-05-12, the modifier.sexual_fixation gating that previously paired with the old atom.sexual_content.fetish_kink is now baked into the atom semantics."
+      },
+      {
+        "atom_key": "atom.sexual_content.sexualized_breastfeeding",
+        "atom_name": "Sexualized breast/chestfeeding",
+        "serial_code": "C19 \u2014 Sexualized breast/chestfeeding",
+        "description": "Breast or chestfeeding presented in a sexualized manner. Atom (not modifier) because the sexualization is the content itself."
+      },
+      {
+        "atom_key": "atom.exposure.breast.areola_region",
+        "atom_name": "Female areola and nipple exposure",
+        "serial_code": "C2 \u2014 Female areola and nipple exposure",
+        "description": "Visible female areola, with or without nipple visible. Use modifier.nipple_covered to distinguish areola+nipple visible vs areola only with nipple covered (sticker, hand, pasties)."
+      },
+      {
+        "atom_key": "atom.sexual_content.sexualized_language",
+        "atom_name": "Sexualized language",
+        "serial_code": "C20 \u2014 Sexualized language",
+        "description": "Verbal description of sexual activity, fetish/kink, or intimate body parts. Pair with explicitness dimension to distinguish 'with intensifier' vs without."
+      },
+      {
+        "atom_key": "atom.sexual_content.sexualized_kissing",
+        "atom_name": "Sexualized kissing",
+        "serial_code": "C21 \u2014 Sexualized kissing",
+        "description": "Sexualized variants of kissing \u2014 sucking/bruising non-IBP, French kissing with sexual context, lip-to-body kissing."
+      },
+      {
+        "atom_key": "atom.sexual_content.allusive_behavior",
+        "atom_name": "Sexually allusive behavior",
+        "serial_code": "C23 \u2014 Sexually allusive behavior",
+        "description": "Behaviors alluding to sexual activity \u2014 striptease, repetitive body movement (RBM), suggestive postures."
+      },
+      {
+        "atom_key": "atom.sexual_content.sexualized_framing",
+        "atom_name": "Sexualized framing",
+        "serial_code": "C27 \u2014 Sexualized framing",
+        "description": "Framing/zooming/centering that draws attention to clothed IBP \u2014 including dance-context sexualized framing. Use modifier.edge_borderline for borderline cases."
+      },
+      {
+        "atom_key": "atom.sexual_content.clothed_erection",
+        "atom_name": "Clothed erection",
+        "serial_code": "C28 \u2014 Clothed erection",
+        "description": "Visible erection through clothing."
+      },
+      {
+        "atom_key": "atom.sexual_content.suspected_porn",
+        "atom_name": "Suspected porn content",
+        "serial_code": "C29 \u2014 Suspected porn content",
+        "description": "Content suspected of being pornographic or extracted from pornographic sources."
+      },
+      {
+        "atom_key": "atom.exposure.breast.side_under",
+        "atom_name": "Female side or underbreast exposure",
+        "serial_code": "C3 \u2014 Female side or underbreast exposure",
+        "description": "Side of breast or underside (below breast line) visible without areola/nipple visible."
+      },
+      {
+        "atom_key": "atom.sex_aid",
+        "atom_name": "Sex aid",
+        "serial_code": "C32 \u2014 Sex aid",
+        "description": "Sex aids / sex toys. Pair with portrayal dimension to distinguish depiction vs marketing vs trade vs facilitation."
+      },
+      {
+        "atom_key": "atom.not_applicable",
+        "atom_name": "Not applicable",
+        "serial_code": "C37 \u2014 Not applicable",
+        "description": "None of the listed content atoms apply to this content. The policy does not engage \u2014 content atom not applicable \u2192 approve."
+      },
+      {
+        "atom_key": "atom.exposure.buttocks.in_clothing.partial",
+        "atom_name": "Partial buttock exposure in clothing",
+        "serial_code": "C38 \u2014 Partial buttock exposure in clothing",
+        "description": "Partial exposure of the buttocks while clothing is present (e.g., low-rise garments, partial gluteal region visible)."
+      },
+      {
+        "atom_key": "atom.exposure.buttocks.partial",
+        "atom_name": "Partial buttock exposure (unclothed)",
+        "serial_code": "C45 \u2014 Partial buttock exposure (unclothed)",
+        "description": "Partial visibility of unclothed buttocks \u2014 some buttocks area is exposed but not the full surface. Distinct from atom.exposure.buttocks.in_clothing.partial which expresses partial buttocks WITH clothing covering. Added in v2.1.0 to resolve the prior contradiction where partial-unclothed-buttocks was expressed as atom.exposure.buttocks.unclothed + modifier.partial."
+      },
+      {
+        "atom_key": "atom.sexual_content.sexual_interaction",
+        "atom_name": "Sexual interaction",
+        "serial_code": "C39 \u2014 Sexual interaction",
+        "description": "Solicitation or depiction of sexual interaction between persons, including offering, requesting, or facilitating sexual encounters."
+      },
+      {
+        "atom_key": "atom.exposure.breast.significant_other",
+        "atom_name": "Female breast exposed except areola/nipple covered",
+        "serial_code": "C4 \u2014 Female breast exposed except areola/nipple covered",
+        "description": "Breast otherwise exposed except for areola/nipple itself being covered. Distinct from areola_region because the visible content is the body OF the breast, not the areola."
+      },
+      {
+        "atom_key": "atom.sexual_content.sexual_arousal",
+        "atom_name": "Sexual arousal",
+        "serial_code": "C40 \u2014 Sexual arousal",
+        "description": "Depiction or solicitation involving sexual arousal as the focus, including content presented to elicit arousal in viewers."
+      },
+      {
+        "atom_key": "atom.sexual_content.nudity_for_sexual_gratification",
+        "atom_name": "Nudity for sexual gratification",
+        "serial_code": "C41 \u2014 Nudity for sexual gratification",
+        "description": "Nudity presented for sexual gratification \u2014 the nudity is the focus and intent is sexualised."
+      },
+      {
+        "atom_key": "atom.sexual_content.sexualized_transformation",
+        "atom_name": "Sexualized transformation of character",
+        "serial_code": "C42 \u2014 Sexualized transformation of character",
+        "description": "Animated/illustrated content depicting a character undergoing sexualised transformation (body morphing, age-progression, gender-presentation changes presented in a sexualised manner)."
+      },
+      {
+        "atom_key": "atom.sexual_content.kink",
+        "atom_name": "Kink",
+        "serial_code": "C43 \u2014 Kink",
+        "description": "Content depicting or referencing kink practices. Per policy, kink content fires as a violation regardless of whether sexual fixation is also present \u2014 distinct from fetish."
+      },
+      {
+        "atom_key": "atom.body_parts.intimate",
+        "atom_name": "Intimate body parts (IBP)",
+        "serial_code": "C44 \u2014 Intimate body parts (IBP)",
+        "description": "Umbrella atom for intimate body part references in sexualized contexts \u2014 penis bulge, protruding nipples, protruding outer lips of vulva, exposed inverted V, intergluteal cleft, upper inner thigh."
+      },
+      {
+        "atom_key": "atom.exposure.buttocks.unclothed",
+        "atom_name": "Unclothed buttocks exposure",
+        "serial_code": "C5 \u2014 Unclothed buttocks exposure",
+        "description": "Buttocks visible with no clothing covering them. Use modifier.partial when only one cheek or part is visible (e.g., side buttock)."
+      },
+      {
+        "atom_key": "atom.exposure.buttocks.in_clothing",
+        "atom_name": "Full buttock exposure in clothing",
+        "serial_code": "C6 \u2014 Full buttock exposure in clothing",
+        "description": "Buttocks visible despite the subject wearing clothing (thong, g-string, micro-bottoms). Use modifier.partial for partial cheek visibility."
+      },
+      {
+        "atom_key": "atom.exposure.mons_pubis",
+        "atom_name": "Full exposure of mons pubis",
+        "serial_code": "C7 \u2014 Full exposure of mons pubis",
+        "description": "Mons pubis area visible without covering."
+      },
+      {
+        "atom_key": "atom.exposure.implied_nudity",
+        "atom_name": "Implied nudity",
+        "serial_code": "C8 \u2014 Implied nudity",
+        "description": "Subject is implied to be nude though intimate body parts are not directly visible (e.g., bare shoulders + bedsheet)."
+      },
+      {
+        "atom_key": "atom.exposure.underwear.fully_visible",
+        "atom_name": "Fully visible underwear",
+        "serial_code": "C9 \u2014 Fully visible underwear",
+        "description": "Subject in fully visible underwear (bra, briefs, etc.) as the depiction. Use modifier.incidental for accidental glimpses (e.g., wind, motion)."
+      }
+    ],
+    "S": [
+      {
+        "atom_key": "subject.adult",
+        "atom_name": "Adult",
+        "serial_code": "S1 \u2014 Adult",
+        "description": "Subject is 18 or older."
+      },
+      {
+        "atom_key": "subject.youth",
+        "atom_name": "Youth (4-17)",
+        "serial_code": "S2 \u2014 Youth (4-17)",
+        "description": "Subject is between 4 and 17 inclusive."
+      },
+      {
+        "atom_key": "subject.infant_toddler",
+        "atom_name": "Infant or toddler",
+        "serial_code": "S3 \u2014 Infant or toddler",
+        "description": "Subject is under 4 years old. Treated separately because exception sets differ from the broader Youth bucket."
+      },
+      {
+        "atom_key": "subject.no_human",
+        "atom_name": "No humans",
+        "serial_code": "S4 \u2014 No humans",
+        "description": "Content contains no human subjects. Policy does not apply \u2014 subject gate not met \u2192 approve."
+      }
+    ],
+    "P": [
+      {
+        "atom_key": "portrayal.depiction",
+        "atom_name": "Visual depiction",
+        "serial_code": "P1 \u2014 Visual depiction",
+        "description": "Visual depiction of the content atom."
+      },
+      {
+        "atom_key": "portrayal.depiction.incidental",
+        "atom_name": "Incidental visual depiction",
+        "serial_code": "P10 \u2014 Incidental visual depiction",
+        "description": "Visual depiction where the content atom is captured incidentally \u2014 not the focus of the frame, not lingered upon."
+      },
+      {
+        "atom_key": "portrayal.depiction.non_incidental",
+        "atom_name": "Non-incidental visual depiction",
+        "serial_code": "P11 \u2014 Non-incidental visual depiction",
+        "description": "Visual depiction where the content atom is the focus of the frame, lingered upon, or intentionally displayed. Most policy rules apply to non-incidental depiction."
+      },
+      {
+        "atom_key": "portrayal.audio_depiction",
+        "atom_name": "Audio depiction",
+        "serial_code": "P2 \u2014 Audio depiction",
+        "description": "Audio depiction of the atom (sounds, vocalisations, off-screen audio cues that evoke or correspond to the content atom)."
+      },
+      {
+        "atom_key": "portrayal.description",
+        "atom_name": "Detailed Description",
+        "serial_code": "P3 \u2014 Detailed Description",
+        "description": "Verbal description of the content atom (text or speech). Pair with explicitness dimension to distinguish 'with intensifier' vs implicit."
+      },
+      {
+        "atom_key": "portrayal.marketing",
+        "atom_name": "Marketing",
+        "serial_code": "P6 \u2014 Marketing",
+        "description": "Promoting or advertising the atom."
+      },
+      {
+        "atom_key": "portrayal.facilitation",
+        "atom_name": "Facilitation",
+        "serial_code": "P7 \u2014 Facilitation",
+        "description": "Helping enable or arrange the atom. Can be explicit (overt offers, prices) or implicit (coded language, 'DM me'); mode captured by L5 explicitness atom."
+      },
+      {
+        "atom_key": "portrayal.trade",
+        "atom_name": "Trade",
+        "serial_code": "P8 \u2014 Trade",
+        "description": "Selling, exchanging, or commercializing the atom."
+      },
+      {
+        "atom_key": "portrayal.not_applicable",
+        "atom_name": "Not applicable",
+        "serial_code": "P9 \u2014 Not applicable",
+        "description": "None of the listed portrayals match the way this atom appears in the content. The policy does not engage \u2192 approve."
+      }
+    ],
+    "R": [
+      {
+        "atom_key": "realism.realistic",
+        "atom_name": "Realistic",
+        "serial_code": "R1 \u2014 Realistic",
+        "description": "Live-action / photographic / indistinguishable from real footage."
+      },
+      {
+        "atom_key": "realism.hyper_realistic",
+        "atom_name": "Hyper-realistic",
+        "serial_code": "R2 \u2014 Hyper-realistic",
+        "description": "CGI / AIGC content that is hyper-realistic \u2014 indistinguishable or nearly indistinguishable from realistic / live-action footage. AIGC is tagged according to what it is presented like."
+      },
+      {
+        "atom_key": "realism.semi_realistic",
+        "atom_name": "Semi-realistic",
+        "serial_code": "R3 \u2014 Semi-realistic",
+        "description": "Stylized but recognizable human figures (3D animation, painted illustration)."
+      },
+      {
+        "atom_key": "realism.non_realistic",
+        "atom_name": "Non-realistic",
+        "serial_code": "R4 \u2014 Non-realistic",
+        "description": "Cartoon / 2D animated / clearly non-real."
+      },
+      {
+        "atom_key": "realism.not_applicable",
+        "atom_name": "Not applicable",
+        "serial_code": "R5 \u2014 Not applicable",
+        "description": "The realism dimension is not applicable to this content, or cannot be determined. Falls outside the policy scope \u2192 approve."
+      }
+    ],
+    "E": [
+      {
+        "atom_key": "explicitness.explicit",
+        "atom_name": "Explicit",
+        "serial_code": "E1 \u2014 Explicit",
+        "description": "Directly visible/described with at least one sexual intensifier (graphic detail, anatomical specifics, profanity)."
+      },
+      {
+        "atom_key": "explicitness.implicit",
+        "atom_name": "Implicit",
+        "serial_code": "E2 \u2014 Implicit",
+        "description": "Obstructed from view, indirect, or described without intensifiers."
+      }
+    ],
+    "M": [
+      {
+        "atom_key": "modifier.partial",
+        "atom_name": "Partial",
+        "serial_code": "M1 \u2014 Partial",
+        "description": "The exposure/depiction is partial rather than full (e.g., one buttock cheek, partial breast, cropped frame)."
+      },
+      {
+        "atom_key": "modifier.water",
+        "atom_name": "Water (swimming, beach, pool)",
+        "serial_code": "M10 \u2014 Water (swimming, beach, pool)",
+        "description": "Subject in water-related context."
+      },
+      {
+        "atom_key": "modifier.sunbathing",
+        "atom_name": "Sunbathing",
+        "serial_code": "M11 \u2014 Sunbathing",
+        "description": "Subject sunbathing."
+      },
+      {
+        "atom_key": "modifier.sauna_spa",
+        "atom_name": "Sauna or spa",
+        "serial_code": "M12 \u2014 Sauna or spa",
+        "description": "Subject in a sauna or spa setting."
+      },
+      {
+        "atom_key": "modifier.fitness",
+        "atom_name": "Fitness",
+        "serial_code": "M13 \u2014 Fitness",
+        "description": "Subject in a fitness/exercise context."
+      },
+      {
+        "atom_key": "modifier.dance",
+        "atom_name": "Dance",
+        "serial_code": "M14 \u2014 Dance",
+        "description": "Subject is dancing as the primary activity."
+      },
+      {
+        "atom_key": "modifier.advertisement",
+        "atom_name": "Advertisement, brand endorsement, clothing hauls",
+        "serial_code": "M15 \u2014 Advertisement, brand endorsement, clothing hauls",
+        "description": "Content is an ad, brand endorsement, or clothing haul."
+      },
+      {
+        "atom_key": "modifier.sexual_purpose",
+        "atom_name": "Sexual purpose",
+        "serial_code": "M25 \u2014 Sexual purpose",
+        "description": "Content has a sexual purpose, intent, or context. Distinguishes nudity-for-sexualisation from non-sexualised nudity."
+      },
+      {
+        "atom_key": "modifier.incidental",
+        "atom_name": "Incidental depiction",
+        "serial_code": "M3 \u2014 Incidental depiction",
+        "description": "The content atom appears incidentally (not the primary focus of the depiction)."
+      },
+      {
+        "atom_key": "modifier.non_sexual_purpose",
+        "atom_name": "Absence of sexual purpose",
+        "serial_code": "M4 \u2014 Absence of sexual purpose",
+        "description": "Content has no sexual purpose. Used as a 'lift' qualifier on exception buckets to move outcome from blocking-violation to outright-approve."
+      },
+      {
+        "atom_key": "modifier.breastfeeding",
+        "atom_name": "Breastfeeding / chestfeeding",
+        "serial_code": "M6 \u2014 Breastfeeding / chestfeeding",
+        "description": "Subject is breastfeeding or chestfeeding (non-sexualized)."
+      },
+      {
+        "atom_key": "modifier.body_positivity",
+        "atom_name": "Body positivity",
+        "serial_code": "M7 \u2014 Body positivity",
+        "description": "Content framed around body positivity (e.g., diversity-of-bodies messaging)."
+      },
+      {
+        "atom_key": "modifier.gender_diverse",
+        "atom_name": "Gender diverse expressions",
+        "serial_code": "M8 \u2014 Gender diverse expressions",
+        "description": "Content reflecting gender-diverse expression (e.g., non-binary or trans presentation)."
+      },
+      {
+        "atom_key": "modifier.nipple_covered",
+        "atom_name": "Nipple covered",
+        "serial_code": "M26 \u2014 Nipple covered",
+        "description": "Nipple/areola is covered (by sticker, hand, pasties, clothing edge) while surrounding breast tissue is exposed. Used to distinguish areola+nipple visible (no modifier) vs areola only with nipple covered. Relevant for differentiating severity within breast exposure claims."
+      },
+      {
+        "atom_key": "modifier.relevant_to_video",
+        "atom_name": "Violation relevant to video content",
+        "serial_code": "M27 \u2014 Violation relevant to video content",
+        "description": "The violating content is relevant to the video's primary subject matter (not incidental background noise). Used in EQM1 bundle as a qualifier for exception-lift eligibility: exceptions only lift when both modifier.non_sexual_purpose AND modifier.relevant_to_video are tagged."
+      }
+    ],
+    "X": [
+      {
+        "atom_key": "exception.documentary",
+        "atom_name": "Documentary",
+        "serial_code": "X1 \u2014 Documentary",
+        "description": "Content presented in a documentary frame (factual, journalistic, public-interest)."
+      },
+      {
+        "atom_key": "exception.educational",
+        "atom_name": "Educational",
+        "serial_code": "X2 \u2014 Educational",
+        "description": "Content with an educational purpose (e.g., sex-ed, anatomy lesson)."
+      },
+      {
+        "atom_key": "exception.scientific",
+        "atom_name": "Scientific",
+        "serial_code": "X3 \u2014 Scientific",
+        "description": "Content presented in a scientific frame (medical, anatomical, research)."
+      },
+      {
+        "atom_key": "exception.artistic",
+        "atom_name": "Artistic",
+        "serial_code": "X4 \u2014 Artistic",
+        "description": "Content presented as art (painting, sculpture, performance art)."
+      },
+      {
+        "atom_key": "exception.fictional",
+        "atom_name": "Fictional",
+        "serial_code": "X5 \u2014 Fictional",
+        "description": "Content presented as fiction (drama, narrative TV/film, novelistic)."
+      },
+      {
+        "atom_key": "exception.humor",
+        "atom_name": "Humor",
+        "serial_code": "X6 \u2014 Humor",
+        "description": "Content presented as humor / comedy. Some doc rows narrow this to 'stand-up comedy only'."
+      }
+    ]
+  }
+}
