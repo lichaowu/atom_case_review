@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.4-prec-images-fix";
+const PLUGIN_VERSION = "atom-mvp v0.18.6-prec-context";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -3372,7 +3372,11 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
     images_attached_count:  imgSummary.count,
     images_note:            imgSummary.note,
     // Reviewer's draft tags (may be empty). Specialist may revise.
-    draft_atom_tags:        tags || {}
+    draft_atom_tags:        tags || {},
+    // Precedent-specific context (only populated in precedent re-check mode)
+    prior_decision:         pendingCase.decision || undefined,
+    prior_rationale:        pendingCase.rationale || undefined,
+    case_id:                pendingCase.case_id || undefined
   };
 
   // Precedents — content-only, no retrieval scores. Atoms are the analogy
@@ -3495,7 +3499,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
 //                           where the reviewer can right-click → Copy image.
 //   • "↓ .json" remains as a quiet ghost link for offline / drag-into-chat.
 function PayloadPane(props) {
-  const { payload, pendingCase, imageMeta } = props;
+  const { payload, pendingCase, imageMeta, reviewMode } = props;
   const [copyState, setCopyState]       = React.useState("idle"); // idle | ok | err
   const [imgState,  setImgState]        = React.useState("idle"); // idle | resolving | ok | newtab | err
   const [resolvedImgUrls, setResolvedImgUrls] = React.useState([]);
@@ -3600,7 +3604,7 @@ function PayloadPane(props) {
       if (imageMeta && typeof imageMeta.resolve === "function") {
         // Use cache (no priority) — images are already resolved for display.
         // Only if cache miss, this triggers a fresh SDK call through the queue.
-        const resolved = await imageMeta.resolve("pending", pendingCase.record_id, kfImages);
+        const resolved = await imageMeta.resolve(reviewMode === "precedent" ? "case" : "pending", pendingCase.record_id, kfImages);
         if (Array.isArray(resolved)) {
           urls = resolved;
         }
@@ -4697,11 +4701,11 @@ function AtomTagger(props) {
 
   // Phase 3: live engine evaluation. Memoized on (tags, policy_title, claims).
   const engineResult = React.useMemo(() => {
-    if (!pendingCase || totalSelected === 0) return null;
+    if (!activeCase || totalSelected === 0) return null;
     return window.AtomEngine.evaluate(tags, corpus.claims, {
-      policy_title: pendingCase.policy_title || undefined
+      policy_title: activeCase.policy_title || undefined
     });
-  }, [tags, pendingCase, corpus.claims, totalSelected]);
+  }, [tags, activeCase, corpus.claims, totalSelected]);
 
   // Phase A: Structural Stability Score. Memoized on engineResult.
   const stabilityResult = React.useMemo(() => {
@@ -4730,7 +4734,7 @@ function AtomTagger(props) {
   // current atom selection to find similar precedents in corpus.cases.
   // Merge user-selected tags with APV draft atoms for richer atom-Jaccard retrieval.
   const retrievalAtoms = React.useMemo(() => {
-    var draft = (pendingCase && pendingCase.apv_draft_atoms) || null;
+    var draft = (activeCase && activeCase.apv_draft_atoms) || null;
     if (!draft) return tags;
     var merged = {};
     for (var i = 0; i < DIMENSIONS.length; i++) {
@@ -4740,21 +4744,21 @@ function AtomTagger(props) {
       merged[d] = Array.from(s);
     }
     return merged;
-  }, [tags, pendingCase]);
+  }, [tags, activeCase]);
 
   const precedentsResult = React.useMemo(() => {
-    if (!pendingCase) return null;
+    if (!activeCase) return null;
     const candidate = {
-      policy_title: pendingCase.policy_title,
-      issue:        pendingCase.issue,
+      policy_title: activeCase.policy_title,
+      issue:        activeCase.issue,
       atoms: retrievalAtoms,
-      visual_summary: pendingCase.visual_summary,
-      asr_text:       pendingCase.asr_text,
-      ocr_text:       pendingCase.ocr_text,
-      caption_text:   pendingCase.caption_text
+      visual_summary: activeCase.visual_summary,
+      asr_text:       activeCase.asr_text,
+      ocr_text:       activeCase.ocr_text,
+      caption_text:   activeCase.caption_text
     };
     return window.AtomRetriever.retrieve(candidate, corpus.cases, { topPerChannel: 4, totalK: 8 });
-  }, [retrievalAtoms, pendingCase, corpus.cases]);
+  }, [retrievalAtoms, activeCase, corpus.cases]);
 
   // Suggested atoms per dim = union of atoms from top-5 precedents.
   // Drives DimRow's default candidate pool. Re-computes with the precedent set.
@@ -4777,9 +4781,9 @@ function AtomTagger(props) {
   // Issue/policy-scoped atom filter: only show atoms referenced by claims for the active issue.
   // Collects all atom_keys from gates + modifiers + exceptions of matching claims.
   const relevantAtomKeysByDim = React.useMemo(() => {
-    if (!pendingCase || !pendingCase.issue) return null;
-    var issue = pendingCase.issue;
-    var policyTitle = pendingCase.policy_title || null;
+    if (!activeCase || !activeCase.issue) return null;
+    var issue = activeCase.issue;
+    var policyTitle = activeCase.policy_title || null;
     var relevant = { C:new Set(), S:new Set(), P:new Set(), R:new Set(), E:new Set(), M:new Set(), X:new Set() };
     for (var i = 0; i < corpus.claims.length; i++) {
       var c = corpus.claims[i];
@@ -4809,14 +4813,14 @@ function AtomTagger(props) {
       total += out[d].length;
     }
     return total > 0 ? out : null;
-  }, [pendingCase, corpus.claims]);
+  }, [activeCase, corpus.claims]);
 
   // Phase 5: payload v0.5 emit. Memoized on (pendingCase, tags, engineResult,
   // precedentsResult, corpus). Returns null when no case picked.
   const payload = React.useMemo(() => {
-    if (!pendingCase) return null;
-    return buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus);
-  }, [pendingCase, tags, engineResult, precedentsResult, corpus]);
+    if (!activeCase) return null;
+    return buildPayload(activeCase, tags, engineResult, precedentsResult, corpus);
+  }, [activeCase, tags, engineResult, precedentsResult, corpus]);
 
   return e("div", null,
     e("div", { className: "tag-card" },
@@ -4914,6 +4918,14 @@ function AtomTagger(props) {
         activeCase.case_url && e("dd", null, e("a", { href: activeCase.case_url, target: "_blank", rel: "noopener noreferrer", className: "case-url-link" }, "↗ View full case")),
         (activeCase.issue || activeCase.policy_title) && e("dt", null, "issue / title"),
         (activeCase.issue || activeCase.policy_title) && e("dd", null, [activeCase.issue, activeCase.policy_title].filter(Boolean).join(" · ") || "—"),
+        reviewMode === "precedent" && activeCase.case_id && e("dt", null, "case_id"),
+        reviewMode === "precedent" && activeCase.case_id && e("dd", { style: { fontFamily: "var(--mono)", fontSize: 11 } }, activeCase.case_id),
+        reviewMode === "precedent" && activeCase.decision && e("dt", null, "decision"),
+        reviewMode === "precedent" && activeCase.decision && e("dd", null,
+          e("span", { className: "verdict-pill verdict-" + (activeCase.decision === "flag" ? "VIOLATION" : activeCase.decision === "approve" ? "APPROVE" : "NOT_RECOMMEND"),
+            style: { fontSize: 11, padding: "3px 10px" } }, activeCase.decision)),
+        reviewMode === "precedent" && activeCase.rationale && e("dt", null, "rationale"),
+        reviewMode === "precedent" && activeCase.rationale && e("dd", null, e("div", { className: "text-block", style: { maxHeight: 120, overflow: "auto", fontSize: 12, background: "var(--surface-card)", padding: "8px 10px", borderRadius: 6 } }, activeCase.rationale)),
         activeCase.user_nickname && e("dt", null, "user"),
         activeCase.user_nickname && e("dd", null,
           e("div", { className: "user-context" },
@@ -4967,7 +4979,8 @@ function AtomTagger(props) {
     activeCase && payload && e(PayloadPane, {
       payload: payload,
       pendingCase: activeCase,
-      imageMeta: corpus.image_meta
+      imageMeta: corpus.image_meta,
+      reviewMode: reviewMode
     }),
 
     activeCase && payload && e(ReasonedVerdictPane, {
