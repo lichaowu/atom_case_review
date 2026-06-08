@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.1-ux-tooltips";
+const PLUGIN_VERSION = "atom-mvp v0.18.2-validator-fix";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -3765,9 +3765,8 @@ function validateAtomVerdict(v) {
   if (!v.verdict || VERDICT_ENUM.indexOf(v.verdict) === -1) {
     errors.push("verdict must be one of " + VERDICT_ENUM.join(" / "));
   }
-  if (typeof v.confidence !== "number" || v.confidence < 1 || v.confidence > 10) {
-    warnings.push("confidence should be an integer 1–10");
-  }
+  // confidence: legacy integer 1-10 or current float 0-1 (deprecated, superseded by ambiguity_assessment)
+  // No warning emitted — field is deprecated and both formats are accepted.
   if (!v.proposed_atom_tags || typeof v.proposed_atom_tags !== "object") {
     errors.push("proposed_atom_tags missing or not an object");
   } else {
@@ -3914,7 +3913,6 @@ function ReasonedVerdictPane(props) {
 
   // ---- Derived view-model -----
   const verdict    = parsed && parsed.verdict;
-  const conf       = parsed && parsed.confidence;
   const grey       = parsed && parsed.grey;
   const pattern    = parsed && parsed.pattern;
   const finalTitle = parsed && parsed.final_policy_title;
@@ -3944,8 +3942,6 @@ function ReasonedVerdictPane(props) {
 
   // Confidence chip color (legacy plugin's mapping):
   //   ≥ 7 → success / ≤ 4 → error / mid → warning
-  const confKind = (typeof conf !== "number") ? "" :
-                   conf >= 7 ? "high" : conf <= 4 ? "low" : "mid";
 
   // Pre-compute one resolved view for proposed atoms, with rejected atoms
   // grouped per-dim so the renderer can interleave struck-through chips inline.
@@ -4042,7 +4038,7 @@ function ReasonedVerdictPane(props) {
     // ---- Rendered verdict view ----
     parsed && check.ok && e("div", { style: { marginTop: 14 } },
 
-      // Header strip — verdict pill + confidence + meta chips
+      // Header strip — verdict pill + meta chips
       e("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 4 } },
         e("span", { className: "verdict-pill verdict-" + (verdict || "NO_CLAIM_FIRED") },
           verdict || "?"),
