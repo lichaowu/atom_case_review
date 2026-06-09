@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.13-self-exclude";
+const PLUGIN_VERSION = "atom-mvp v0.18.14-scoped-atoms";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4728,6 +4728,27 @@ function AtomTagger(props) {
   const setDim = (dim) => (next) => setTags(prev => Object.assign({}, prev, { [dim]: next }));
   const totalSelected = DIMENSIONS.reduce((s,d) => s + (tags[d]||[]).length, 0);
 
+  // Issue-scoped atom candidates: when an issue is resolved, only show atoms used in that issue's claims
+  const scopedAtomsByDim = React.useMemo(() => {
+    const pArea = activeCase && activeCase.issue ? resolvePolicyArea(activeCase.issue) : null;
+    if (!pArea || !corpus.claims || !corpus.claims.length) return corpus.atomsByDim;
+    // Collect all atom_keys referenced by claims matching this policy area
+    const relevantKeys = new Set();
+    for (const c of corpus.claims) {
+      if (!matchesPolicyArea(c.issue, pArea)) continue;
+      const gates = c.gates || {};
+      for (const d of DIMENSIONS) {
+        for (const k of (gates[d] || [])) relevantKeys.add(k);
+      }
+    }
+    if (!relevantKeys.size) return corpus.atomsByDim;
+    const scoped = {};
+    for (const d of DIMENSIONS) {
+      scoped[d] = (corpus.atomsByDim[d] || []).filter(a => relevantKeys.has(a.atom_key));
+    }
+    return scoped;
+  }, [activeCase, corpus.claims, corpus.atomsByDim]);
+
   // Phase 3: live engine evaluation. Memoized on (tags, policy_title, claims).
   const engineResult = React.useMemo(() => {
     if (!activeCase || totalSelected === 0) return null;
@@ -5064,7 +5085,7 @@ function AtomTagger(props) {
       ...DIMENSIONS.map(d => e(DimRow, {
         key: d,
         dim: d,
-        atoms: corpus.atomsByDim[d] || [],
+        atoms: scopedAtomsByDim[d] || [],
         selected: tags[d] || [],
         suggested: (suggestedByDim && suggestedByDim[d]) || [],
         skillProposed: (skillProposed[d] || []),
