@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.9-comment-field";
+const PLUGIN_VERSION = "atom-mvp v0.18.10-cross-filter";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1056,11 +1056,14 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
     // 1. Scope: title → issue → none
     var pool = cases.slice();
     var scope = { kind: "none", value: null };
-    if (scopeByTitle && candidate.policy_title) {
+    if (scopeByTitle && candidate.policy_title && candidate.policy_title.length) {
+      var _candTitles = Array.isArray(candidate.policy_title) ? candidate.policy_title : [candidate.policy_title];
       pool = pool.filter(function (c) {
-        return !c.policy_title || c.policy_title === candidate.policy_title;
+        if (!c.policy_title || !c.policy_title.length) return true;
+        var _cTitles = Array.isArray(c.policy_title) ? c.policy_title : [c.policy_title];
+        return _cTitles.some(function(t) { return _candTitles.indexOf(t) >= 0; });
       });
-      scope = { kind: "policy_title", value: candidate.policy_title };
+      scope = { kind: "policy_title", value: _candTitles.join(", ") };
     } else if (scopeByIssue && candidate.issue) {
       // Match same issue OR sibling sub-verticals (e.g. HSS/BPI both match HHB cases)
       var SIBLING_ISSUES = { HHB:["HHB","HSS","BPI"], HSS:["HHB","HSS","BPI"], BPI:["HHB","HSS","BPI"] };
@@ -1143,7 +1146,7 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
     var seen = Object.create(null);
     var merged = [];
     function addOne(item, channels) {
-      var key = item.record_id || item.case_id || (item.source_video_id + ":" + (item.policy_title || ""));
+      var key = item.record_id || item.case_id || (item.source_video_id + ":" + (Array.isArray(item.policy_title) ? item.policy_title.join(",") : (item.policy_title || "")));
       if (seen[key] != null) {
         // Already added — augment channels.
         var idx = seen[key];
@@ -1170,7 +1173,7 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
       });
       for (var i = 0; i < combined.length && merged.length < totalK; i++) {
         var c = combined[i];
-        var k = c.record_id || c.case_id || (c.source_video_id + ":" + (c.policy_title || ""));
+        var k = c.record_id || c.case_id || (c.source_video_id + ":" + (Array.isArray(c.policy_title) ? c.policy_title.join(",") : (c.policy_title || "")));
         if (seen[k] != null) continue;
         seen[k] = merged.length;
         merged.push(Object.assign({}, c, {
@@ -1514,7 +1517,7 @@ async function loadAtomCorpus() {
       case_id: get(f, casesIdx, "case_id"),
       source_video_id: get(f, casesIdx, ID_FIELD) || get(f, casesIdx, "source_video_id") || get(f, casesIdx, "object_id"),
       issue: get(f, casesIdx, "issue") || get(f, casesIdx, "policy_area"),
-      policy_title: get(f, casesIdx, "policy_title"),
+      policy_title: getArr(f, casesIdx, "policy_title"),
       decision: get(f, casesIdx, "decision"),
       visual_summary: get(f, casesIdx, "visual_summary"),
       asr_text: get(f, casesIdx, "asr_text"),
@@ -1548,7 +1551,7 @@ async function loadAtomCorpus() {
       record_id: r.recordId || r.record_id,
       source_video_id: get(f, pendingIdx, ID_FIELD) || get(f, pendingIdx, "source_video_id") || get(f, pendingIdx, "object_id"),
       issue: get(f, pendingIdx, "issue"),
-      policy_title: get(f, pendingIdx, "policy_title"),
+      policy_title: getArr(f, pendingIdx, "policy_title"),
       visual_summary: get(f, pendingIdx, "visual_summary"),
       asr_text: get(f, pendingIdx, "asr_text"),
       ocr_text: get(f, pendingIdx, "ocr_text"),
@@ -2381,8 +2384,8 @@ function PrecedentDetailModal(props) {
           e("div", { className: "prec-pills", style: { marginTop: 6 }},
             r.decision && e("span", { className: "prec-decision " + decisionClass(r.decision) },
               r.decision),
-            r.policy_title && e("span", { className: "ev-pill" }, r.policy_title),
-            r.issue && r.issue !== r.policy_title && e("span", { className: "ev-pill" }, r.issue))
+            ...(Array.isArray(r.policy_title) ? r.policy_title : [r.policy_title]).filter(Boolean).map(t => e("span", { key: t, className: "ev-pill" }, t)),
+            r.issue && !(Array.isArray(r.policy_title) ? r.policy_title.includes(r.issue) : r.policy_title === r.issue) && e("span", { className: "ev-pill" }, r.issue))
         ),
         e("button", {
           className: "prec-modal-close",
@@ -2514,8 +2517,8 @@ function PrecedentsPane(props) {
           e("div", { className: "prec-pills" },
             r.decision && e("span", { className: "prec-decision " + decisionClass(r.decision) },
               r.decision),
-            r.policy_title && e("span", { className: "ev-pill" }, r.policy_title),
-            r.issue && r.issue !== r.policy_title && e("span", { className: "ev-pill" }, r.issue)
+            ...(Array.isArray(r.policy_title) ? r.policy_title : [r.policy_title]).filter(Boolean).map(t => e("span", { key: t, className: "ev-pill" }, t)),
+            r.issue && !(Array.isArray(r.policy_title) ? r.policy_title.includes(r.issue) : r.policy_title === r.issue) && e("span", { className: "ev-pill" }, r.issue)
           ),
           showDiag && e("div", { className: "prec-scores" },
             e("span", { className: "prec-score primary",
@@ -3202,7 +3205,7 @@ function sliceRelevantClaims(allIssueClaims, opts) {
   // (d) Precedent policy_titles → also pull those claims (precedents anchor analogy)
   const precTitles = new Set();
   for (const p of (precedents || [])) {
-    if (p && p.policy_title) precTitles.add(String(p.policy_title).trim().toLowerCase());
+    if (p && p.policy_title) { var _pts = Array.isArray(p.policy_title) ? p.policy_title : [p.policy_title]; for (var _i = 0; _i < _pts.length; _i++) { if (_pts[_i]) precTitles.add(String(_pts[_i]).trim().toLowerCase()); } }
   }
   if (precTitles.size) {
     for (const c of allIssueClaims) {
@@ -3366,7 +3369,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
   const candidate = {
     item_id:                pendingCase.source_video_id || pendingCase.record_id || "",
     record_id:              pendingCase.record_id || "",
-    policy_title:           pendingCase.policy_title || "",
+    policy_title:           Array.isArray(pendingCase.policy_title) ? pendingCase.policy_title.join(", ") : (pendingCase.policy_title || ""),
     issue:                  pendingCase.issue || "",
     visual_summary:         pendingCase.visual_summary || "",
     asr_text:               pendingCase.asr_text || "",
@@ -3402,7 +3405,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
     rank:               i + 1,
     case_id:            r.case_id || r.source_video_id || "",
     source_video_id:    r.source_video_id || "",
-    policy_title:       r.policy_title || "",
+    policy_title:       Array.isArray(r.policy_title) ? r.policy_title.join(", ") : (r.policy_title || ""),
     issue:              r.issue || "",
     decision:           r.decision || "",
     visual_summary:     _cap(r.visual_summary, PREC_VS_CAP),
@@ -4165,7 +4168,7 @@ function ReasonedVerdictPane(props) {
                       r.case_id || r.source_video_id || r.record_id || "—"),
                     r.decision && e("span", { className: "atom-chip" },
                       e("span", { className: "chip-name" }, r.decision)),
-                    r.policy_title && e("span", { className: "ev-pill" }, r.policy_title)
+                    ...(Array.isArray(r.policy_title) ? r.policy_title : [r.policy_title]).filter(Boolean).map(t => e("span", { key: t, className: "ev-pill" }, t))
                   ),
                   r.visual_summary && e("div", { style: { fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.4 } },
                     r.visual_summary.length > 150 ? r.visual_summary.slice(0, 150) + "…" : r.visual_summary)
@@ -4335,7 +4338,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       const v = verdictData.verdict || "";
       if (v === "APPROVE") setDecision("pass");
       else setDecision("flag");
-      setPolicyTitle(verdictData.final_policy_title || pendingCase.policy_title || "");
+      setPolicyTitle(verdictData.final_policy_title || (Array.isArray(pendingCase.policy_title) ? pendingCase.policy_title.join(", ") : pendingCase.policy_title) || "");
       // Preload rationale: prefer skill-generated `rationale_for_precedent`
       // (concise, human-readable, max ~1200 chars, focused on decisive signals).
       // Fall back to [VERDICT] section of `reason` for older skill versions.
@@ -4355,7 +4358,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       setRationale(_preloadRationale);
     } else {
       setDecision("flag");
-      setPolicyTitle(pendingCase.policy_title || "");
+      setPolicyTitle(Array.isArray(pendingCase.policy_title) ? pendingCase.policy_title.join(", ") : (pendingCase.policy_title || ""));
       setRationale("");
     }
     setSaved(null);
@@ -4449,7 +4452,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
   // Available policy titles from the corpus precedents + pending
   const titleOptions = React.useMemo(() => {
     const s = new Set();
-    for (const c of (corpus.cases || [])) { if (c.policy_title) s.add(c.policy_title); }
+    for (const c of (corpus.cases || [])) { const _pt = Array.isArray(c.policy_title) ? c.policy_title : [c.policy_title]; for (const t of _pt) { if (t) s.add(t); } }
     for (const p of (corpus.pending || [])) { if (p.policy_title) s.add(p.policy_title); }
     if (policyTitle) s.add(policyTitle);
     return Array.from(s).sort();
@@ -4635,9 +4638,13 @@ function AtomTagger(props) {
   const titleOptions = React.useMemo(() => {
     const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
     const s = new Set();
-    for (const p of src) { if (p.policy_title) s.add(p.policy_title); }
+    for (const p of src) {
+      if (issueFilter && (p.issue || "") !== issueFilter) continue;
+      const titles = Array.isArray(p.policy_title) ? p.policy_title : (p.policy_title ? [p.policy_title] : []);
+      for (const t of titles) { if (t) s.add(t); }
+    }
     return Array.from(s).sort();
-  }, [corpus.cases, corpus.pending, reviewMode]);
+  }, [corpus.cases, corpus.pending, reviewMode, issueFilter]);
 
   const issueOptions = React.useMemo(() => {
     const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
@@ -4664,15 +4671,16 @@ function AtomTagger(props) {
   const filteredPending = React.useMemo(() => {
     const q = caseFilter.trim().toLowerCase();
     return corpus.pending.filter(p => {
-      if (titleFilter && (p.policy_title || "") !== titleFilter) return false;
+      if (titleFilter) { const _t = Array.isArray(p.policy_title) ? p.policy_title : [p.policy_title || ""]; if (!_t.includes(titleFilter)) return false; }
       if (issueFilter && (p.issue || "") !== issueFilter) return false;
       if (statusFilter && (p.status || "") !== statusFilter) return false;
       if (!q) return true;
+      const _pt = Array.isArray(p.policy_title) ? p.policy_title.join(" ") : (p.policy_title || "");
       return (
         (p.source_video_id || "").toLowerCase().includes(q) ||
         (p.visual_summary || "").toLowerCase().includes(q) ||
         (p.caption_text   || "").toLowerCase().includes(q) ||
-        (p.policy_title   || "").toLowerCase().includes(q) ||
+        _pt.toLowerCase().includes(q) ||
         (p.issue          || "").toLowerCase().includes(q)
       );
     });
@@ -4684,16 +4692,17 @@ function AtomTagger(props) {
   const filteredPrecedents = React.useMemo(() => {
     const q = caseFilter.trim().toLowerCase();
     return corpus.cases.filter(c => {
-      if (titleFilter && (c.policy_title || "") !== titleFilter) return false;
+      if (titleFilter) { const _t = Array.isArray(c.policy_title) ? c.policy_title : [c.policy_title || ""]; if (!_t.includes(titleFilter)) return false; }
       if (issueFilter && (c.issue || "") !== issueFilter) return false;
       if (statusFilter && (c.status || "") !== statusFilter) return false;
       if (decisionFilter && (c.decision || "") !== decisionFilter) return false;
       if (!q) return true;
+      const _pt = Array.isArray(c.policy_title) ? c.policy_title.join(" ") : (c.policy_title || "");
       return (
         (c.source_video_id || "").toLowerCase().includes(q) ||
         (c.case_id || "").toLowerCase().includes(q) ||
         (c.visual_summary || "").toLowerCase().includes(q) ||
-        (c.policy_title || "").toLowerCase().includes(q) ||
+        _pt.toLowerCase().includes(q) ||
         (c.issue || "").toLowerCase().includes(q)
       );
     });
@@ -4888,7 +4897,7 @@ function AtomTagger(props) {
           className: "case-picker",
           style: { flex: "0 1 180px", minWidth: 140 },
           value: issueFilter,
-          onChange: ev => setIssueFilter(ev.target.value)
+          onChange: ev => { setIssueFilter(ev.target.value); setTitleFilter(""); }
         },
           e("option", { value: "" }, "all issues (" + issueOptions.length + ")"),
           ...issueOptions.map(t => e("option", { key: t, value: t }, t))
@@ -4949,7 +4958,7 @@ function AtomTagger(props) {
           ...filteredPrecedents.map(c => e("option", { key: c.record_id, value: c.record_id },
             (c.case_id || c.source_video_id) +
             (c.decision ? " [" + c.decision + "]" : "") +
-            (c.policy_title ? " · " + c.policy_title : "") +
+            (c.policy_title && c.policy_title.length ? " · " + (Array.isArray(c.policy_title) ? c.policy_title.join(", ") : c.policy_title) : "") +
             (c.visual_summary ? " · " + c.visual_summary.slice(0, 60).replace(/\s+/g," ") : "")
           ))
         )
@@ -4958,8 +4967,8 @@ function AtomTagger(props) {
         e("dt", null, "item_id"),        e("dd", null, activeCase.source_video_id || "—"),
         activeCase.case_url && e("dt", null, "case_url"),
         activeCase.case_url && e("dd", null, e("a", { href: activeCase.case_url, target: "_blank", rel: "noopener noreferrer", className: "case-url-link" }, "↗ View full case")),
-        (activeCase.issue || activeCase.policy_title) && e("dt", null, "issue / title"),
-        (activeCase.issue || activeCase.policy_title) && e("dd", null, [activeCase.issue, activeCase.policy_title].filter(Boolean).join(" · ") || "—"),
+        (activeCase.issue || (activeCase.policy_title && activeCase.policy_title.length)) && e("dt", null, "issue / title"),
+        (activeCase.issue || (activeCase.policy_title && activeCase.policy_title.length)) && e("dd", null, [activeCase.issue, ...(Array.isArray(activeCase.policy_title) ? activeCase.policy_title : [activeCase.policy_title])].filter(Boolean).join(" · ") || "—"),
         reviewMode === "precedent" && activeCase.case_id && e("dt", null, "case_id"),
         reviewMode === "precedent" && activeCase.case_id && e("dd", { style: { fontFamily: "var(--mono)", fontSize: 11 } }, activeCase.case_id),
         reviewMode === "precedent" && activeCase.decision && e("dt", null, "decision"),
