@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.17-save-titles";
+const PLUGIN_VERSION = "atom-mvp v0.18.18-engine-feedback";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4771,9 +4771,12 @@ function AtomTagger(props) {
   // Phase 3: live engine evaluation. Memoized on (tags, policy_title, claims).
   const engineResult = React.useMemo(() => {
     if (!activeCase || totalSelected === 0) return null;
-    return window.AtomEngine.evaluate(tags, corpus.claims, {
+    var _r = window.AtomEngine.evaluate(tags, corpus.claims, {
       policy_title: activeCase.policy_title || undefined
     });
+    console.debug("[AtomTagger] Engine recalculated: verdict=" + (_r ? _r.verdict : "null") +
+      " hits=" + (_r ? _r.gate_hits.length : 0) + " totalAtoms=" + totalSelected);
+    return _r;
   }, [tags, activeCase, corpus.claims, totalSelected]);
 
   // Phase A: Structural Stability Score. Memoized on engineResult.
@@ -5128,6 +5131,7 @@ function AtomTagger(props) {
         // Main row: engine verdict (based on atom selections) + defensibility pill
         e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 } },
           e("span", { className: "verdict-pill verdict-" + (engineV || "NO_CLAIM_FIRED"), "data-tip": "Verdict from rule engine based on your current atom selections" }, engineV || "NO_CLAIM_FIRED"),
+          engineResult && engineResult.gate_hits && e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)" }, "data-tip": "Claims fired by the rule engine for your current atoms" }, engineResult.gate_hits.length + " claim" + (engineResult.gate_hits.length === 1 ? "" : "s") + " fired"),
           engineV && skillV && engineV !== skillV && e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "inline-flex", alignItems: "center", gap: 4 }, "data-tip": "AI skill suggested " + skillV + " — differs from rule engine result" }, "skill: " + skillV),
           def && e("span", {
             "data-tip": def.reason,
