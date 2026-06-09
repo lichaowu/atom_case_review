@@ -1877,7 +1877,7 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     setSmartField("policy_title", _splitMulti(opts.policyTitle || pendingCase.policy_title || ""));
   }
   setSmartField("decision", _normDecision(opts.decision));
-  setSmartField("status", "Reviewed");
+  setSmartField("status", "Policy Reviewed");
   setTextField("visual_summary", pendingCase.visual_summary);
   setTextField("asr_text", pendingCase.asr_text);
   setTextField("ocr_text", pendingCase.ocr_text);
@@ -2139,7 +2139,7 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
     setSmartField("policy_title", _splitMulti(opts.policyTitle || precedentCase.policy_title || ""));
   }
   setTextField("rationale", opts.rationale || "");
-  setSmartField("status", "Reviewed");
+  setSmartField("status", "Double Confirmed");
   if (opts.reviewedBy) { setSmartField("reviewed_by", opts.reviewedBy); }
   if (opts.overrideTag) { setTextField("override_tag", opts.overrideTag); }
 
