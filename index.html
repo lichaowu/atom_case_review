@@ -4847,6 +4847,24 @@ function AtomTagger(props) {
 
   return e("div", null,
     e("div", { className: "tag-card" },
+      e("div", { style: { marginBottom: 12 } },
+        e("div", { className: "row", style: { gap: 6 } },
+          e("button", {
+            className: reviewMode === "pending" ? "tab active" : "tab",
+            onClick: () => { setReviewMode("pending"); setPrecedentRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
+            title: "Select a new pending case to review, tag atoms, and get a skill verdict"
+          }, "✏️ New Review"),
+          e("button", {
+            className: reviewMode === "precedent" ? "tab active" : "tab",
+            onClick: () => { setReviewMode("precedent"); setPendingRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
+            title: "Re-examine an existing precedent: verify its atom tags and re-score"
+          }, "📚 Precedent Re-check")
+        ),
+        e("div", { style: { fontSize: 11, marginTop: 6, color: "var(--ink)", opacity: 0.7, lineHeight: 1.4 } },
+          reviewMode === "pending"
+            ? "▶ Pick a pending case below, tag its atoms, retrieve precedents, then send to the AI skill for a reasoned verdict."
+            : "▶ Pick an existing precedent to verify or correct its atom tags and re-run the engine.")
+      ),
       // Filter row: unified for both modes (filters pending or precedent based on active mode)
       e("div", { className: "row", style: { gap: 8, flexWrap: "wrap" }},
         e("label", { style: { color: "var(--muted)", fontSize: 12, minWidth: 90 }}, "Filter cases"),
@@ -4899,24 +4917,7 @@ function AtomTagger(props) {
           style: { fontSize: 11 }
         }, "clear")
       ),
-      e("div", { style: { marginBottom: 12 } },
-        e("div", { className: "row", style: { gap: 6 } },
-          e("button", {
-            className: reviewMode === "pending" ? "tab active" : "tab",
-            onClick: () => { setReviewMode("pending"); setPrecedentRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
-            title: "Select a new pending case to review, tag atoms, and get a skill verdict"
-          }, "✏️ New Review"),
-          e("button", {
-            className: reviewMode === "precedent" ? "tab active" : "tab",
-            onClick: () => { setReviewMode("precedent"); setPendingRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
-            title: "Re-examine an existing precedent: verify its atom tags and re-score"
-          }, "📚 Precedent Re-check")
-        ),
-        e("div", { style: { fontSize: 11, marginTop: 6, color: "var(--ink)", opacity: 0.7, lineHeight: 1.4 } },
-          reviewMode === "pending"
-            ? "▶ Pick a pending case below, tag its atoms, retrieve precedents, then send to the AI skill for a reasoned verdict."
-            : "▶ Pick an existing precedent to verify or correct its atom tags and re-run the engine.")
-      ),
+
 
       reviewMode === "pending" && e("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
         e("label", { style: { color: "var(--ink)", fontSize: 12, fontWeight: 600 }}, "Select case to review"),
