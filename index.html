@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.18-engine-feedback";
+const PLUGIN_VERSION = "atom-mvp v0.18.19-unscoped-engine";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4769,13 +4769,15 @@ function AtomTagger(props) {
   }, [activeCase, corpus.claims, corpus.atomsByDim]);
 
   // Phase 3: live engine evaluation. Memoized on (tags, policy_title, claims).
+  // Engine evaluates ALL claims without policy_title filter so the user sees
+  // the true outcome of their atom edits, even if atoms cross policy boundaries.
+  // (e.g. adding 'Facilitation' moves the case from ASB → ASS territory)
   const engineResult = React.useMemo(() => {
     if (!activeCase || totalSelected === 0) return null;
-    var _r = window.AtomEngine.evaluate(tags, corpus.claims, {
-      policy_title: activeCase.policy_title || undefined
-    });
+    var _r = window.AtomEngine.evaluate(tags, corpus.claims, {});
     console.debug("[AtomTagger] Engine recalculated: verdict=" + (_r ? _r.verdict : "null") +
-      " hits=" + (_r ? _r.gate_hits.length : 0) + " totalAtoms=" + totalSelected);
+      " hits=" + (_r ? _r.gate_hits.length : 0) + " totalAtoms=" + totalSelected +
+      " topClaim=" + (_r && _r.gate_hits[0] ? _r.gate_hits[0].claim_id : "none"));
     return _r;
   }, [tags, activeCase, corpus.claims, totalSelected]);
 
