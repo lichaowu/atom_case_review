@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.15-engine-fix";
+const PLUGIN_VERSION = "atom-mvp v0.18.16-rejected-ux";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -2883,10 +2883,13 @@ function DimRow(props) {
             className: "chip rejected-by-skill",
             title: "[skill-rejected] " + r.atom_key +
               (a && a.serial_code ? " · " + a.serial_code : "") +
-              " — " + (r.reason || "no reason") + " — double-click to override and select",
-            onClick: () => { setDismissedRej(prev => { const n = new Set(prev); n.add(r.atom_key); return n; }); },
-            onDoubleClick: () => toggle(r.atom_key)
-          }, label, " ✗");
+              " — " + (r.reason || "no reason") + " — click to re-select"
+          },
+            e("span", { onClick: (ev) => { ev.stopPropagation(); toggle(r.atom_key); } }, label),
+            e("span", {
+              onClick: (ev) => { ev.stopPropagation(); setDismissedRej(prev => { const n = new Set(prev); n.add(r.atom_key); return n; }); },
+              style: { marginLeft: 3, cursor: "pointer" }
+            }, " \u2715"));
         })
       ),
       // Search input (typing here always searches the full set)
