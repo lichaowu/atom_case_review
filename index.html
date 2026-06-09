@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.10-cross-filter";
+const PLUGIN_VERSION = "atom-mvp v0.18.11-cross-filter-claims";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4636,15 +4636,21 @@ function AtomTagger(props) {
 
   // Distinct titles & issues for the unified filter, based on active mode
   const titleOptions = React.useMemo(() => {
-    const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
+    // Use ATLAS Atom Rules (corpus.claims) as authoritative issue→title mapping
     const s = new Set();
-    for (const p of src) {
-      if (issueFilter && (p.issue || "") !== issueFilter) continue;
-      const titles = Array.isArray(p.policy_title) ? p.policy_title : (p.policy_title ? [p.policy_title] : []);
-      for (const t of titles) { if (t) s.add(t); }
+    if (issueFilter) {
+      for (const c of corpus.claims) {
+        if ((c.issue || "") !== issueFilter) continue;
+        for (const t of (c.policy_titles || [])) { if (t) s.add(t); }
+      }
+    } else {
+      // No issue filter: show all titles from claims + any in records
+      for (const c of corpus.claims) {
+        for (const t of (c.policy_titles || [])) { if (t) s.add(t); }
+      }
     }
     return Array.from(s).sort();
-  }, [corpus.cases, corpus.pending, reviewMode, issueFilter]);
+  }, [corpus.claims, issueFilter]);
 
   const issueOptions = React.useMemo(() => {
     const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
@@ -4887,20 +4893,20 @@ function AtomTagger(props) {
         e("select", {
           className: "case-picker",
           style: { flex: "0 1 180px", minWidth: 140 },
-          value: titleFilter,
-          onChange: ev => setTitleFilter(ev.target.value)
-        },
-          e("option", { value: "" }, "all titles (" + titleOptions.length + ")"),
-          ...titleOptions.map(t => e("option", { key: t, value: t }, t))
-        ),
-        e("select", {
-          className: "case-picker",
-          style: { flex: "0 1 180px", minWidth: 140 },
           value: issueFilter,
           onChange: ev => { setIssueFilter(ev.target.value); setTitleFilter(""); }
         },
           e("option", { value: "" }, "all issues (" + issueOptions.length + ")"),
           ...issueOptions.map(t => e("option", { key: t, value: t }, t))
+        ),
+        e("select", {
+          className: "case-picker",
+          style: { flex: "0 1 180px", minWidth: 140 },
+          value: titleFilter,
+          onChange: ev => setTitleFilter(ev.target.value)
+        },
+          e("option", { value: "" }, "all titles (" + titleOptions.length + ")"),
+          ...titleOptions.map(t => e("option", { key: t, value: t }, t))
         ),
         statusOptions.length > 0 && e("select", {
           className: "case-picker",
