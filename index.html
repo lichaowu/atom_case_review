@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.8-status-decision-filters";
+const PLUGIN_VERSION = "atom-mvp v0.18.9-comment-field";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1505,6 +1505,7 @@ async function loadAtomCorpus() {
   const HAS_USER_NICKNAME = !!(pendingIdx.byName["user_nickname"] || casesIdx.byName["user_nickname"]);
   const HAS_USER_BIO = !!(pendingIdx.byName["user_bio"] || casesIdx.byName["user_bio"]);
   const HAS_CASE_URL = !!(pendingIdx.byName["case_url"] || casesIdx.byName["case_url"]);
+  const HAS_COMMENT = !!(pendingIdx.byName["comment"]);
 
   const cases = caseRecs.map(r => {
     const f = r.fields || {};
@@ -1555,6 +1556,7 @@ async function loadAtomCorpus() {
       user_nickname: HAS_USER_NICKNAME ? get(f, pendingIdx, "user_nickname") : null,
       user_bio: HAS_USER_BIO ? get(f, pendingIdx, "user_bio") : null,
       case_url: HAS_CASE_URL ? cellUrl(readCell(f, pendingIdx, "case_url")) : null,
+      comment: HAS_COMMENT ? get(f, pendingIdx, "comment") : null,
       images: getImages(f, pendingIdx),
       pending_table_id: pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null,
       atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
@@ -3371,6 +3373,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
     ocr_text:               pendingCase.ocr_text || "",
     caption_text:           pendingCase.caption_text || "",
     case_url:               pendingCase.case_url || "",
+    comment:                pendingCase.comment || undefined,
     images_attached_count:  imgSummary.count,
     images_note:            imgSummary.note,
     // Reviewer's draft tags (may be empty). Specialist may revise.
@@ -4971,6 +4974,8 @@ function AtomTagger(props) {
             activeCase.user_bio && e("span", { className: "user-bio" }, activeCase.user_bio.slice(0, 120))
           )
         ),
+        activeCase.comment && e("dt", null, "comment"),
+        activeCase.comment && e("dd", null, e("div", { className: "text-block", style: { maxHeight: 120, overflow: "auto", fontSize: 12, background: "var(--surface-card)", padding: "8px 10px", borderRadius: 6 } }, activeCase.comment)),
         activeCase.visual_summary && e("dt", null, "visual_summary"),
         activeCase.visual_summary && e("dd", null, e("div", { className: "text-block" }, activeCase.visual_summary)),
         activeCase.caption_text && e("dt", null, "caption"),
