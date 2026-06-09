@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.7-verdict-engine-first";
+const PLUGIN_VERSION = "atom-mvp v0.18.8-status-decision-filters";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1534,6 +1534,7 @@ async function loadAtomCorpus() {
         X: ridsToKeys(getLnk(f, casesIdx, "exception_atoms")),
       },
       reference_weight: get(f, casesIdx, "reference_weight"),
+      status: get(f, casesIdx, "status"),
     };
   }).filter(c => {
     const w = (c.reference_weight || "").toLowerCase();
@@ -1558,6 +1559,7 @@ async function loadAtomCorpus() {
       pending_table_id: pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null,
       atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
       apv_draft_atoms: safeParseAtoms(get(f, pendingIdx, "apv_draft_atoms")),
+      status: get(f, pendingIdx, "status"),
     };
   }).filter(p => p.source_video_id);
 
@@ -4612,6 +4614,8 @@ function AtomTagger(props) {
   const [caseFilter, setCaseFilter] = React.useState("");
   const [titleFilter, setTitleFilter] = React.useState("");
   const [issueFilter, setIssueFilter] = React.useState("");
+  const [statusFilter, setStatusFilter] = React.useState("");
+  const [decisionFilter, setDecisionFilter] = React.useState("");
 
 
   // Derive which atoms came from the skill verdict vs reviewer manual adds
@@ -4639,6 +4643,19 @@ function AtomTagger(props) {
     return Array.from(s).sort();
   }, [corpus.cases, corpus.pending, reviewMode]);
 
+  const statusOptions = React.useMemo(() => {
+    const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
+    const s = new Set();
+    for (const p of src) { if (p.status) s.add(p.status); }
+    return Array.from(s).sort();
+  }, [corpus.cases, corpus.pending, reviewMode]);
+
+  const decisionOptions = React.useMemo(() => {
+    const s = new Set();
+    for (const c of corpus.cases) { if (c.decision) s.add(c.decision); }
+    return Array.from(s).sort();
+  }, [corpus.cases]);
+
   // Filtered pending list — text search across video_id / visual_summary / policy_title,
   // plus optional policy_title and issue equality narrowing.
   const filteredPending = React.useMemo(() => {
@@ -4646,6 +4663,7 @@ function AtomTagger(props) {
     return corpus.pending.filter(p => {
       if (titleFilter && (p.policy_title || "") !== titleFilter) return false;
       if (issueFilter && (p.issue || "") !== issueFilter) return false;
+      if (statusFilter && (p.status || "") !== statusFilter) return false;
       if (!q) return true;
       return (
         (p.source_video_id || "").toLowerCase().includes(q) ||
@@ -4655,7 +4673,7 @@ function AtomTagger(props) {
         (p.issue          || "").toLowerCase().includes(q)
       );
     });
-  }, [corpus.pending, caseFilter, titleFilter, issueFilter]);
+  }, [corpus.pending, caseFilter, titleFilter, issueFilter, statusFilter]);
 
   // Precedent Review: filtered precedent list
 
@@ -4665,6 +4683,8 @@ function AtomTagger(props) {
     return corpus.cases.filter(c => {
       if (titleFilter && (c.policy_title || "") !== titleFilter) return false;
       if (issueFilter && (c.issue || "") !== issueFilter) return false;
+      if (statusFilter && (c.status || "") !== statusFilter) return false;
+      if (decisionFilter && (c.decision || "") !== decisionFilter) return false;
       if (!q) return true;
       return (
         (c.source_video_id || "").toLowerCase().includes(q) ||
@@ -4674,7 +4694,7 @@ function AtomTagger(props) {
         (c.issue || "").toLowerCase().includes(q)
       );
     });
-  }, [corpus.cases, caseFilter, titleFilter, issueFilter]);
+  }, [corpus.cases, caseFilter, titleFilter, issueFilter, statusFilter, decisionFilter]);
 
   const precedentCase = corpus.cases.find(c => c.record_id === precedentRid) || null;
 
@@ -4852,9 +4872,27 @@ function AtomTagger(props) {
           e("option", { value: "" }, "all issues (" + issueOptions.length + ")"),
           ...issueOptions.map(t => e("option", { key: t, value: t }, t))
         ),
-        (caseFilter || titleFilter || issueFilter) && e("button", {
+        statusOptions.length > 0 && e("select", {
+          className: "case-picker",
+          style: { flex: "0 1 140px", minWidth: 110 },
+          value: statusFilter,
+          onChange: ev => setStatusFilter(ev.target.value)
+        },
+          e("option", { value: "" }, "all status (" + statusOptions.length + ")"),
+          ...statusOptions.map(t => e("option", { key: t, value: t }, t))
+        ),
+        reviewMode === "precedent" && decisionOptions.length > 0 && e("select", {
+          className: "case-picker",
+          style: { flex: "0 1 140px", minWidth: 110 },
+          value: decisionFilter,
+          onChange: ev => setDecisionFilter(ev.target.value)
+        },
+          e("option", { value: "" }, "all decisions (" + decisionOptions.length + ")"),
+          ...decisionOptions.map(t => e("option", { key: t, value: t }, t))
+        ),
+        (caseFilter || titleFilter || issueFilter || statusFilter || decisionFilter) && e("button", {
           className: "ghost",
-          onClick: () => { setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); },
+          onClick: () => { setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
           style: { fontSize: 11 }
         }, "clear")
       ),
@@ -4862,12 +4900,12 @@ function AtomTagger(props) {
         e("div", { className: "row", style: { gap: 6 } },
           e("button", {
             className: reviewMode === "pending" ? "tab active" : "tab",
-            onClick: () => { setReviewMode("pending"); setPrecedentRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); },
+            onClick: () => { setReviewMode("pending"); setPrecedentRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
             title: "Select a new pending case to review, tag atoms, and get a skill verdict"
           }, "✏️ New Review"),
           e("button", {
             className: reviewMode === "precedent" ? "tab active" : "tab",
-            onClick: () => { setReviewMode("precedent"); setPendingRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); },
+            onClick: () => { setReviewMode("precedent"); setPendingRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
             title: "Re-examine an existing precedent: verify its atom tags and re-score"
           }, "📚 Precedent Re-check")
         ),
