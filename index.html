@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.11-cross-filter-claims";
+const PLUGIN_VERSION = "atom-mvp v0.18.12-clean-payload-ui";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -3648,25 +3648,25 @@ function PayloadPane(props) {
   // ---- UI labels ------------------------------------------------------------
   // Two explicitly numbered steps mirror the legacy plugin's "1. Copy JSON /
   // 2. Copy keyframes" UX so reviewers know to paste both into the chat.
-  const sendLabel = copyState === "ok"  ? "✓ payload copied — paste into chat"
+  const sendLabel = copyState === "ok"  ? "✓ Copied"
                   : copyState === "err" ? "⤓ saved as .json (clipboard blocked)"
-                  : "1. Send payload";
+                  : "Send payload";
   const sendClass = "copy-btn" + (copyState === "ok" ? " ok"
                                 : copyState === "err" ? " err" : "");
   const kfLabel   = imgState === "resolving" ? "resolving urls…"
-                  : imgState === "ok"     ? "✓ composite copied — paste into chat"
+                  : imgState === "ok"     ? "✓ Copied"
                   : imgState === "newtab" ? "↗ opened in tab — right-click → Copy image"
                   : imgState === "err"    ? "✗ failed"
-                  : "2. Copy keyframes (" + Math.min(12, imgCount) + ")";
+                  : "Copy keyframes (" + Math.min(12, imgCount) + ")";
 
   return e("div", { className: "payload-card" },
     e("div", { className: "payload-head" },
       e("div", null,
-        e("div", { className: "payload-title" }, "Specialist payload"),
+        e("div", { className: "payload-title" }, "Payload"),
         e("div", { className: "payload-meta" },
-          payload.schema, " · ", payload.version, " · ", sizeKb, " KB · ",
           precCount, " precedent", precCount===1?"":"s",
-          hasImages ? " · " + Math.min(12, imgCount) + " keyframe" + (Math.min(12, imgCount)===1?"":"s") : ""
+          hasImages ? " · " + Math.min(12, imgCount) + " keyframe" + (Math.min(12, imgCount)===1?"":"s") : "",
+          " · ", sizeKb, " KB"
         )
       ),
       e("div", { className: "payload-actions" },
@@ -3695,23 +3695,14 @@ function PayloadPane(props) {
     imgState === "err" && e("div", {
       style: { fontSize: 11, color: "var(--error, #c00)", marginBottom: 6 }
     }, "Could not build keyframe composite. Re-pick the case or refresh the table to refresh signed urls."),
-    hasImages && (imgState === "idle" || imgState === "resolving" || imgState === "ok") && e("div", {
-      style: { fontSize: 11, color: "var(--muted)", marginBottom: 6 }
-    }, "Workflow: send payload first, then composite keyframes — both pasted into the same chat turn."),
+
     e("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }},
       e("span", { className: "payload-stat routing",
         title: "Routes to which specialist skill" },
         "→ /" + routeHint),
       e("span", { className: "payload-stat",
         title: "Atom-engine suggested verdict (specialist may revise tags and override)" },
-        "engine: " + verdict),
-      e("span", { className: "payload-stat",
-        title: "Non-approve claims (223) are baked into the specialist skill (Appendix B). No claims_slice in payload." },
-        "claims: baked in skill"),
-      rbr && e("span", { className: "payload-stat",
-        title: "atoms_catalog (with audit_rule) is BAKED into the specialist skill. " +
-               "Payload only ships this version pointer for alignment." },
-        "catalog: " + (rbr.policy_area || "—") + " " + rbVersion + " (in skill)")
+        "engine: " + verdict)
     ),
     !policyArea && e("div", { className: "muted",
       style: { fontSize: 11, padding: "4px 0", color: "var(--error)" }},
