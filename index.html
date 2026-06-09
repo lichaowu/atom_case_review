@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.12-clean-payload-ui";
+const PLUGIN_VERSION = "atom-mvp v0.18.13-self-exclude";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4786,8 +4786,12 @@ function AtomTagger(props) {
       ocr_text:       activeCase.ocr_text,
       caption_text:   activeCase.caption_text
     };
-    return window.AtomRetriever.retrieve(candidate, corpus.cases, { topPerChannel: 4, totalK: 8 });
-  }, [retrievalAtoms, activeCase, corpus.cases]);
+    // Exclude self from pool in precedent re-check mode (prevents self-confirming retrieval)
+    const _pool = reviewMode === "precedent" && activeCase && activeCase.record_id
+      ? corpus.cases.filter(c => c.record_id !== activeCase.record_id)
+      : corpus.cases;
+    return window.AtomRetriever.retrieve(candidate, _pool, { topPerChannel: 4, totalK: 8 });
+  }, [retrievalAtoms, activeCase, corpus.cases, reviewMode]);
 
   // Suggested atoms per dim = union of atoms from top-5 precedents.
   // Drives DimRow's default candidate pool. Re-computes with the precedent set.
