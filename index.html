@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.16-rejected-ux";
+const PLUGIN_VERSION = "atom-mvp v0.18.17-save-titles";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4448,14 +4448,25 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     }
   };
 
-  // Available policy titles from the corpus precedents + pending
+  // Available policy titles — sourced from ATLAS Atom Rules (corpus.claims),
+  // scoped to the case's issue when available for relevance.
   const titleOptions = React.useMemo(() => {
     const s = new Set();
-    for (const c of (corpus.cases || [])) { const _pt = Array.isArray(c.policy_title) ? c.policy_title : [c.policy_title]; for (const t of _pt) { if (t) s.add(t); } }
-    for (const p of (corpus.pending || [])) { if (p.policy_title) s.add(p.policy_title); }
+    const caseIssue = pendingCase && pendingCase.issue ? pendingCase.issue : null;
+    for (const c of (corpus.claims || [])) {
+      if (caseIssue && (c.issue || "") !== caseIssue) continue;
+      for (const t of (c.policy_titles || [])) { if (t) s.add(t); }
+    }
+    // If issue-scoped produced nothing (or no issue), fall back to all claim titles
+    if (!s.size) {
+      for (const c of (corpus.claims || [])) {
+        for (const t of (c.policy_titles || [])) { if (t) s.add(t); }
+      }
+    }
+    // Always include current selection so user's choice isn't lost
     if (policyTitle) s.add(policyTitle);
     return Array.from(s).sort();
-  }, [corpus, policyTitle]);
+  }, [corpus.claims, pendingCase, policyTitle]);
 
   const hasAtoms = Object.values(tags).some(arr => arr && arr.length > 0);
 
