@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.14-scoped-atoms";
+const PLUGIN_VERSION = "atom-mvp v0.18.15-engine-fix";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -491,7 +491,12 @@ const DIM_NAMES = {
       var c = claims[i];
       if (opts.policy_title) {
         var pt = c.policy_titles || [];
-        if (pt.length && pt.indexOf(opts.policy_title) < 0) continue;
+        if (pt.length) {
+          var _optTitles = Array.isArray(opts.policy_title) ? opts.policy_title : [opts.policy_title];
+          var _match = false;
+          for (var _ti = 0; _ti < _optTitles.length; _ti++) { if (pt.indexOf(_optTitles[_ti]) >= 0) { _match = true; break; } }
+          if (!_match) continue;
+        }
       }
       if (!gateHit(c, caseAtoms)) continue;
       var lift = applyLifts(c, caseAtoms);
