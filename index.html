@@ -4586,15 +4586,28 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       details.push("Engine:" + engineDecision + " \u2192 User:" + decision);
     }
     // Also flag policy_title manual override (only for flag decisions)
-    // v0.18.23: validate user-selected titles against engine-fired claims' policy titles
+    // v0.18.20: validate user-selected titles against engine-fired claims' policy titles.
+    // Scope evaluation to the case's policy area to prevent cross-vertical claims
+    // (e.g., YRGS claims with empty S gates) from producing spurious "missing" alerts.
     if (decision === "flag" && policyTitle.length) {
-      // Derive expected titles from engine gate_hits (authoritative)
+      // Derive expected titles from engine gate_hits (scoped to policy area)
       var _engineTitles = new Set();
       try {
         if (window.AtomEngine && corpus.claims) {
-          var _er2 = window.AtomEngine.evaluate(tags, corpus.claims, {});
+          // Scope claims to the active case's policy area (same as stability/counterfactual)
+          var _pArea = pendingCase && pendingCase.issue ? resolvePolicyArea(pendingCase.issue) : null;
+          var _scopedClaims = _pArea
+            ? corpus.claims.filter(function(c) { return matchesPolicyArea(c.issue, _pArea); })
+            : corpus.claims;
+          var _er2 = window.AtomEngine.evaluate(tags, _scopedClaims, {});
           if (_er2 && _er2.gate_hits) {
+            // Only collect policy_titles from enforcement-level hits (NFF/VIO/NOT_RECOMMEND).
+            // APPROVE-outcome hits (e.g., claims lifted by exceptions) should not contribute
+            // to the "expected titles" set — they don't represent active enforcement.
+            var _enfSev = { "NOT_FOR_FEED": 1, "NFF": 1, "VIOLATION": 1, "NOT_RECOMMEND": 1 };
             for (var _hi = 0; _hi < _er2.gate_hits.length; _hi++) {
+              var _hOutcome = String(_er2.gate_hits[_hi].outcome_after_lifts || "").toUpperCase().replace(/[\s\-]+/g, "_");
+              if (!_enfSev[_hOutcome]) continue;  // skip APPROVE-outcome hits
               var _hpt = _er2.gate_hits[_hi].policy_titles || [];
               for (var _pi = 0; _pi < _hpt.length; _pi++) { _engineTitles.add(_hpt[_pi]); }
             }
