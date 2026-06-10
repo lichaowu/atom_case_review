@@ -4537,9 +4537,39 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       details.push("Engine:" + engineDecision + " \u2192 User:" + decision);
     }
     // Also flag policy_title manual override (only for flag decisions)
-    if (decision === "flag" && expectedTitle && policyTitle.length && !policyTitle.includes(expectedTitle)) {
-      if (!type) type = "rule_gap";
-      details.push("Policy: " + expectedTitle + " \u2192 " + policyTitle.join(", "));
+    // v0.18.23: validate user-selected titles against engine-fired claims' policy titles
+    if (decision === "flag" && policyTitle.length) {
+      // Derive expected titles from engine gate_hits (authoritative)
+      var _engineTitles = new Set();
+      try {
+        if (window.AtomEngine && corpus.claims) {
+          var _er2 = window.AtomEngine.evaluate(tags, corpus.claims, {});
+          if (_er2 && _er2.gate_hits) {
+            for (var _hi = 0; _hi < _er2.gate_hits.length; _hi++) {
+              var _hpt = _er2.gate_hits[_hi].policy_titles || [];
+              for (var _pi = 0; _pi < _hpt.length; _pi++) { _engineTitles.add(_hpt[_pi]); }
+            }
+          }
+        }
+      } catch(_) {}
+      // Fall back to skill expected title if engine produced nothing
+      if (!_engineTitles.size && expectedTitle) _engineTitles.add(expectedTitle);
+
+      if (_engineTitles.size) {
+        // Check: user selected titles not in engine-fired claims
+        var _extra = policyTitle.filter(function(t) { return !_engineTitles.has(t); });
+        // Check: engine-fired titles user did NOT select
+        var _etArr = []; _engineTitles.forEach(function(t) { _etArr.push(t); });
+        var _missing = _etArr.filter(function(t) { return policyTitle.indexOf(t) < 0; });
+
+        if (_extra.length || _missing.length) {
+          if (!type) type = "rule_gap";
+          var _diffParts = [];
+          if (_missing.length) _diffParts.push("missing: " + _missing.join(", "));
+          if (_extra.length) _diffParts.push("extra: " + _extra.join(", "));
+          details.push("Policy title diff (" + _diffParts.join("; ") + ")");
+        }
+      }
     }
 
     // Type 3: escalate — user explicitly flagged
