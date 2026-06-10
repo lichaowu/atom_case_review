@@ -4343,7 +4343,7 @@ function ReasonedVerdictPane(props) {
 function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult, stabilityResult, counterfactualResult, reviewMode, precedentRid }) {
   const e = React.createElement;
   const [decision, setDecision] = React.useState("flag");
-  const [policyTitle, setPolicyTitle] = React.useState("");
+  const [policyTitle, setPolicyTitle] = React.useState([]);
   const [rationale, setRationale] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState(null); // { ok, msg }
@@ -4354,7 +4354,11 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       const v = verdictData.verdict || "";
       if (v === "APPROVE") setDecision("pass");
       else setDecision("flag");
-      setPolicyTitle(verdictData.final_policy_title || (Array.isArray(pendingCase.policy_title) ? pendingCase.policy_title.join(", ") : pendingCase.policy_title) || "");
+      setPolicyTitle(
+        verdictData.final_policy_title
+          ? (Array.isArray(verdictData.final_policy_title) ? verdictData.final_policy_title : [verdictData.final_policy_title])
+          : (Array.isArray(pendingCase.policy_title) ? pendingCase.policy_title : pendingCase.policy_title ? [pendingCase.policy_title] : [])
+      );
       // Preload rationale: prefer skill-generated `rationale_for_precedent`
       // (concise, human-readable, max ~1200 chars, focused on decisive signals).
       // Fall back to [VERDICT] section of `reason` for older skill versions.
@@ -4374,7 +4378,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       setRationale(_preloadRationale);
     } else {
       setDecision("flag");
-      setPolicyTitle(Array.isArray(pendingCase.policy_title) ? pendingCase.policy_title.join(", ") : (pendingCase.policy_title || ""));
+      setPolicyTitle(Array.isArray(pendingCase.policy_title) ? pendingCase.policy_title : pendingCase.policy_title ? [pendingCase.policy_title] : []);
       setRationale("");
     }
     setSaved(null);
@@ -4399,7 +4403,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     }
     setDecision(liveDecision);
     // If switching to pass, clear policy_title
-    if (liveDecision === "pass") setPolicyTitle("");
+    if (liveDecision === "pass") setPolicyTitle([]);
   }, [engineResult]);
 
   // Get current user as analyst
@@ -4481,7 +4485,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       }
     }
     // Always include current selection so user's choice isn't lost
-    if (policyTitle) s.add(policyTitle);
+    for (const _pt of (policyTitle || [])) { if (_pt) s.add(_pt); }
     return Array.from(s).sort();
   }, [corpus.claims, pendingCase, policyTitle]);
 
@@ -4533,9 +4537,9 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       details.push("Engine:" + engineDecision + " \u2192 User:" + decision);
     }
     // Also flag policy_title manual override (only for flag decisions)
-    if (decision === "flag" && expectedTitle && policyTitle && policyTitle !== expectedTitle) {
+    if (decision === "flag" && expectedTitle && policyTitle.length && !policyTitle.includes(expectedTitle)) {
       if (!type) type = "rule_gap";
-      details.push("Policy: " + expectedTitle + " \u2192 " + policyTitle);
+      details.push("Policy: " + expectedTitle + " \u2192 " + policyTitle.join(", "));
     }
 
     // Type 3: escalate — user explicitly flagged
@@ -4578,16 +4582,20 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         e("option", { value: "pass" }, "Pass (approve)")
       ),
 
-      decision === "flag" && e("label", { style: { fontSize: 11, color: "var(--muted)", marginLeft: 8 } }, "Policy title:"),
-      decision === "flag" && e("select", {
-        value: policyTitle,
-        onChange: (ev) => setPolicyTitle(ev.target.value),
-        style: { fontSize: 12, padding: "2px 6px", maxWidth: 200 }
-      },
-        e("option", { value: "" }, "— none —"),
-        titleOptions.map(t => e("option", { key: t, value: t }, t))
-      )
+      decision === "flag" && e("label", { style: { fontSize: 11, color: "var(--muted)", marginLeft: 8 } }, "Policy title(s):")
     ),
+    // v0.18.21: Multi-select policy title (chip-based)
+    decision === "flag" && e("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8, maxHeight: 120, overflowY: "auto" } },
+      titleOptions.map(t => {
+        const sel = policyTitle.includes(t);
+        return e("span", {
+          key: t,
+          onClick: () => setPolicyTitle(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]),
+          style: { fontSize: 11, padding: "2px 8px", borderRadius: 10, cursor: "pointer", border: "1px solid " + (sel ? "#4a90d9" : "var(--hairline)"), background: sel ? "#e8f0fa" : "var(--surface-card)", color: sel ? "#2a6cb8" : "var(--body)", whiteSpace: "nowrap" }
+        }, sel ? "✓ " + t : t);
+      })
+    ),
+    decision === "flag" && !titleOptions.length && e("span", { style: { fontSize: 10, color: "var(--muted)", marginBottom: 8, display: "block" } }, "No policy titles available for this issue"),
 
     e("div", { style: { marginBottom: 8 } },
       e("label", { style: { fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 2 } }, "Rationale (optional):"),
