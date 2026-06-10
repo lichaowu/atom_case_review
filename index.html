@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.21";
+const PLUGIN_VERSION = "atom-mvp v0.18.22";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4453,6 +4453,19 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     setDecision(liveDecision);
     // If switching to pass, clear policy_title
     if (liveDecision === "pass") setPolicyTitle([]);
+    // v0.18.22: Pre-populate policy titles from fired enforcement-level claims
+    if (liveDecision === "flag" && engineResult && engineResult.gate_hits) {
+      var _enfSevPre = { "NOT_FOR_FEED": 1, "NFF": 1, "VIOLATION": 1, "NOT_RECOMMEND": 1 };
+      var _firedTitles = {};
+      for (var _gi = 0; _gi < engineResult.gate_hits.length; _gi++) {
+        var _go = String(engineResult.gate_hits[_gi].outcome_after_lifts || "").toUpperCase().replace(/[\s\-]+/g, "_");
+        if (!_enfSevPre[_go]) continue;
+        var _gpt = engineResult.gate_hits[_gi].policy_titles || [];
+        for (var _gpi = 0; _gpi < _gpt.length; _gpi++) { _firedTitles[_gpt[_gpi]] = 1; }
+      }
+      var _firedArr = Object.keys(_firedTitles);
+      if (_firedArr.length) setPolicyTitle(_firedArr);
+    }
   }, [engineResult]);
 
   // Get current user as analyst
@@ -5292,6 +5305,25 @@ function AtomTagger(props) {
             style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: dc.bg, border: "1px solid " + dc.border, color: dc.text, cursor: "help" }
           }, "Defensibility: " + def.label),
           verdictData.final_policy_title && e("span", { className: "pill", style: { background: "#f3f4f6", color: "#374151", fontSize: 10, border: "1px solid #d1d5db" } }, verdictData.final_policy_title)
+        ),
+        // Expandable detail: fired rules
+        engineResult && engineResult.gate_hits && engineResult.gate_hits.length > 0 && e("details", { style: { marginTop: 4, marginBottom: 4, fontSize: 11, color: "var(--muted)" } },
+          e("summary", { style: { cursor: "pointer", userSelect: "none", fontFamily: "var(--mono)", fontSize: 10 }, "data-tip": "Expand to see individual claims fired by the rule engine, with their outcomes and policy titles" }, "Fired Rules Detail"),
+          e("div", { style: { marginTop: 4, padding: "6px 10px", background: "#f9fafb", borderRadius: 4, display: "flex", flexDirection: "column", gap: 3 } },
+            engineResult.gate_hits.map(function(h, idx) {
+              var _outNorm = String(h.outcome_after_lifts || "").toUpperCase().replace(/[\s\-]+/g, "_");
+              var _isEnf = _outNorm === "NOT_FOR_FEED" || _outNorm === "NFF" || _outNorm === "VIOLATION" || _outNorm === "NOT_RECOMMEND";
+              var _outcomeColor = _isEnf ? "#991b1b" : "#166534";
+              var _outcomeBg = _isEnf ? "#fee2e2" : "#dcfce7";
+              return e("div", { key: idx, style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "2px 0", borderBottom: "1px solid #f3f4f6" } },
+                e("span", { style: { fontFamily: "var(--mono)", fontSize: 10, color: "#6b7280", minWidth: 80 } }, h.claim_id || "?"),
+                e("span", { style: { fontSize: 10, padding: "1px 6px", borderRadius: 3, background: _outcomeBg, color: _outcomeColor, fontWeight: 600 } }, h.outcome_after_lifts || "?"),
+                h.policy_titles && h.policy_titles.length > 0 && h.policy_titles.map(function(pt, pi) {
+                  return e("span", { key: pi, style: { fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d", fontWeight: 500 } }, pt);
+                })
+              );
+            })
+          )
         ),
         // Expandable detail: two pillars
         e("details", { style: { marginTop: 4, fontSize: 11, color: "var(--muted)" } },
