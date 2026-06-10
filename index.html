@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.19-unscoped-engine";
+const PLUGIN_VERSION = "atom-mvp v0.18.20";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -910,7 +910,30 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
   // Pillar A: Decision Rule Stability
   var ruleStable = stabilityResult && stabilityResult.band === "L1";
   var ruleShaky = stabilityResult && stabilityResult.band === "L2";
-  var fragile = counterfactualResult && counterfactualResult.structurally_fragile;
+  var rawFragile = counterfactualResult && counterfactualResult.structurally_fragile;
+
+  // v0.18.20: Discount fragility when the fragile atom is NOT genuinely contested.
+  // The counterfactual pass is mechanical: it removes each atom and re-evaluates.
+  // Shared gate atoms (subject.adult, realism.realistic, portrayal.depiction) often
+  // appear as the "fragile" atom because they gate ALL claims simultaneously, but
+  // they are rarely the genuinely ambiguous dimension. The skill's weakest_atoms
+  // identifies which atoms are actually contestable. If the fragile atom is NOT in
+  // weakest_atoms, treat fragility as a structural artifact, not genuine risk.
+  var fragile = rawFragile;
+  if (rawFragile && ruleStable && ambiguityAssessment && ambiguityAssessment.weakest_atoms) {
+    var flipAtom = counterfactualResult.nearest_flip_path &&
+                   counterfactualResult.nearest_flip_path[0] &&
+                   counterfactualResult.nearest_flip_path[0].atom_key;
+    if (flipAtom) {
+      var contested = ambiguityAssessment.weakest_atoms;
+      var flipIsContested = contested.indexOf(flipAtom) >= 0;
+      if (!flipIsContested) {
+        // Fragile atom is uncontested (e.g., subject.adult in an obvious-adults case).
+        // Downgrade: don't let mechanical fragility dominate defensibility.
+        fragile = false;
+      }
+    }
+  }
   
   // Pillar B: Content Ambiguity
   var ambigClass = ambiguityAssessment && ambiguityAssessment.classification;
@@ -4340,7 +4363,7 @@ function ReasonedVerdictPane(props) {
 
 // ---- AtomTagger: top-level pane --------------------------------------------
 // ---- Confirm & Save section -------------------------------------------------
-function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult, stabilityResult, counterfactualResult, reviewMode, precedentRid }) {
+function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult, stabilityResult, counterfactualResult, reviewMode, precedentRid, onCorpusPatch }) {
   const e = React.createElement;
   const [decision, setDecision] = React.useState("flag");
   const [policyTitle, setPolicyTitle] = React.useState([]);
@@ -4439,6 +4462,15 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           structurallyFragile: counterfactualResult && counterfactualResult.structurally_fragile
         });
         setSaved({ ok: true, msg: "Updated precedent (reviewed_by saved)" });
+        // Patch corpus in-memory so filters reflect the update immediately
+        if (onCorpusPatch) {
+          onCorpusPatch({ updatedPrecedent: {
+            record_id: precedentRid,
+            decision: decision,
+            status: "Reviewed",
+            reviewed_by: analyst
+          }});
+        }
       } else {
         const _res = await window.__saveConfirmedRecord(corpus, pendingCase, tags, {
           decision: decision,
@@ -4460,6 +4492,23 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           setSaved({ ok: false, msg: _msg });
         } else {
           setSaved({ ok: true, msg: "Saved to Precedents table" });
+          // Patch corpus in-memory: mark pending as Reviewed + add new precedent
+          if (onCorpusPatch) {
+            onCorpusPatch({
+              pendingStatusUpdate: { record_id: pendingCase.record_id, status: "Reviewed" },
+              newPrecedent: {
+                record_id: _res && _res.recordId || null,
+                source_video_id: pendingCase.source_video_id || "",
+                visual_summary: pendingCase.visual_summary || "",
+                caption_text: pendingCase.caption_text || "",
+                policy_title: policyTitle ? [policyTitle] : (pendingCase.policy_title || []),
+                issue: pendingCase.issue || "",
+                decision: decision,
+                status: "Reviewed",
+                atoms: JSON.parse(JSON.stringify(tags))
+              }
+            });
+          }
         }
       }
     } catch(err) {
@@ -4681,7 +4730,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
 function AtomTagger(props) {
   const { corpus, tags, setTags, verdictData, pendingRid, setPendingRid,
           precedentRid, setPrecedentRid, reviewMode, setReviewMode,
-          onVerdictParsed, onVerdictCleared } = props;
+          onVerdictParsed, onVerdictCleared, onCorpusPatch } = props;
   const [caseFilter, setCaseFilter] = React.useState("");
   const [titleFilter, setTitleFilter] = React.useState("");
   const [issueFilter, setIssueFilter] = React.useState("");
@@ -5241,7 +5290,8 @@ function AtomTagger(props) {
       stabilityResult: stabilityResult,
       counterfactualResult: counterfactualResult,
       reviewMode: reviewMode,
-      precedentRid: precedentRid
+      precedentRid: precedentRid,
+      onCorpusPatch: onCorpusPatch
     }),
 
     activeCase && e("details", { open: false, style: { marginTop: 16, fontSize: 11, color: "var(--muted)" } },
@@ -5541,6 +5591,38 @@ function App() {
     }
   }, []);
 
+  // Patch corpus in-memory after a successful save so filters/lists update
+  // without a full reload from the Bitable API.
+  const onCorpusPatch = React.useCallback((patch) => {
+    setState(prev => {
+      if (!prev.corpus) return prev;
+      const c = prev.corpus;
+      let nextPending = c.pending;
+      let nextCases = c.cases;
+      // patch.pendingStatusUpdate: { record_id, status }
+      if (patch.pendingStatusUpdate) {
+        nextPending = nextPending.map(p =>
+          p.record_id === patch.pendingStatusUpdate.record_id
+            ? { ...p, status: patch.pendingStatusUpdate.status }
+            : p
+        );
+      }
+      // patch.newPrecedent: object to append to cases
+      if (patch.newPrecedent) {
+        nextCases = [...nextCases, patch.newPrecedent];
+      }
+      // patch.updatedPrecedent: { record_id, ...fields }
+      if (patch.updatedPrecedent) {
+        nextCases = nextCases.map(c2 =>
+          c2.record_id === patch.updatedPrecedent.record_id
+            ? { ...c2, ...patch.updatedPrecedent }
+            : c2
+        );
+      }
+      return { ...prev, corpus: { ...c, pending: nextPending, cases: nextCases } };
+    });
+  }, []);
+
   React.useEffect(() => { load(); }, [load]);
   const c = state.corpus;
 
@@ -5562,7 +5644,7 @@ function App() {
     state.phase === "loaded" && tab === "tagger" && c && e(AtomTagger, {
       corpus: c, tags, setTags, verdictData, pendingRid, setPendingRid,
       precedentRid, setPrecedentRid, reviewMode, setReviewMode,
-      onVerdictParsed, onVerdictCleared
+      onVerdictParsed, onVerdictCleared, onCorpusPatch
     }),
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
