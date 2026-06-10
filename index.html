@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.20";
+const PLUGIN_VERSION = "atom-mvp v0.18.21";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1470,13 +1470,18 @@ async function loadAtomCorpus() {
       outcome: get(f, claimsIdx, "outcome"),
       status: get(f, claimsIdx, "status"),
       tax_version: get(f, claimsIdx, "tax_version"),
-      gates: {
-        C: ridsToKeys(getLnk(f, claimsIdx, "content_atoms")),
-        S: ridsToKeys(getLnk(f, claimsIdx, "subject_atoms")),
-        P: ridsToKeys(getLnk(f, claimsIdx, "portrayal_atoms")),
-        R: ridsToKeys(getLnk(f, claimsIdx, "realism_atoms")),
-        E: ridsToKeys(getLnk(f, claimsIdx, "explicitness_atoms")),
-      },
+      gates: (() => {
+        const _cR = getLnk(f, claimsIdx, "content_atoms");
+        const _sR = getLnk(f, claimsIdx, "subject_atoms");
+        const _pR = getLnk(f, claimsIdx, "portrayal_atoms");
+        const _rR = getLnk(f, claimsIdx, "realism_atoms");
+        const _eR = getLnk(f, claimsIdx, "explicitness_atoms");
+        return {
+          C: ridsToKeys(_cR), S: ridsToKeys(_sR),
+          P: ridsToKeys(_pR), R: ridsToKeys(_rR), E: ridsToKeys(_eR),
+          _raw: { C: _cR.length, S: _sR.length, P: _pR.length, R: _rR.length, E: _eR.length }
+        };
+      })(),
       modifiers_required:  ridsToKeys(getLnk(f, claimsIdx, "modifiers_required")),
       modifiers_excluded:  ridsToKeys(getLnk(f, claimsIdx, "modifiers_excluded")),
       modifiers_lift_to_approve: ridsToKeys(getLnk(f, claimsIdx, "modifiers_lift_to_approve")),
@@ -1506,16 +1511,37 @@ async function loadAtomCorpus() {
     return !inactive.has(s);
   });
 
-  // DEBUG: log first SLR claim gates for DuplexLink verification
-  const slrSample = claims.filter(c => c.claim_id && c.claim_id.startsWith('SLR')).slice(0, 3);
-  if (slrSample.length) {
-    console.info('[AtomConsole] DuplexLink verification — SLR claims gates:', slrSample.map(c => ({ id: c.claim_id, gates_C: c.gates.C })));
+  // Gate resolution integrity check: detect claims where raw link had data
+  // but ridsToKeys returned [] (atom record_id not in atomByRid).
+  const _gateWarnings = [];
+  for (const _c of claims) {
+    const _raw = _c.gates._raw || {};
+    const _g = _c.gates;
+    for (const _d of ['C','S','P','R','E']) {
+      if ((_raw[_d] || 0) > 0 && (!_g[_d] || !_g[_d].length)) {
+        _gateWarnings.push({ claim_id: _c.claim_id, dim: _d, rawCount: _raw[_d], resolved: _g[_d] });
+      }
+    }
   }
-  // Also log raw cell value of first claim's content_atoms to verify SDK shape
+  if (_gateWarnings.length) {
+    console.warn('[AtomConsole] Gate resolution failures detected \u2014 raw link had records but resolved to []:',
+      _gateWarnings.slice(0, 10));
+    // Tag affected claims so downstream rule_gap detection can skip them
+    const _failSet = new Set(_gateWarnings.map(w => w.claim_id + ':' + w.dim));
+    for (const _c of claims) {
+      _c._gateResolutionFailed = [];
+      for (const _d of ['C','S','P','R','E']) {
+        if (_failSet.has(_c.claim_id + ':' + _d)) _c._gateResolutionFailed.push(_d);
+      }
+    }
+  }
+  // Log raw link cell shape for first claim (SDK format verification)
   if (claimRecs.length) {
     const sampleF = claimRecs[0].fields || {};
     const rawCell = readCell(sampleF, claimsIdx, 'content_atoms');
-    console.info('[AtomConsole] Raw content_atoms cell value (first claim):', JSON.stringify(rawCell));
+    const rawSubj = readCell(sampleF, claimsIdx, 'subject_atoms');
+    console.info('[AtomConsole] Raw link cell samples (first claim):',
+      { content_atoms: JSON.stringify(rawCell), subject_atoms: JSON.stringify(rawSubj) });
   }
 
   // Helper: read attachments from any of the candidate field names. First non-empty wins.
@@ -4605,9 +4631,18 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
             // APPROVE-outcome hits (e.g., claims lifted by exceptions) should not contribute
             // to the "expected titles" set — they don't represent active enforcement.
             var _enfSev = { "NOT_FOR_FEED": 1, "NFF": 1, "VIOLATION": 1, "NOT_RECOMMEND": 1 };
+            // Build claim_id -> claim lookup for resolution-failure check
+            var _claimById = {};
+            for (var _ci = 0; _ci < _scopedClaims.length; _ci++) {
+              if (_scopedClaims[_ci].claim_id) _claimById[_scopedClaims[_ci].claim_id] = _scopedClaims[_ci];
+            }
             for (var _hi = 0; _hi < _er2.gate_hits.length; _hi++) {
               var _hOutcome = String(_er2.gate_hits[_hi].outcome_after_lifts || "").toUpperCase().replace(/[\s\-]+/g, "_");
               if (!_enfSev[_hOutcome]) continue;  // skip APPROVE-outcome hits
+              // v0.18.20: skip claims that only fired because a gate resolved empty
+              // due to atom-record-ID mismatch (SDK DuplexLink resolution failure).
+              var _hClaim = _claimById[_er2.gate_hits[_hi].claim_id];
+              if (_hClaim && _hClaim._gateResolutionFailed && _hClaim._gateResolutionFailed.length) continue;
               var _hpt = _er2.gate_hits[_hi].policy_titles || [];
               for (var _pi = 0; _pi < _hpt.length; _pi++) { _engineTitles.add(_hpt[_pi]); }
             }
