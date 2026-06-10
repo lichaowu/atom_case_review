@@ -5728,17 +5728,6 @@ function App() {
     }),
     state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
 
-    e("details", { open: false, className: "debug-section", style: { marginTop: 24, fontSize: 11, color: "var(--muted)" } },
-      e("summary", { style: { cursor: "pointer" } }, "Debug & Info"),
-      e("div", { style: { padding: "8px 0" } },
-        e("div", { style: { marginBottom: 8 } },
-          e("strong", null, PLUGIN_VERSION), " — skill-first workflow. ",
-          "Flow: 1) Pick case · 2) Send payload to Mira · 3) Paste verdict → atoms pre-fill · 4) Confirm/adjust."
-        ),
-        e("div", { style: { color: "var(--muted)", fontSize: 10 } },
-          "Next: write-back to Bitable · offline QA harness.")
-      )
-    )
   );
 }
 
