@@ -2146,7 +2146,24 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
   if (opts.decision && opts.decision.toLowerCase() !== "pass") {
     setSmartField("policy_title", _splitMulti(opts.policyTitle || precedentCase.policy_title || ""));
   }
-  setTextField("rationale", opts.rationale || "");
+  // v0.18.20: Append rationale on re-review (preserve history with date separator)
+  var _existingRat = (precedentCase.rationale || "").trim();
+  var _newRat = (opts.rationale || "").trim();
+  var _combinedRat = "";
+  if (_newRat && _existingRat) {
+    // Avoid duplicating if the new text is already the tail of existing
+    if (_existingRat.endsWith(_newRat)) {
+      _combinedRat = _existingRat;
+    } else {
+      var _sep = "\n---\n[" + new Date().toISOString().slice(0,10) + " re-review] ";
+      _combinedRat = _existingRat + _sep + _newRat;
+    }
+  } else if (_newRat) {
+    _combinedRat = _newRat;
+  } else {
+    _combinedRat = _existingRat;
+  }
+  setTextField("rationale", _combinedRat);
   setSmartField("status", "Double Confirmed");
   if (opts.reviewedBy) { setSmartField("reviewed_by", opts.reviewedBy); }
   if (opts.overrideTag) { setTextField("override_tag", opts.overrideTag); }
