@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.22";
+const PLUGIN_VERSION = "atom-mvp v0.18.23";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1961,6 +1961,13 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     var _sfFieldId = fid("structurally_fragile");
     if (_sfFieldId) fields[_sfFieldId] = !!opts.structurallyFragile;
   }
+  // v0.18.22: Defensibility merged tier + reason
+  if (opts.defensibilityTier) {
+    setSmartField("defensibility_tier", opts.defensibilityTier);
+  }
+  if (opts.defensibilityReason) {
+    setTextField("defensibility_reason", opts.defensibilityReason);
+  }
 
   // Copy keyframe attachments from pending case (same base, tokens reusable)
   // v0.16.10: read attachment cell directly from the source row so we
@@ -2226,6 +2233,13 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
   if (opts.structurallyFragile != null) {
     var _sfFieldId = fid("structurally_fragile");
     if (_sfFieldId) fields[_sfFieldId] = !!opts.structurallyFragile;
+  }
+  // v0.18.22: Defensibility merged tier + reason
+  if (opts.defensibilityTier) {
+    setSmartField("defensibility_tier", opts.defensibilityTier);
+  }
+  if (opts.defensibilityReason) {
+    setTextField("defensibility_reason", opts.defensibilityReason);
   }
 
   const dimFieldMap = {
@@ -4490,6 +4504,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     setSaved(null);
     try {
       if (isPrecedentReview) {
+        var _defResult = computeDefensibility(stabilityResult, counterfactualResult, verdictData && verdictData.ambiguity_assessment);
         await window.__updateExistingRecord(corpus, pendingCase, tags, {
           decision: decision,
           policyTitle: policyTitle,
@@ -4498,7 +4513,9 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
           stabilityScore: stabilityResult && stabilityResult.score,
           stabilityBand: stabilityResult && stabilityResult.band,
-          structurallyFragile: counterfactualResult && counterfactualResult.structurally_fragile
+          structurallyFragile: counterfactualResult && counterfactualResult.structurally_fragile,
+          defensibilityTier: _defResult && _defResult.tier,
+          defensibilityReason: _defResult && _defResult.reason
         });
         setSaved({ ok: true, msg: "Updated precedent (reviewed_by saved)" });
         // Patch corpus in-memory so filters reflect the update immediately
@@ -4511,6 +4528,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           }});
         }
       } else {
+        var _defResult2 = computeDefensibility(stabilityResult, counterfactualResult, verdictData && verdictData.ambiguity_assessment);
         const _res = await window.__saveConfirmedRecord(corpus, pendingCase, tags, {
           decision: decision,
           policyTitle: policyTitle,
@@ -4520,6 +4538,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           stabilityScore: stabilityResult && stabilityResult.score,
           stabilityBand: stabilityResult && stabilityResult.band,
           structurallyFragile: counterfactualResult && counterfactualResult.structurally_fragile,
+          defensibilityTier: _defResult2 && _defResult2.tier,
+          defensibilityReason: _defResult2 && _defResult2.reason,
           _pendingRecordId: pendingCase.record_id,
           applicablePrecedentIds: verdictData && verdictData.applicable_precedent_ids ? verdictData.applicable_precedent_ids : []
         });
