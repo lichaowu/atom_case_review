@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.25";
+const PLUGIN_VERSION = "atom-mvp v0.18.26";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -405,6 +405,26 @@ const DIM_NAMES = {
     for (var i = 0; i < b.length; i++) if (s.has(b[i])) return true;
     return false;
   }
+  // Subsumption-aware intersect for gate matching.
+  // If a gate atom ends with ".unspecified", it matches any case atom sharing
+  // the same prefix (e.g., "subject.protected_group.unspecified" matches
+  // "subject.protected_group.race_ethnicity").
+  function gateIntersects(gateAtoms, caseAtoms) {
+    if (!gateAtoms || !caseAtoms || !gateAtoms.length || !caseAtoms.length) return false;
+    var caseSet = new Set(caseAtoms);
+    for (var i = 0; i < gateAtoms.length; i++) {
+      var g = gateAtoms[i];
+      if (caseSet.has(g)) return true;
+      // Subsumption: *.unspecified acts as wildcard for siblings
+      if (g.endsWith(".unspecified")) {
+        var prefix = g.slice(0, g.length - ".unspecified".length + 1); // e.g. "subject.protected_group."
+        for (var j = 0; j < caseAtoms.length; j++) {
+          if (caseAtoms[j].startsWith(prefix) && caseAtoms[j] !== g) return true;
+        }
+      }
+    }
+    return false;
+  }
   function subset(group, set) {
     if (!group || !group.length) return false;
     for (var i = 0; i < group.length; i++) if (set.indexOf(group[i]) < 0) return false;
@@ -430,7 +450,7 @@ const DIM_NAMES = {
       var d = GATE_DIMS[i];
       var need = g[d] || [];
       if (!need.length) continue;
-      if (!intersects(need, caseAtoms[d] || [])) return false;
+      if (!gateIntersects(need, caseAtoms[d] || [])) return false;
     }
     if (claim.requires_exception_context) {
       if (!intersects(claim.exceptions_required || [], caseAtoms.X || [])) return false;
@@ -478,7 +498,17 @@ const DIM_NAMES = {
       var d = GATE_DIMS[i];
       var need = (claim.gates || {})[d] || [];
       var got  = caseAtoms[d] || [];
-      var hit  = need.filter(function (a) { return got.indexOf(a) >= 0; });
+      var hit  = need.filter(function (a) {
+        if (got.indexOf(a) >= 0) return true;
+        // Subsumption: *.unspecified matches any sibling
+        if (a.endsWith(".unspecified")) {
+          var prefix = a.slice(0, a.length - ".unspecified".length + 1);
+          for (var k = 0; k < got.length; k++) {
+            if (got[k].startsWith(prefix) && got[k] !== a) return true;
+          }
+        }
+        return false;
+      });
       if (hit.length) ev[d] = hit;
     }
     return ev;
@@ -858,6 +888,14 @@ const DIM_NAMES = {
           var hasAny = false;
           for (var ni = 0; ni < need.length; ni++) {
             if (got.indexOf(need[ni]) >= 0) { hasAny = true; break; }
+            // Subsumption: *.unspecified matches any sibling
+            if (need[ni].endsWith(".unspecified")) {
+              var _pfx = need[ni].slice(0, need[ni].length - ".unspecified".length + 1);
+              for (var _gi = 0; _gi < got.length; _gi++) {
+                if (got[_gi].startsWith(_pfx) && got[_gi] !== need[ni]) { hasAny = true; break; }
+              }
+              if (hasAny) break;
+            }
           }
           if (!hasAny) missingDims.push({ dim: gDim, candidates: need });
         }
@@ -5439,6 +5477,17 @@ function AtomTagger(props) {
           e("div", { className: "muted", style: { fontSize: 11, padding: "4px 0" }},
             "Per-claim per-dim hit/miss against current selection."),
           e("pre", null, (function(){
+            // Helper: check if gate atom is subsumed by case atoms (.unspecified rule)
+            function _gateAtomHit(gateAtom, got) {
+              if (got.indexOf(gateAtom) >= 0) return true;
+              if (gateAtom.endsWith(".unspecified")) {
+                var pfx = gateAtom.slice(0, gateAtom.length - ".unspecified".length + 1);
+                for (var _i = 0; _i < got.length; _i++) {
+                  if (got[_i].startsWith(pfx) && got[_i] !== gateAtom) return true;
+                }
+              }
+              return false;
+            }
             const out = corpus.claims.map(c => {
               const dimReport = {};
               let any = false;
@@ -5446,8 +5495,8 @@ function AtomTagger(props) {
                 const need = (c.gates && c.gates[d]) || [];
                 const got  = tags[d] || [];
                 if (!need.length) { dimReport[d] = "wildcard"; return; }
-                const hit = need.filter(k => got.indexOf(k) >= 0);
-                const miss = need.filter(k => got.indexOf(k) < 0);
+                const hit = need.filter(k => _gateAtomHit(k, got));
+                const miss = need.filter(k => !_gateAtomHit(k, got));
                 dimReport[d] = (hit.length ? "HIT[" + hit.join(",") + "]" : "MISS")
                              + (miss.length ? " need=[" + miss.join(",") + "]" : "");
                 if (!hit.length) any = true;
