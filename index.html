@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.24";
+const PLUGIN_VERSION = "atom-mvp v0.18.25";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4813,6 +4813,10 @@ function AtomTagger(props) {
   const [statusFilter, setStatusFilter] = React.useState("");
   const [decisionFilter, setDecisionFilter] = React.useState("");
 
+  // Clear filters when switching review mode (top-level tab)
+  React.useEffect(() => {
+    setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter("");
+  }, [reviewMode]);
 
   // Derive which atoms came from the skill verdict vs reviewer manual adds
   const skillProposed = React.useMemo(() => {
@@ -5085,18 +5089,6 @@ function AtomTagger(props) {
   return e("div", null,
     e("div", { className: "tag-card" },
       e("div", { style: { marginBottom: 12 } },
-        e("div", { className: "row", style: { gap: 6 } },
-          e("button", {
-            className: reviewMode === "pending" ? "tab active" : "tab",
-            onClick: () => { setReviewMode("pending"); setPrecedentRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
-            title: "Select a new pending case to review, tag atoms, and get a skill verdict"
-          }, "✏️ New Review"),
-          e("button", {
-            className: reviewMode === "precedent" ? "tab active" : "tab",
-            onClick: () => { setReviewMode("precedent"); setPendingRid(""); setCaseFilter(""); setTitleFilter(""); setIssueFilter(""); setStatusFilter(""); setDecisionFilter(""); },
-            title: "Re-examine an existing precedent: verify its atom tags and re-score"
-          }, "📚 Precedent Re-check")
-        ),
         e("div", { style: { fontSize: 11, marginTop: 6, color: "var(--ink)", opacity: 0.7, lineHeight: 1.4 } },
           reviewMode === "pending"
             ? "▶ Pick a pending case below, tag its atoms, retrieve precedents, then send to the AI skill for a reasoned verdict."
@@ -5617,7 +5609,8 @@ function LoaderPane(props) {
 // ---- App shell -------------------------------------------------------------
 function App() {
   const [state, setState] = React.useState({ phase: "idle", err: null, corpus: null });
-  const [tab, setTab] = React.useState("tagger");
+  // v0.18.25: Top-level navigation now uses reviewMode directly (pending | precedent).
+  // "Loader stats" is a collapsible details section at the bottom.
 
   // Lifted state: tags + case selection + verdict overlay
   const [pendingRid, setPendingRid] = React.useState("");
@@ -5729,8 +5722,8 @@ function App() {
       e("span", { className: "pill" }, PLUGIN_VERSION)
     ),
     e("div", { className: "row", style: { gap: 0, borderBottom: "1px solid var(--hairline)" }},
-      e("button", { className: "tab " + (tab==="tagger"?"active":""), onClick: () => setTab("tagger") }, "Review"),
-      e("button", { className: "tab " + (tab==="loader"?"active":""), onClick: () => setTab("loader") }, "Loader stats"),
+      e("button", { className: "tab " + (reviewMode==="pending"?"active":""), onClick: () => { setReviewMode("pending"); setPrecedentRid(""); } }, "New Review"),
+      e("button", { className: "tab " + (reviewMode==="precedent"?"active":""), onClick: () => { setReviewMode("precedent"); setPendingRid(""); } }, "Precedent Re-check"),
       e("div", { style: { flex: 1 }}),
       e("button", { className: "ghost", onClick: load, disabled: state.phase === "loading" },
         state.phase === "loading" ? "Loading…" : "↻ reload")
@@ -5738,13 +5731,15 @@ function App() {
     state.phase === "error" && e("div", { className: "err" },
       e("strong", null, "Load error: "), state.err),
     state.phase === "loading" && e("div", { className: "muted", style: { padding: 20 }}, "Loading corpus…"),
-    state.phase === "loaded" && tab === "tagger" && c && e(AtomTagger, {
+    state.phase === "loaded" && c && e(AtomTagger, {
       corpus: c, tags, setTags, verdictData, pendingRid, setPendingRid,
       precedentRid, setPrecedentRid, reviewMode, setReviewMode,
       onVerdictParsed, onVerdictCleared, onCorpusPatch
     }),
-    state.phase === "loaded" && tab === "loader" && c && e(LoaderPane, { corpus: c }),
-
+    state.phase === "loaded" && c && e("details", { style: { marginTop: 24, fontSize: 11, color: "var(--muted)" } },
+      e("summary", { style: { cursor: "pointer", userSelect: "none" } }, "Loader Stats"),
+      e(LoaderPane, { corpus: c })
+    )
   );
 }
 
