@@ -362,7 +362,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.23";
+const PLUGIN_VERSION = "atom-mvp v0.18.24";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -885,16 +885,29 @@ const DIM_NAMES = {
     // Those test rule-book escape paths that exist by design, not genuine content
     // ambiguity. True ambiguity is assessed skill-side (content-grounded reasoning).
 
-    var structurallyFragile = flips.length > 0;
-    var minFlips = structurallyFragile ? 1 : Infinity;
-    var nearestPath = structurallyFragile ? [flips[0]] : null;
+    // v0.18.24: Only report structurally_fragile when the flip atom is
+    // genuinely ambiguous (present in weakest_atoms from skill assessment).
+    // Rationale: most ATLAS rules have thin gates (1-2 atoms per dim), so
+    // mechanical 1-flip fragility is the norm, not the exception. It only
+    // matters when the flippable atom is actually contestable content-wise.
+    var weakestAtoms = opts.weakest_atoms || [];
+    var contestedFlips = [];
+    for (var fi = 0; fi < flips.length; fi++) {
+      if (weakestAtoms.indexOf(flips[fi].atom_key) >= 0) {
+        contestedFlips.push(flips[fi]);
+      }
+    }
+    var structurallyFragile = contestedFlips.length > 0;
+    var minFlips = structurallyFragile ? 1 : (flips.length > 0 ? 1 : Infinity);
+    var nearestPath = structurallyFragile ? [contestedFlips[0]] : (flips.length > 0 ? [flips[0]] : null);
 
     return {
       structurally_fragile: structurallyFragile,
       min_flips_to_inverse: minFlips,
       nearest_flip_path: nearestPath,
       evals_run: evalsRun,
-      // Fragility score: 0.0 = fragile (1 gate-atom flip inverts), 1.0 = robust
+      raw_flips: flips.length, // total mechanical flips (for diagnostics)
+      contested_flips: contestedFlips.length, // genuinely ambiguous flips
       fragility_score: structurallyFragile ? 0.0 : 1.0
     };
   }
@@ -912,28 +925,10 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
   var ruleShaky = stabilityResult && stabilityResult.band === "L2";
   var rawFragile = counterfactualResult && counterfactualResult.structurally_fragile;
 
-  // v0.18.20: Discount fragility when the fragile atom is NOT genuinely contested.
-  // The counterfactual pass is mechanical: it removes each atom and re-evaluates.
-  // Shared gate atoms (subject.adult, realism.realistic, portrayal.depiction) often
-  // appear as the "fragile" atom because they gate ALL claims simultaneously, but
-  // they are rarely the genuinely ambiguous dimension. The skill's weakest_atoms
-  // identifies which atoms are actually contestable. If the fragile atom is NOT in
-  // weakest_atoms, treat fragility as a structural artifact, not genuine risk.
+  // v0.18.24: Fragility filtering moved upstream into computeCounterfactual.
+  // structurally_fragile is now only true when the flip atom is genuinely
+  // contested (in weakest_atoms). No additional discount needed here.
   var fragile = rawFragile;
-  if (rawFragile && ruleStable && ambiguityAssessment && ambiguityAssessment.weakest_atoms) {
-    var flipAtom = counterfactualResult.nearest_flip_path &&
-                   counterfactualResult.nearest_flip_path[0] &&
-                   counterfactualResult.nearest_flip_path[0].atom_key;
-    if (flipAtom) {
-      var contested = ambiguityAssessment.weakest_atoms;
-      var flipIsContested = contested.indexOf(flipAtom) >= 0;
-      if (!flipIsContested) {
-        // Fragile atom is uncontested (e.g., subject.adult in an obvious-adults case).
-        // Downgrade: don't let mechanical fragility dominate defensibility.
-        fragile = false;
-      }
-    }
-  }
   
   // Pillar B: Content Ambiguity
   var ambigClass = ambiguityAssessment && ambiguityAssessment.classification;
@@ -3541,7 +3536,8 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
             var ac = corpus.claims || [];
             var pa = pendingCase && pendingCase.issue ? resolvePolicyArea(pendingCase.issue) : null;
             var sc = pa ? ac.filter(function(c) { return matchesPolicyArea(c.issue, pa); }) : ac;
-            return window.computeCounterfactual(tags, sc, engineResult.verdict, { policy_title: pendingCase && pendingCase.policy_title });
+            var _waP = verdictData && verdictData.ambiguity_assessment && verdictData.ambiguity_assessment.weakest_atoms || [];
+            return window.computeCounterfactual(tags, sc, engineResult.verdict, { policy_title: pendingCase && pendingCase.policy_title, weakest_atoms: _waP });
           })()
         : null;
       if (ss && cf) {
@@ -4984,10 +4980,12 @@ function AtomTagger(props) {
     var scopedClaims = pArea
       ? allClaims.filter(function(c) { return matchesPolicyArea(c.issue, pArea); })
       : allClaims;
+    var _wa = verdictData && verdictData.ambiguity_assessment && verdictData.ambiguity_assessment.weakest_atoms || [];
     return window.computeCounterfactual(tags, scopedClaims, engineResult.verdict, {
-      policy_title: activeCase && activeCase.policy_title || undefined
+      policy_title: activeCase && activeCase.policy_title || undefined,
+      weakest_atoms: _wa
     });
-  }, [engineResult, tags, corpus.claims, activeCase]);
+  }, [engineResult, tags, corpus.claims, activeCase, verdictData]);
 
   // Phase 4: hybrid retriever. Runs when a case is picked; uses pendingCase text +
   // current atom selection to find similar precedents in corpus.cases.
@@ -5353,7 +5351,7 @@ function AtomTagger(props) {
             e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
               e("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", minWidth: 140, letterSpacing: 0.3, cursor: "help" }, "data-tip": "How structurally stable the decision is. Tests whether changing one atom tag would flip the outcome. High = well-supported by multiple atoms." }, "RULE STABILITY"),
               stabilityResult && e(StabilityBadge, { stability: stabilityResult }),
-              counterfactualResult && counterfactualResult.structurally_fragile && !(stabilityResult && stabilityResult.band === "L1" && stabilityResult.score >= 0.8) && e("span", { className: "pill", style: { background: "var(--warning)", color: "#fff", fontSize: 10 }, "data-tip": "Removing one tagged atom would flip the verdict. The decision hinges on a single classification." }, "⚠ fragile (1-flip)")
+
             ),
             // Pillar B: Content Ambiguity
             e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
