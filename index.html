@@ -3536,8 +3536,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
             var ac = corpus.claims || [];
             var pa = pendingCase && pendingCase.issue ? resolvePolicyArea(pendingCase.issue) : null;
             var sc = pa ? ac.filter(function(c) { return matchesPolicyArea(c.issue, pa); }) : ac;
-            var _waP = verdictData && verdictData.ambiguity_assessment && verdictData.ambiguity_assessment.weakest_atoms || [];
-            return window.computeCounterfactual(tags, sc, engineResult.verdict, { policy_title: pendingCase && pendingCase.policy_title, weakest_atoms: _waP });
+            return window.computeCounterfactual(tags, sc, engineResult.verdict, { policy_title: pendingCase && pendingCase.policy_title, weakest_atoms: [] });
           })()
         : null;
       if (ss && cf) {
