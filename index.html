@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.27";
+const PLUGIN_VERSION = "atom-mvp v0.18.28";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -3773,19 +3773,19 @@ function PayloadPane(props) {
   // 2. Copy keyframes" UX so reviewers know to paste both into the chat.
   const sendLabel = copyState === "ok"  ? "✓ Copied"
                   : copyState === "err" ? "⤓ saved .json (clipboard blocked)"
-                  : "① Copy JSON";
+                  : "Copy Input JSON";
   const sendClass = "copy-btn primary-action" + (copyState === "ok" ? " ok"
                                 : copyState === "err" ? " err" : "");
   const kfLabel   = imgState === "resolving" ? "resolving…"
                   : imgState === "ok"     ? "✓ Copied"
                   : imgState === "newtab" ? "↗ opened — right-click → Copy"
                   : imgState === "err"    ? "✗ failed"
-                  : "② Copy frames (" + Math.min(12, imgCount) + ")";
+                  : "Copy Input Images (" + Math.min(12, imgCount) + ")";
 
   return e("div", { className: "payload-card" },
     e("div", { className: "payload-head" },
       e("div", null,
-        e("div", { className: "payload-title" }, "Payload"),
+        e("div", { className: "payload-title" }, "Mira AI Analysis"),
         e("div", { className: "payload-meta" },
           precCount, " precedent", precCount===1?"":"s",
           hasImages ? " · " + Math.min(12, imgCount) + " keyframe" + (Math.min(12, imgCount)===1?"":"s") : "",
