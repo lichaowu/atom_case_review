@@ -225,8 +225,8 @@
   .copy-btn:hover{background:var(--surface-soft);color:var(--ink)}
   .copy-btn.primary-action{background:var(--primary);border-color:var(--primary);color:#fff;font-size:12px;padding:7px 14px}
   .copy-btn.primary-action:hover{background:var(--primary-active);border-color:var(--primary-active)}
-  .copy-btn.primary-action.step2{background:#1a7f64;border-color:#1a7f64}
-  .copy-btn.primary-action.step2:hover{background:#15664f;border-color:#15664f}
+  .copy-btn.primary-action.step2{background:var(--primary);border-color:var(--primary)}
+  .copy-btn.primary-action.step2:hover{background:var(--primary-active);border-color:var(--primary-active)}
   .copy-btn.ok{background:var(--success)!important;border-color:var(--success)!important;color:#fff!important}
   .copy-btn.err{background:var(--error)!important;border-color:var(--error)!important;color:#fff!important}
   .copy-btn.ghost{background:transparent;color:var(--muted);border-color:var(--hairline)}
@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.28";
+const PLUGIN_VERSION = "atom-mvp v0.18.29";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
