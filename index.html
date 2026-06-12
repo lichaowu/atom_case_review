@@ -2166,7 +2166,7 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   var _dropped = [];
   try { _dropped = (window.__lastSaveDropped || []).slice(); } catch(_) {}
 
-  // Mark pending case as "Reviewed"
+  // Mark pending case as "Policy Reviewed"
   if (opts._pendingRecordId && corpus._tables && corpus._tables.pendingTbl) {
     try {
       const ptbl = corpus._tables.pendingTbl;
@@ -2179,14 +2179,14 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
           // side. Resolve the option id from pidx.selectOptions and write
           // the canonical {id, text} shape.
           const _opts = (pidx.selectOptions && pidx.selectOptions[statusFieldId]) || null;
-          const _optId = _opts && (_opts.byName["Reviewed"] || _opts.byName["reviewed"]);
+          const _optId = _opts && (_opts.byName["Policy Reviewed"] || _opts.byName["Reviewed"] || _opts.byName["reviewed"]);
           let _payload;
           if (_optId) {
-            _payload = { id: _optId, text: "Reviewed" };
+            _payload = { id: _optId, text: "Policy Reviewed" };
           } else {
-            console.warn("[AtomConsole.save] pending status: 'Reviewed' option not indexed; falling back to {text}",
+            console.warn("[AtomConsole.save] pending status: 'Policy Reviewed' option not indexed; falling back to {text}",
               _opts ? Object.keys(_opts.byName) : "(no selectOptions)");
-            _payload = { text: "Reviewed" };
+            _payload = { text: "Policy Reviewed" };
           }
           try {
             await ptbl.setRecord(opts._pendingRecordId, {
@@ -4603,7 +4603,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           onCorpusPatch({ updatedPrecedent: {
             record_id: precedentRid,
             decision: decision,
-            status: "Reviewed",
+            status: "Double Confirmed",
             reviewed_by: analyst
           }});
         }
@@ -4633,7 +4633,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           // Patch corpus in-memory: mark pending as Reviewed + add new precedent
           if (onCorpusPatch) {
             onCorpusPatch({
-              pendingStatusUpdate: { record_id: pendingCase.record_id, status: "Reviewed" },
+              pendingStatusUpdate: { record_id: pendingCase.record_id, status: "Policy Reviewed" },
               newPrecedent: {
                 record_id: _res && _res.recordId || null,
                 source_video_id: pendingCase.source_video_id || "",
@@ -4642,7 +4642,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
                 policy_title: policyTitle ? [policyTitle] : (pendingCase.policy_title || []),
                 issue: pendingCase.issue || "",
                 decision: decision,
-                status: "Reviewed",
+                status: "Policy Reviewed",
                 atoms: JSON.parse(JSON.stringify(tags))
               }
             });
@@ -4940,7 +4940,8 @@ function AtomTagger(props) {
   const statusOptions = React.useMemo(() => {
     const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
     const s = new Set();
-    for (const p of src) { if (p.status) s.add(p.status); }
+    // Normalize legacy "Reviewed" -> "Policy Reviewed" for display
+    for (const p of src) { if (p.status) s.add(p.status === "Reviewed" ? "Policy Reviewed" : p.status); }
     return Array.from(s).sort();
   }, [corpus.cases, corpus.pending, reviewMode]);
 
@@ -4957,7 +4958,7 @@ function AtomTagger(props) {
     return corpus.pending.filter(p => {
       if (titleFilter) { const _t = Array.isArray(p.policy_title) ? p.policy_title : [p.policy_title || ""]; if (!_t.includes(titleFilter)) return false; }
       if (issueFilter && (p.issue || "") !== issueFilter) return false;
-      if (statusFilter && (p.status || "") !== statusFilter) return false;
+      if (statusFilter && (p.status === "Reviewed" ? "Policy Reviewed" : (p.status || "")) !== statusFilter) return false;
       if (!q) return true;
       const _pt = Array.isArray(p.policy_title) ? p.policy_title.join(" ") : (p.policy_title || "");
       return (
@@ -4978,7 +4979,7 @@ function AtomTagger(props) {
     return corpus.cases.filter(c => {
       if (titleFilter) { const _t = Array.isArray(c.policy_title) ? c.policy_title : [c.policy_title || ""]; if (!_t.includes(titleFilter)) return false; }
       if (issueFilter && (c.issue || "") !== issueFilter) return false;
-      if (statusFilter && (c.status || "") !== statusFilter) return false;
+      if (statusFilter && (c.status === "Reviewed" ? "Policy Reviewed" : (c.status || "")) !== statusFilter) return false;
       if (decisionFilter && (c.decision || "") !== decisionFilter) return false;
       if (!q) return true;
       const _pt = Array.isArray(c.policy_title) ? c.policy_title.join(" ") : (c.policy_title || "");
