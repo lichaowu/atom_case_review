@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.29";
+const PLUGIN_VERSION = "atom-mvp v0.18.30";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -681,10 +681,19 @@ const DIM_NAMES = {
     }
     var conflict = opposingCount > 0 ? Math.min(1.0, opposingCount / 2.0) : 0.0;
 
-    // --- SPECIFICITY RATIO ---
-    var maxSpec = 4;
+    // --- CO-DEFENSIBILITY σ(ρ): opposite enforcement path is also fully gate-satisfied ---
+    // Every fired claim here is gate-satisfied, so a satisfied opposing direction is
+    // exactly an opposing gate hit. This is the paper's inverse-check signal (L1≈low,
+    // L2/L3≈high) — the high-information defensibility discriminator.
+    var coDefensibility = opposingCount > 0 ? Math.min(1.0, opposingCount / 2.0) : 0.0;
+
+    // --- SPECIFICITY RATIO (observed-max normalization, §6 enforcement asymmetry) ---
+    var specCounts = fired.map(function (f) { return f.specificity || 0; });
+    var maxSpec = Math.max.apply(null, specCounts.concat([1]));
     var topSpec = fired[0].specificity || 0;
-    var spec = Math.min(1.0, topSpec / maxSpec);
+    var specRaw = Math.min(1.0, topSpec / maxSpec);
+    // §6 asymmetry: specificity is load-bearing for enforcement, flat for APPROVE
+    var spec = topIsEnforce ? specRaw : 0.85;
 
     // --- LIFT FRAGILITY (boundary-aware + redundancy + protection) ---
     var topClaim = fired[0];
@@ -778,8 +787,9 @@ const DIM_NAMES = {
     var cleanBonus = isClean ? 0.15 : 0.0;
 
     // --- FINAL SCORE ---
-    var finalScore = (0.25 * margin + 0.15 * spec + 0.20 * (1.0 - conflict) + cleanBonus)
-                   - (0.20 * liftFragility) - (0.10 * suppProx);
+    var finalScore = (0.55 * margin + 0.10 * spec + 0.15 * (1.0 - conflict) + cleanBonus)
+                   - (0.20 * liftFragility) - (0.10 * suppProx)
+                   - (0.20 * coDefensibility);
     finalScore = Math.max(0.0, Math.min(1.0, finalScore));
 
     var finalBand = finalScore >= 0.70 ? "L1" : (finalScore >= 0.42 ? "L2" : "L3");
@@ -792,6 +802,7 @@ const DIM_NAMES = {
         enforcement_consensus_margin: margin,
         specificity_ratio: Math.round(spec * 1000) / 1000,
         conflict_pressure: Math.round(conflict * 1000) / 1000,
+        co_defensibility: Math.round(coDefensibility * 1000) / 1000,
         lift_fragility: Math.round(liftFragility * 1000) / 1000,
         suppression_proximity: Math.round(suppProx * 1000) / 1000,
         clean_bonus: cleanBonus
@@ -960,34 +971,78 @@ const DIM_NAMES = {
 // === Defensibility merge (v0.18) ===
 // Merges Decision Rule Stability (engine-side) + Content Ambiguity (skill-side) into a single tier.
 function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAssessment) {
-  // Pillar A: Decision Rule Stability
-  var ruleStable = stabilityResult && stabilityResult.band === "L1";
-  var ruleShaky = stabilityResult && stabilityResult.band === "L2";
-  var rawFragile = counterfactualResult && counterfactualResult.structurally_fragile;
+  // === v0.18.30 reframe (paper Table 2 / Table 7) ===
+  // Content Ambiguity (Pillar B) is the HEADLINE tier — it is the binding,
+  // discriminating axis. Decision Rule Stability / SSS (Pillar A) is demoted to
+  // a structural PRECONDITION (tripwire): it can only DOWNGRADE a tier, never lift it.
+  // Rationale: in production SSS is near-binary (clean ~0.71 vs fragile ~low), so the
+  // graded L1/L2/L3 belongs to the ambiguity axis, not to SSS.
 
-  // v0.18.24: Fragility filtering moved upstream into computeCounterfactual.
-  // structurally_fragile is now only true when the flip atom is genuinely
-  // contested (in weakest_atoms). No additional discount needed here.
-  var fragile = rawFragile;
-  
-  // Pillar B: Content Ambiguity
+  // Pillar A: Decision Rule Stability (precondition / tripwire only)
+  var band = stabilityResult && stabilityResult.band;
+  var ruleStable = band === "L1";
+  var ruleShaky  = band === "L2";
+  var ruleBroken = band === "L3";
+  // v0.18.24: structurally_fragile is only true when the flip atom is genuinely
+  // contested (filtering done upstream in computeCounterfactual).
+  var fragile = counterfactualResult && counterfactualResult.structurally_fragile;
+
+  // Pillar B: Content Ambiguity (headline axis)
   var ambigClass = ambiguityAssessment && ambiguityAssessment.classification;
   var precSupport = ambiguityAssessment && ambiguityAssessment.precedent_support;
-  
-  // Merge logic
-  if (ambigClass === "L3") return { tier: "LOW", label: "Low", reason: "Content ambiguity L3 (genuinely contested)" };
-  if ((ruleShaky || fragile) && ambigClass === "L2") return { tier: "LOW", label: "Low", reason: "Shaky structure + moderate content ambiguity" };
-  if (stabilityResult && stabilityResult.band === "L3") return { tier: "LOW", label: "Low", reason: "Decision rule stability L3 (fragile structure)" };
-  if (fragile && !ruleStable && ambigClass !== "L1") return { tier: "LOW", label: "Low", reason: "Structurally fragile + non-trivial ambiguity" };
-  if (ambigClass === "L2") return { tier: "MEDIUM", label: "Medium", reason: "Moderate content ambiguity" };
-  if (ruleShaky || fragile) return { tier: "MEDIUM", label: "Medium", reason: "Structural concern (shaky or 1-flip fragile)" };
-  if (precSupport === "none") return { tier: "MEDIUM", label: "Medium", reason: "No applicable precedent support" };
-  if (precSupport === "partial") return { tier: "MEDIUM", label: "Medium", reason: "Partial precedent support" };
-  if (ruleStable && ambigClass === "L1") return { tier: "HIGH", label: "High", reason: "Stable rules + clear content" };
-  // Fallback: if no ambiguity data yet
+
+  // No ambiguity data yet -> cannot grade.
   if (!ambiguityAssessment) return null;
-  return { tier: "HIGH", label: "High", reason: "All signals favorable" };
+
+  // Headline tier from content ambiguity.
+  var tier, reason;
+  if (ambigClass === "L3") { tier = "LOW"; reason = "Content ambiguity L3 (genuinely contested)"; }
+  else if (ambigClass === "L2") { tier = "MEDIUM"; reason = "Moderate content ambiguity"; }
+  else if (ambigClass === "L1") { tier = "HIGH"; reason = "Clear content (ambiguity L1)"; }
+  else if (precSupport === "none" || precSupport === "partial") { tier = "MEDIUM"; reason = "Limited precedent support"; }
+  else { tier = "HIGH"; reason = "All signals favorable"; }
+
+  // Pillar A precondition: structural tripwire can only pull DOWN.
+  //   hard break  (L3 band, or genuinely fragile w/o stable rules) -> cap at LOW
+  //   soft concern(L2 band / single-flip fragile)                  -> cap at MEDIUM
+  var hardStructural = ruleBroken || (fragile && !ruleStable);
+  var softStructural = ruleShaky || fragile;
+  function rank(t) { return t === "HIGH" ? 2 : (t === "MEDIUM" ? 1 : 0); }
+
+  if (hardStructural && rank(tier) > 0) {
+    tier = "LOW";
+    reason = ruleBroken ? "Decision rule stability L3 (fragile structure)"
+                        : "Structurally fragile (overrides content tier)";
+  } else if (softStructural && rank(tier) > 1) {
+    tier = "MEDIUM";
+    reason = "Structural concern (shaky or 1-flip fragile)";
+  }
+
+  return { tier: tier, label: tier.charAt(0) + tier.slice(1).toLowerCase(), reason: reason };
 }
+
+// v0.18.30: build the consolidated defensibility_detail JSON blob (schema defensibility-detail/v1).
+// Holds everything the 3-field model retired into one column: band, components,
+// counterfactual, ambiguity. defensibility (tier) + defensibility_index (DI) are the
+// two promoted top-level fields; this captures the rest.
+window.__buildDefensibilityDetail = function (stabilityResult, counterfactualResult, defResult, ambiguityAssessment) {
+  var detail = {
+    schema: "defensibility-detail/v1",
+    defensibility_index: stabilityResult ? stabilityResult.score : null,
+    band: stabilityResult ? stabilityResult.band : null,
+    structurally_fragile: !!(counterfactualResult && counterfactualResult.structurally_fragile),
+    merge_reason: defResult ? defResult.reason : null,
+    components: stabilityResult ? stabilityResult.components : null,
+    counterfactual: counterfactualResult ? {
+      structurally_fragile: !!counterfactualResult.structurally_fragile,
+      min_flips_to_inverse: counterfactualResult.min_flips_to_inverse,
+      nearest_flip_path: counterfactualResult.nearest_flip_path
+    } : null,
+    ambiguity_index: (ambiguityAssessment && ambiguityAssessment.classification) || null,
+    precedent_support: (ambiguityAssessment && ambiguityAssessment.precedent_support) || null
+  };
+  try { return JSON.stringify(detail); } catch (e) { return ""; }
+};
 </script>
 
 <script>
@@ -1983,25 +2038,19 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
     setTextField("override_tag", opts.overrideTag);
   }
 
-  // Structural Stability Score (Phase A — defensibility framework)
-  if (opts.stabilityScore != null) {
-    // Number field: stability_score (0-1 float)
-    var _ssFieldId = fid("stability_score");
-    if (_ssFieldId) fields[_ssFieldId] = opts.stabilityScore;
-    // SingleSelect field: stability_band (L1/L2/L3)
-    if (opts.stabilityBand) setSmartField("stability_band", opts.stabilityBand);
+  // v0.18.30: consolidated 3-field defensibility writeback
+  // SingleSelect: defensibility (HIGH/MEDIUM/LOW headline tier)
+  if (opts.defensibility) {
+    setSmartField("defensibility", opts.defensibility);
   }
-  // Checkbox field: structurally_fragile (Phase B — counterfactual fragility)
-  if (opts.structurallyFragile != null) {
-    var _sfFieldId = fid("structurally_fragile");
-    if (_sfFieldId) fields[_sfFieldId] = !!opts.structurallyFragile;
+  // Number: defensibility_index (Defensibility Index / DI, 0-1)
+  if (opts.defensibilityIndex != null) {
+    var _diFieldId = fid("defensibility_index");
+    if (_diFieldId) fields[_diFieldId] = opts.defensibilityIndex;
   }
-  // v0.18.22: Defensibility merged tier + reason
-  if (opts.defensibilityTier) {
-    setSmartField("defensibility_tier", opts.defensibilityTier);
-  }
-  if (opts.defensibilityReason) {
-    setTextField("defensibility_reason", opts.defensibilityReason);
+  // Text: defensibility_detail (JSON blob — band, components, counterfactual, ambiguity)
+  if (opts.defensibilityDetail) {
+    setTextField("defensibility_detail", opts.defensibilityDetail);
   }
 
   // Copy keyframe attachments from pending case (same base, tokens reusable)
@@ -2259,22 +2308,19 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
   if (opts.reviewedBy) { setSmartField("reviewed_by", opts.reviewedBy); }
   if (opts.overrideTag) { setTextField("override_tag", opts.overrideTag); }
 
-  if (opts.stabilityScore != null) {
-    var _ssFieldId = fid("stability_score");
-    if (_ssFieldId) fields[_ssFieldId] = opts.stabilityScore;
-    if (opts.stabilityBand) setSmartField("stability_band", opts.stabilityBand);
+  // v0.18.30: consolidated 3-field defensibility writeback
+  // SingleSelect: defensibility (HIGH/MEDIUM/LOW headline tier)
+  if (opts.defensibility) {
+    setSmartField("defensibility", opts.defensibility);
   }
-  // Checkbox field: structurally_fragile (Phase B — counterfactual fragility)
-  if (opts.structurallyFragile != null) {
-    var _sfFieldId = fid("structurally_fragile");
-    if (_sfFieldId) fields[_sfFieldId] = !!opts.structurallyFragile;
+  // Number: defensibility_index (Defensibility Index / DI, 0-1)
+  if (opts.defensibilityIndex != null) {
+    var _diFieldId = fid("defensibility_index");
+    if (_diFieldId) fields[_diFieldId] = opts.defensibilityIndex;
   }
-  // v0.18.22: Defensibility merged tier + reason
-  if (opts.defensibilityTier) {
-    setSmartField("defensibility_tier", opts.defensibilityTier);
-  }
-  if (opts.defensibilityReason) {
-    setTextField("defensibility_reason", opts.defensibilityReason);
+  // Text: defensibility_detail (JSON blob — band, components, counterfactual, ambiguity)
+  if (opts.defensibilityDetail) {
+    setTextField("defensibility_detail", opts.defensibilityDetail);
   }
 
   const dimFieldMap = {
@@ -4540,17 +4586,16 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     try {
       if (isPrecedentReview) {
         var _defResult = computeDefensibility(stabilityResult, counterfactualResult, verdictData && verdictData.ambiguity_assessment);
+        var _defDetail = window.__buildDefensibilityDetail(stabilityResult, counterfactualResult, _defResult, verdictData && verdictData.ambiguity_assessment);
         await window.__updateExistingRecord(corpus, pendingCase, tags, {
           decision: decision,
           policyTitle: policyTitle,
           rationale: rationale,
           reviewedBy: analyst,
           overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
-          stabilityScore: stabilityResult && stabilityResult.score,
-          stabilityBand: stabilityResult && stabilityResult.band,
-          structurallyFragile: counterfactualResult && counterfactualResult.structurally_fragile,
-          defensibilityTier: _defResult && _defResult.tier,
-          defensibilityReason: _defResult && _defResult.reason
+          defensibility: _defResult && _defResult.tier,
+          defensibilityIndex: stabilityResult && stabilityResult.score,
+          defensibilityDetail: _defDetail
         });
         setSaved({ ok: true, msg: "Updated precedent (reviewed_by saved)" });
         // Patch corpus in-memory so filters reflect the update immediately
@@ -4564,17 +4609,16 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         }
       } else {
         var _defResult2 = computeDefensibility(stabilityResult, counterfactualResult, verdictData && verdictData.ambiguity_assessment);
+        var _defDetail2 = window.__buildDefensibilityDetail(stabilityResult, counterfactualResult, _defResult2, verdictData && verdictData.ambiguity_assessment);
         const _res = await window.__saveConfirmedRecord(corpus, pendingCase, tags, {
           decision: decision,
           policyTitle: policyTitle,
           rationale: rationale,
           analyst: analyst,
           overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
-          stabilityScore: stabilityResult && stabilityResult.score,
-          stabilityBand: stabilityResult && stabilityResult.band,
-          structurallyFragile: counterfactualResult && counterfactualResult.structurally_fragile,
-          defensibilityTier: _defResult2 && _defResult2.tier,
-          defensibilityReason: _defResult2 && _defResult2.reason,
+          defensibility: _defResult2 && _defResult2.tier,
+          defensibilityIndex: stabilityResult && stabilityResult.score,
+          defensibilityDetail: _defDetail2,
           _pendingRecordId: pendingCase.record_id,
           applicablePrecedentIds: verdictData && verdictData.applicable_precedent_ids ? verdictData.applicable_precedent_ids : []
         });
