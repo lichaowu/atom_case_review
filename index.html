@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.30";
+const PLUGIN_VERSION = "atom-mvp v0.18.31";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -5395,11 +5395,15 @@ function AtomTagger(props) {
       var def = computeDefensibility(stabilityResult, counterfactualResult, ambig);
       var defColors = { HIGH: { bg: "#dcfce7", border: "#86efac", text: "#166534" }, MEDIUM: { bg: "#fef9c3", border: "#fde047", text: "#854d0e" }, LOW: { bg: "#fee2e2", border: "#fca5a5", text: "#991b1b" } };
       var dc = def ? defColors[def.tier] : { bg: "#f3f4f6", border: "#d1d5db", text: "#6b7280" };
+      // Enforcement-relevant filter: keep non-approve rules, plus approve rules that were lifted (would otherwise be violations). Hide pure background-approve rules.
+      var _enf = function (o) { var n = String(o || "").toUpperCase().replace(/[\s\-]+/g, "_"); return n === "VIOLATION" || n === "NOT_RECOMMEND" || n === "NOT_FOR_FEED" || n === "NFF"; };
+      var _rawHits = (engineResult && engineResult.gate_hits) ? engineResult.gate_hits.length : 0;
+      var _enfHits = (engineResult && engineResult.gate_hits) ? engineResult.gate_hits.filter(function (h) { return _enf(h.outcome_after_lifts) || (h.lift && _enf(h.outcome_base)); }) : [];
       return e("div", { className: "verdict-card" },
         // Main row: engine verdict (based on atom selections) + defensibility pill
         e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 } },
           e("span", { className: "verdict-pill verdict-" + (engineV || "NO_CLAIM_FIRED"), "data-tip": "Verdict from rule engine based on your current atom selections" }, engineV || "NO_CLAIM_FIRED"),
-          engineResult && engineResult.gate_hits && e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)" }, "data-tip": "Claims fired by the rule engine for your current atoms" }, engineResult.gate_hits.length + " claim" + (engineResult.gate_hits.length === 1 ? "" : "s") + " fired"),
+          engineResult && engineResult.gate_hits && e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)" }, "data-tip": "Enforcement-relevant claims fired by the rule engine (background approve rules excluded)" }, _enfHits.length + " claim" + (_enfHits.length === 1 ? "" : "s") + " fired"),
           engineV && skillV && engineV !== skillV && e("span", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", display: "inline-flex", alignItems: "center", gap: 4 }, "data-tip": "AI skill suggested " + skillV + " — differs from rule engine result" }, "skill: " + skillV),
           def && e("span", {
             "data-tip": def.reason,
@@ -5408,10 +5412,10 @@ function AtomTagger(props) {
           verdictData.final_policy_title && e("span", { className: "pill", style: { background: "#f3f4f6", color: "#374151", fontSize: 10, border: "1px solid #d1d5db" } }, verdictData.final_policy_title)
         ),
         // Expandable detail: fired rules
-        engineResult && engineResult.gate_hits && engineResult.gate_hits.length > 0 && e("details", { style: { marginTop: 4, marginBottom: 4, fontSize: 11, color: "var(--muted)" } },
+        _enfHits.length > 0 && e("details", { style: { marginTop: 4, marginBottom: 4, fontSize: 11, color: "var(--muted)" } },
           e("summary", { style: { cursor: "pointer", userSelect: "none", fontFamily: "var(--mono)", fontSize: 10 }, "data-tip": "Expand to see individual claims fired by the rule engine, with their outcomes and policy titles" }, "Fired Rules Detail"),
           e("div", { style: { marginTop: 4, padding: "6px 10px", background: "#f9fafb", borderRadius: 4, display: "flex", flexDirection: "column", gap: 3 } },
-            engineResult.gate_hits.map(function(h, idx) {
+            _enfHits.map(function(h, idx) {
               var _outNorm = String(h.outcome_after_lifts || "").toUpperCase().replace(/[\s\-]+/g, "_");
               var _isEnf = _outNorm === "NOT_FOR_FEED" || _outNorm === "NFF" || _outNorm === "VIOLATION" || _outNorm === "NOT_RECOMMEND";
               var _outcomeColor = _isEnf ? "#991b1b" : "#166534";
@@ -5426,6 +5430,7 @@ function AtomTagger(props) {
             })
           )
         ),
+        _enfHits.length === 0 && _rawHits > 0 && e("div", { style: { marginTop: 4, marginBottom: 4, fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)" }, "data-tip": "All fired rules were background approves with no lift; none are enforcement-relevant." }, "No enforcement rules matched \u2014 clean approve (background approve rules hidden)."),
         // Expandable detail: two pillars
         e("details", { style: { marginTop: 4, fontSize: 11, color: "var(--muted)" } },
           e("summary", { className: "tip-down", style: { cursor: "pointer", userSelect: "none" }, "data-tip": "Two pillars: (1) rule structure robustness to small tagging changes, (2) how clearly content maps to applied atoms" }, "Decision Rule Stability · Content Ambiguity"),
