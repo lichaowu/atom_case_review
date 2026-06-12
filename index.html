@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.31";
+const PLUGIN_VERSION = "atom-mvp v0.18.33";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -2018,7 +2018,15 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
 
   setTextField("case_id", pendingCase.source_video_id || pendingCase.record_id);
   setTextField(_idField, pendingCase.source_video_id);
-  setSmartField("issue", _splitMulti(pendingCase.issue));
+  // v0.18.33: persist the full set of violated issues. Union the case's own
+  // issue(s) with any cross-issue scope the reviewer selected in the tagger.
+  var _issueUnion = _splitMulti(pendingCase.issue);
+  if (opts.scopeIssues && opts.scopeIssues.length) {
+    for (var _si = 0; _si < opts.scopeIssues.length; _si++) {
+      if (_issueUnion.indexOf(opts.scopeIssues[_si]) < 0) _issueUnion.push(opts.scopeIssues[_si]);
+    }
+  }
+  setSmartField("issue", _issueUnion);
   // Only write policy_title for non-pass decisions (pass = approve, no policy needed)
   if (opts.decision && opts.decision.toLowerCase() !== "pass") {
     setSmartField("policy_title", _splitMulti(opts.policyTitle || pendingCase.policy_title || ""));
@@ -2091,15 +2099,27 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
       } catch (e) {
         console.warn("[AtomConsole.save] source-cell re-read failed:", e);
       }
+      var _baseAtt;
       if (sdkAtt) {
-        fields[imgFieldId] = sdkAtt;
+        _baseAtt = sdkAtt;
       } else {
         // Fallback to the normalized shape (will likely drop, but keep behavior).
-        fields[imgFieldId] = pendingCase.images.map(function(img) {
+        _baseAtt = pendingCase.images.map(function(img) {
           return { token: img.token, name: img.name || "", type: img.type || "image/jpeg", size: img.size || 0 };
         });
         console.warn("[AtomConsole.save] using fallback normalized attachment shape — write will likely drop");
       }
+      // v0.18.32: append reviewer-supplied supplementary proof images.
+      var _extraAtt = (opts && opts.extraImageAttachments) || [];
+      fields[imgFieldId] = _extraAtt.length ? _baseAtt.concat(_extraAtt) : _baseAtt;
+    }
+  }
+  // v0.18.32: supplementary proof images even when the pending case had no
+  // keyframes to copy — still land in the keyframe `images` attachment field.
+  if ((!pendingCase.images || !pendingCase.images.length) && opts && opts.extraImageAttachments && opts.extraImageAttachments.length) {
+    var _imgFidS = fid("images");
+    if (_imgFidS && idx.types[_imgFidS] === 17) {
+      fields[_imgFidS] = opts.extraImageAttachments.slice();
     }
   }
 
@@ -2286,6 +2306,14 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
   if (opts.decision && opts.decision.toLowerCase() !== "pass") {
     setSmartField("policy_title", _splitMulti(opts.policyTitle || precedentCase.policy_title || ""));
   }
+  // v0.18.33: persist cross-issue scope on re-review (union with existing issues).
+  if (opts.scopeIssues && opts.scopeIssues.length) {
+    var _issueUnionU = _splitMulti(precedentCase.issue);
+    for (var _siu = 0; _siu < opts.scopeIssues.length; _siu++) {
+      if (_issueUnionU.indexOf(opts.scopeIssues[_siu]) < 0) _issueUnionU.push(opts.scopeIssues[_siu]);
+    }
+    if (_issueUnionU.length) setSmartField("issue", _issueUnionU);
+  }
   // v0.18.20: Append rationale on re-review (preserve history with date separator)
   var _existingRat = (precedentCase.rationale || "").trim();
   var _newRat = (opts.rationale || "").trim();
@@ -2339,10 +2367,51 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
     }
   }
 
+  // v0.18.32: append reviewer-supplied supplementary proof images to the
+  // existing keyframe attachment cell (read-merge-write to preserve originals).
+  var _extraAttU = (opts && opts.extraImageAttachments) || [];
+  if (_extraAttU.length) {
+    var _imgFidU = fid("images");
+    if (_imgFidU && idx.types && idx.types[_imgFidU] === 17) {
+      var _existingU = [];
+      try {
+        if (tbl.getCellValue) {
+          var _rawU = await tbl.getCellValue(_imgFidU, recordId);
+          if (Array.isArray(_rawU)) _existingU = _rawU;
+        }
+      } catch (e) { console.warn("[AtomConsole.update] existing images read failed:", e); }
+      fields[_imgFidU] = _existingU.concat(_extraAttU);
+    }
+  }
+
   await tbl.setRecord(recordId, { fields: fields });
   return { recordId: recordId };
 }
 window.__updateExistingRecord = updateExistingRecord;
+
+// =============================================================================
+// Upload reviewer-supplied supplementary proof images -> attachment objects.
+// Uses the Block SDK batch uploader; returned tokens are written into the same
+// keyframe `images` attachment field as the copied case keyframes.
+// =============================================================================
+async function uploadExtraImages(files) {
+  var arr = files ? Array.prototype.slice.call(files) : [];
+  if (!arr.length) return [];
+  var base = window.bitable && window.bitable.base;
+  if (!base || typeof base.batchUploadFile !== "function") {
+    throw new Error("Bitable SDK base.batchUploadFile not available - cannot upload images.");
+  }
+  var tokens = await base.batchUploadFile(arr);
+  return arr.map(function(f, i) {
+    return {
+      token: Array.isArray(tokens) ? tokens[i] : tokens,
+      name: f.name || ("supplement_" + (i + 1)),
+      type: f.type || "image/jpeg",
+      size: f.size || 0
+    };
+  });
+}
+window.__uploadExtraImages = uploadExtraImages;
 </script>
 
 <script>
@@ -4484,13 +4553,14 @@ function ReasonedVerdictPane(props) {
 
 // ---- AtomTagger: top-level pane --------------------------------------------
 // ---- Confirm & Save section -------------------------------------------------
-function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult, stabilityResult, counterfactualResult, reviewMode, precedentRid, onCorpusPatch }) {
+function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResult, stabilityResult, counterfactualResult, reviewMode, precedentRid, onCorpusPatch, scopeIssues }) {
   const e = React.createElement;
   const [decision, setDecision] = React.useState("flag");
   const [policyTitle, setPolicyTitle] = React.useState([]);
   const [rationale, setRationale] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState(null); // { ok, msg }
+  const [extraFiles, setExtraFiles] = React.useState([]); // supplementary proof images (File[])
 
   // Sync defaults from verdict when it changes
   React.useEffect(() => {
@@ -4584,6 +4654,18 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     setSaving(true);
     setSaved(null);
     try {
+      // v0.18.32: upload any reviewer-supplied supplementary proof images first,
+      // then thread the resulting attachment objects into the writeback.
+      var _extraImageAttachments = [];
+      if (extraFiles && extraFiles.length) {
+        try {
+          _extraImageAttachments = await window.__uploadExtraImages(extraFiles);
+        } catch (upErr) {
+          setSaved({ ok: false, msg: "Supplementary image upload failed: " + String(upErr.message || upErr) });
+          setSaving(false);
+          return;
+        }
+      }
       if (isPrecedentReview) {
         var _defResult = computeDefensibility(stabilityResult, counterfactualResult, verdictData && verdictData.ambiguity_assessment);
         var _defDetail = window.__buildDefensibilityDetail(stabilityResult, counterfactualResult, _defResult, verdictData && verdictData.ambiguity_assessment);
@@ -4595,9 +4677,12 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
           defensibility: _defResult && _defResult.tier,
           defensibilityIndex: stabilityResult && stabilityResult.score,
-          defensibilityDetail: _defDetail
+          defensibilityDetail: _defDetail,
+          extraImageAttachments: _extraImageAttachments,
+          scopeIssues: scopeIssues
         });
         setSaved({ ok: true, msg: "Updated precedent (reviewed_by saved)" });
+        setExtraFiles([]);
         // Patch corpus in-memory so filters reflect the update immediately
         if (onCorpusPatch) {
           onCorpusPatch({ updatedPrecedent: {
@@ -4620,6 +4705,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           defensibilityIndex: stabilityResult && stabilityResult.score,
           defensibilityDetail: _defDetail2,
           _pendingRecordId: pendingCase.record_id,
+          extraImageAttachments: _extraImageAttachments,
+          scopeIssues: scopeIssues,
           applicablePrecedentIds: verdictData && verdictData.applicable_precedent_ids ? verdictData.applicable_precedent_ids : []
         });
         const _drops = (_res && _res.droppedOptions) || [];
@@ -4630,6 +4717,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           setSaved({ ok: false, msg: _msg });
         } else {
           setSaved({ ok: true, msg: "Saved to Precedents table" });
+          setExtraFiles([]);
           // Patch corpus in-memory: mark pending as Reviewed + add new precedent
           if (onCorpusPatch) {
             onCorpusPatch({
@@ -4657,24 +4745,52 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
   };
 
   // Available policy titles — sourced from ATLAS Atom Rules (corpus.claims),
-  // scoped to the case's issue when available for relevance.
-  const titleOptions = React.useMemo(() => {
-    const s = new Set();
-    const caseIssue = pendingCase && pendingCase.issue ? pendingCase.issue : null;
-    for (const c of (corpus.claims || [])) {
-      if (caseIssue && (c.issue || "") !== caseIssue) continue;
-      for (const t of (c.policy_titles || [])) { if (t) s.add(t); }
+  // scoped to the SELECTED issue scope (v0.18.33: union over scopeIssues, so a
+  // cross-issue case can be tagged with titles from several policy areas).
+  // Falls back to the case's own issue(s) when no explicit scope is set.
+  const _scopeForTitles = React.useMemo(() => {
+    if (scopeIssues && scopeIssues.length) return scopeIssues;
+    if (pendingCase && pendingCase.issue) {
+      return String(pendingCase.issue).split(/[,;]\s*|\s{2,}/).map(function(x){return x.trim();}).filter(Boolean);
     }
-    // If issue-scoped produced nothing (or no issue), fall back to all claim titles
-    if (!s.size) {
-      for (const c of (corpus.claims || [])) {
-        for (const t of (c.policy_titles || [])) { if (t) s.add(t); }
+    return [];
+  }, [scopeIssues, pendingCase]);
+  // Grouped title pool: { issue -> sorted titles[] }. Drives the grouped chip UI.
+  const titleGroups = React.useMemo(() => {
+    const groups = {};
+    const scopeSet = new Set(_scopeForTitles);
+    const haveScope = scopeSet.size > 0;
+    for (const c of (corpus.claims || [])) {
+      const iss = c.issue || "";
+      if (haveScope && !scopeSet.has(iss)) continue;
+      for (const t of (c.policy_titles || [])) {
+        if (!t) continue;
+        const key = iss || "(unscoped)";
+        (groups[key] = groups[key] || new Set()).add(t);
       }
     }
-    // Always include current selection so user's choice isn't lost
+    // Fallback: no scope produced nothing -> show all titles under "(all)".
+    if (!Object.keys(groups).length) {
+      const all = new Set();
+      for (const c of (corpus.claims || [])) {
+        for (const t of (c.policy_titles || [])) { if (t) all.add(t); }
+      }
+      if (all.size) groups["(all)"] = all;
+    }
+    // Convert sets to sorted arrays.
+    const out = {};
+    for (const k of Object.keys(groups)) out[k] = Array.from(groups[k]).sort();
+    return out;
+  }, [corpus.claims, _scopeForTitles]);
+  // Flat de-duplicated list (used for validation, counts, and "selection not lost").
+  const titleOptions = React.useMemo(() => {
+    const s = new Set();
+    for (const k of Object.keys(titleGroups)) {
+      for (const t of titleGroups[k]) s.add(t);
+    }
     for (const _pt of (policyTitle || [])) { if (_pt) s.add(_pt); }
     return Array.from(s).sort();
-  }, [corpus.claims, pendingCase, policyTitle]);
+  }, [titleGroups, policyTitle]);
 
   const hasAtoms = Object.values(tags).some(arr => arr && arr.length > 0);
 
@@ -4823,18 +4939,31 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
 
       decision === "flag" && e("label", { style: { fontSize: 11, color: "var(--muted)", marginLeft: 8 } }, "Policy title(s):")
     ),
-    // v0.18.21: Multi-select policy title (chip-based)
-    decision === "flag" && e("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8, maxHeight: 120, overflowY: "auto" } },
-      titleOptions.map(t => {
-        const sel = policyTitle.includes(t);
-        return e("span", {
-          key: t,
-          onClick: () => setPolicyTitle(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]),
-          style: { fontSize: 11, padding: "2px 8px", borderRadius: 10, cursor: "pointer", border: "1px solid " + (sel ? "#4a90d9" : "var(--hairline)"), background: sel ? "#e8f0fa" : "var(--surface-card)", color: sel ? "#2a6cb8" : "var(--body)", whiteSpace: "nowrap" }
-        }, sel ? "✓ " + t : t);
-      })
-    ),
-    decision === "flag" && !titleOptions.length && e("span", { style: { fontSize: 10, color: "var(--muted)", marginBottom: 8, display: "block" } }, "No policy titles available for this issue"),
+    // v0.18.21: Multi-select policy title (chip-based).
+    // v0.18.33: grouped by issue when the scope spans more than one policy area,
+    // so reviewers can pick titles across issues for a cross-issue conclusion.
+    decision === "flag" && (function() {
+      var _groupKeys = Object.keys(titleGroups).sort();
+      var _multi = _groupKeys.length > 1;
+      return e("div", { style: { marginBottom: 8, maxHeight: 200, overflowY: "auto" } },
+        _groupKeys.map(function(gk) {
+          return e("div", { key: gk, style: { marginBottom: _multi ? 6 : 0 } },
+            _multi && e("div", { style: { fontSize: 10, color: "var(--muted)", fontWeight: 600, marginBottom: 2 } }, gk),
+            e("div", { style: { display: "flex", flexWrap: "wrap", gap: 4 } },
+              titleGroups[gk].map(function(t) {
+                var sel = policyTitle.includes(t);
+                return e("span", {
+                  key: gk + "::" + t,
+                  onClick: function() { setPolicyTitle(function(prev) { return prev.includes(t) ? prev.filter(function(x){ return x !== t; }) : prev.concat([t]); }); },
+                  style: { fontSize: 11, padding: "2px 8px", borderRadius: 10, cursor: "pointer", border: "1px solid " + (sel ? "#4a90d9" : "var(--hairline)"), background: sel ? "#e8f0fa" : "var(--surface-card)", color: sel ? "#2a6cb8" : "var(--body)", whiteSpace: "nowrap" }
+                }, sel ? "✓ " + t : t);
+              })
+            )
+          );
+        })
+      );
+    })(),
+    decision === "flag" && !titleOptions.length && e("span", { style: { fontSize: 10, color: "var(--muted)", marginBottom: 8, display: "block" } }, "No policy titles available for this issue scope"),
 
     e("div", { style: { marginBottom: 8 } },
       e("label", { style: { fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 2 } }, "Rationale (optional):"),
@@ -4844,6 +4973,36 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         rows: 8,
         style: { width: "100%", fontSize: 12, lineHeight: 1.45, fontFamily: "var(--mono)", resize: "vertical", padding: "6px 8px", border: "1px solid var(--hairline)", borderRadius: 4, minHeight: 140 }
       })
+    ),
+
+    // v0.18.32: supplementary proof image upload — merged into keyframe images field
+    e("div", { style: { marginBottom: 8 } },
+      e("label", { style: { fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 4 } },
+        "Supplementary proof images (optional) — saved into the case's keyframe images field"),
+      e("input", {
+        type: "file", accept: "image/*", multiple: true,
+        onChange: function(ev) {
+          var fs = ev.target.files ? Array.prototype.slice.call(ev.target.files) : [];
+          if (fs.length) setExtraFiles(function(prev) { return prev.concat(fs); });
+          ev.target.value = "";
+        },
+        style: { fontSize: 11 }
+      }),
+      extraFiles.length > 0 && e("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 } },
+        extraFiles.map(function(f, i) {
+          return e("span", {
+            key: i,
+            style: { fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "#eef2f7", border: "1px solid var(--hairline)", color: "var(--body)", display: "inline-flex", alignItems: "center", gap: 6 }
+          },
+            (f.name || ("image " + (i + 1))) + " (" + Math.round((f.size || 0) / 1024) + " KB)",
+            e("span", {
+              onClick: function() { setExtraFiles(function(prev) { return prev.filter(function(_unused, j) { return j !== i; }); }); },
+              style: { cursor: "pointer", fontWeight: 700, color: "var(--muted)" },
+              title: "Remove"
+            }, "\u00d7")
+          );
+        })
+      )
     ),
 
     // Escalate checkbox — always visible
@@ -4896,6 +5055,11 @@ function AtomTagger(props) {
   const [issueFilter, setIssueFilter] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState("");
   const [decisionFilter, setDecisionFilter] = React.useState("");
+  // v0.18.33: cross-issue scope. One control widens BOTH the atom universe shown
+  // in the tagger AND the policy-title pool in Confirm & Save. Seeded from the
+  // active case's own issue(s); reviewer can add sibling issues to tag a case
+  // that violates several policy areas at once.
+  const [scopeIssues, setScopeIssues] = React.useState([]);
 
   // Clear filters when switching review mode (top-level tab)
   React.useEffect(() => {
@@ -5013,6 +5177,25 @@ function AtomTagger(props) {
   // The active case for tagging: depends on review mode
   const activeCase = reviewMode === "precedent" ? precedentCase : pendingCase;
 
+  // v0.18.33: helper — split a comma/space-joined issue cell into an array.
+  function _splitIssues(v) {
+    if (v == null || v === "") return [];
+    if (Array.isArray(v)) return v.map(String).map(function(x){return x.trim();}).filter(Boolean);
+    return String(v).split(/[,;]\s*|\s{2,}/).map(function(x){return x.trim();}).filter(Boolean);
+  }
+  // Re-seed scope when the active case changes: default = the case's own issue(s).
+  React.useEffect(function() {
+    setScopeIssues(activeCase ? _splitIssues(activeCase.issue) : []);
+  }, [activeCase && activeCase.record_id]);
+  // All distinct issues available in the rule corpus (for the scope chip picker).
+  const allCorpusIssues = React.useMemo(function() {
+    var s = new Set();
+    for (var i = 0; i < (corpus.claims || []).length; i++) {
+      if (corpus.claims[i].issue) s.add(corpus.claims[i].issue);
+    }
+    return Array.from(s).sort();
+  }, [corpus.claims]);
+
   // If the currently selected case is filtered out, clear the selection.
   React.useEffect(() => {
     if (pendingRid && !filteredPending.find(p => p.record_id === pendingRid)) {
@@ -5023,14 +5206,23 @@ function AtomTagger(props) {
   const setDim = (dim) => (next) => setTags(prev => Object.assign({}, prev, { [dim]: next }));
   const totalSelected = DIMENSIONS.reduce((s,d) => s + (tags[d]||[]).length, 0);
 
-  // Issue-scoped atom candidates: when an issue is resolved, only show atoms used in that issue's claims
+  // Issue-scoped atom candidates: restrict the atom universe to atoms referenced
+  // by claims in the SELECTED issue scope (v0.18.33: union over scopeIssues, so a
+  // reviewer can tag atoms across several policy areas for one cross-issue case).
   const scopedAtomsByDim = React.useMemo(() => {
-    const pArea = activeCase && activeCase.issue ? resolvePolicyArea(activeCase.issue) : null;
-    if (!pArea || !corpus.claims || !corpus.claims.length) return corpus.atomsByDim;
-    // Collect all atom_keys referenced by claims matching this policy area
+    // Resolve the set of policy areas in scope from the selected issues.
+    const areas = new Set();
+    for (let i = 0; i < (scopeIssues || []).length; i++) {
+      const pa = resolvePolicyArea(scopeIssues[i]);
+      if (pa) areas.add(pa);
+    }
+    if (!areas.size || !corpus.claims || !corpus.claims.length) return corpus.atomsByDim;
+    // Collect all atom_keys referenced by claims matching ANY scoped policy area.
     const relevantKeys = new Set();
     for (const c of corpus.claims) {
-      if (!matchesPolicyArea(c.issue, pArea)) continue;
+      let inScope = false;
+      areas.forEach(function(pa) { if (matchesPolicyArea(c.issue, pa)) inScope = true; });
+      if (!inScope) continue;
       const gates = c.gates || {};
       for (const d of DIMENSIONS) {
         for (const k of (gates[d] || [])) relevantKeys.add(k);
@@ -5042,7 +5234,7 @@ function AtomTagger(props) {
       scoped[d] = (corpus.atomsByDim[d] || []).filter(a => relevantKeys.has(a.atom_key));
     }
     return scoped;
-  }, [activeCase, corpus.claims, corpus.atomsByDim]);
+  }, [scopeIssues, corpus.claims, corpus.atomsByDim]);
 
   // Phase 3: live engine evaluation. Memoized on (tags, policy_title, claims).
   // Engine evaluates ALL claims without policy_title filter so the user sees
@@ -5372,6 +5564,31 @@ function AtomTagger(props) {
             totalSelected + " atom" + (totalSelected===1?"":"s") + " selected")
         )
       ),
+      // v0.18.33: cross-issue scope selector. Default = the case's own issue(s).
+      // Adding sibling issues widens the atom universe below AND the policy-title
+      // pool in Confirm & Save, so a case violating several policy areas can be
+      // tagged in one pass.
+      allCorpusIssues.length > 1 && e("div", {
+        className: "row",
+        style: { gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 8, paddingTop: 8, borderTop: "1px dashed var(--hairline)" }
+      },
+        e("span", { style: { fontSize: 11, color: "var(--muted)", marginRight: 2 } }, "Issue scope:"),
+        allCorpusIssues.map(function(iss) {
+          var on = scopeIssues.indexOf(iss) >= 0;
+          var own = activeCase && _splitIssues(activeCase.issue).indexOf(iss) >= 0;
+          return e("span", {
+            key: iss,
+            title: own ? "Case's own issue" : "Add this issue's atoms & policy titles (cross-issue)",
+            onClick: function() {
+              setScopeIssues(function(prev) {
+                return prev.indexOf(iss) >= 0 ? prev.filter(function(x){ return x !== iss; }) : prev.concat([iss]);
+              });
+            },
+            style: { fontSize: 11, padding: "2px 8px", borderRadius: 10, cursor: "pointer", border: "1px solid " + (on ? "#4a90d9" : "var(--hairline)"), background: on ? "#e8f0fa" : "var(--surface-card)", color: on ? "#2a6cb8" : "var(--body)", whiteSpace: "nowrap", fontWeight: own ? 600 : 400 }
+          }, (on ? "\u2713 " : "") + iss + (own ? " \u2605" : ""));
+        }),
+        scopeIssues.length > 1 && e("span", { style: { fontSize: 10, color: "var(--muted)", marginLeft: 4 } }, "cross-issue \u2014 " + scopeIssues.length + " areas")
+      ),
       ...DIMENSIONS.map(d => e(DimRow, {
         key: d,
         dim: d,
@@ -5477,7 +5694,8 @@ function AtomTagger(props) {
       counterfactualResult: counterfactualResult,
       reviewMode: reviewMode,
       precedentRid: precedentRid,
-      onCorpusPatch: onCorpusPatch
+      onCorpusPatch: onCorpusPatch,
+      scopeIssues: scopeIssues
     }),
 
     activeCase && e("details", { open: false, style: { marginTop: 16, fontSize: 11, color: "var(--muted)" } },
