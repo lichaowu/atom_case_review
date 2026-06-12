@@ -4602,7 +4602,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         if (onCorpusPatch) {
           onCorpusPatch({ updatedPrecedent: {
             record_id: precedentRid,
-            decision: decision,
+            decision: decision.toUpperCase(),
             status: "Double Confirmed",
             reviewed_by: analyst
           }});
@@ -4641,7 +4641,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
                 caption_text: pendingCase.caption_text || "",
                 policy_title: policyTitle ? [policyTitle] : (pendingCase.policy_title || []),
                 issue: pendingCase.issue || "",
-                decision: decision,
+                decision: decision.toUpperCase(),
                 status: "Policy Reviewed",
                 atoms: JSON.parse(JSON.stringify(tags))
               }
@@ -4947,7 +4947,14 @@ function AtomTagger(props) {
 
   const decisionOptions = React.useMemo(() => {
     const s = new Set();
-    for (const c of corpus.cases) { if (c.decision) s.add(c.decision); }
+    // Normalize decision casing: canonical forms are uppercase FLAG/PASS
+    for (const c of corpus.cases) {
+      if (c.decision) {
+        var d = c.decision.toUpperCase();
+        if (d === "NOT_RECOMMEND" || d === "NOT_FOR_FEED") d = "FLAG";
+        s.add(d);
+      }
+    }
     return Array.from(s).sort();
   }, [corpus.cases]);
 
@@ -4980,7 +4987,7 @@ function AtomTagger(props) {
       if (titleFilter) { const _t = Array.isArray(c.policy_title) ? c.policy_title : [c.policy_title || ""]; if (!_t.includes(titleFilter)) return false; }
       if (issueFilter && (c.issue || "") !== issueFilter) return false;
       if (statusFilter && (c.status === "Reviewed" ? "Policy Reviewed" : (c.status || "")) !== statusFilter) return false;
-      if (decisionFilter && (c.decision || "") !== decisionFilter) return false;
+      if (decisionFilter && (c.decision || "").toUpperCase() !== decisionFilter) return false;
       if (!q) return true;
       const _pt = Array.isArray(c.policy_title) ? c.policy_title.join(" ") : (c.policy_title || "");
       return (
@@ -5262,7 +5269,7 @@ function AtomTagger(props) {
             " available" + (filteredPrecedents.length < corpus.cases.length ? " of " + corpus.cases.length + " total" : "") + ")"),
           ...filteredPrecedents.map(c => e("option", { key: c.record_id, value: c.record_id },
             (c.case_id || c.source_video_id) +
-            (c.decision ? " [" + c.decision + "]" : "") +
+            (c.decision ? " [" + c.decision.toUpperCase() + "]" : "") +
             (c.policy_title && c.policy_title.length ? " · " + (Array.isArray(c.policy_title) ? c.policy_title.join(", ") : c.policy_title) : "") +
             (c.visual_summary ? " · " + c.visual_summary.slice(0, 60).replace(/\s+/g," ") : "")
           ))
@@ -5278,8 +5285,8 @@ function AtomTagger(props) {
         reviewMode === "precedent" && activeCase.case_id && e("dd", { style: { fontFamily: "var(--mono)", fontSize: 11 } }, activeCase.case_id),
         reviewMode === "precedent" && activeCase.decision && e("dt", null, "decision"),
         reviewMode === "precedent" && activeCase.decision && e("dd", null,
-          e("span", { className: "verdict-pill verdict-" + (activeCase.decision === "flag" ? "VIOLATION" : activeCase.decision === "approve" ? "APPROVE" : "NOT_RECOMMEND"),
-            style: { fontSize: 11, padding: "3px 10px" } }, activeCase.decision)),
+          e("span", { className: "verdict-pill verdict-" + ((activeCase.decision || "").toUpperCase() === "FLAG" ? "VIOLATION" : (activeCase.decision || "").toUpperCase() === "PASS" ? "APPROVE" : "NOT_RECOMMEND"),
+            style: { fontSize: 11, padding: "3px 10px" } }, (activeCase.decision || "").toUpperCase())),
         reviewMode === "precedent" && activeCase.rationale && e("dt", null, "rationale"),
         reviewMode === "precedent" && activeCase.rationale && e("dd", null, e("div", { className: "text-block", style: { maxHeight: 120, overflow: "auto", fontSize: 12, background: "var(--surface-card)", padding: "8px 10px", borderRadius: 6 } }, activeCase.rationale)),
         activeCase.user_nickname && e("dt", null, "user"),
