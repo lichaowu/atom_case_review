@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.36";
+const PLUGIN_VERSION = "atom-mvp v0.18.37";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -5303,7 +5303,13 @@ function AtomTagger(props) {
     if (!relevantKeys.size) return corpus.atomsByDim;
     const scoped = {};
     for (const d of DIMENSIONS) {
-      scoped[d] = (corpus.atomsByDim[d] || []).filter(a => relevantKeys.has(a.atom_key));
+      // v0.18.37: X (exceptions) are universal lift atoms referenced by claims via
+      // exception-level (EL1\u2013EL6) groupings, not reliably via per-claim
+      // exceptions_required links \u2014 and they are shared across all issues. Never
+      // issue-scope-filter X, or every exception atom disappears from the tagger.
+      scoped[d] = (d === "X")
+        ? (corpus.atomsByDim[d] || [])
+        : (corpus.atomsByDim[d] || []).filter(a => relevantKeys.has(a.atom_key));
     }
     return scoped;
   }, [scopeIssues, corpus.claims, corpus.atomsByDim]);
@@ -5429,7 +5435,13 @@ function AtomTagger(props) {
     var out = {};
     for (var di = 0; di < DIMENSIONS.length; di++) {
       var d = DIMENSIONS[di];
-      out[d] = Array.from(relevant[d]).sort();
+      if (d === "X") {
+        // v0.18.37: never issue-scope the exception dimension (see scopedAtomsByDim).
+        // Expose the full X universe so DimRow's relSet keeps every exception atom.
+        out[d] = (corpus.atomsByDim && corpus.atomsByDim[d] || []).map(function(a){ return a.atom_key; });
+      } else {
+        out[d] = Array.from(relevant[d]).sort();
+      }
       total += out[d].length;
     }
     return total > 0 ? out : null;
