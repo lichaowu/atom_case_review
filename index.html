@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.33";
+const PLUGIN_VERSION = "atom-mvp v0.18.34";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1663,6 +1663,7 @@ async function loadAtomCorpus() {
       issue: get(f, casesIdx, "issue") || get(f, casesIdx, "policy_area"),
       policy_title: getArr(f, casesIdx, "policy_title"),
       decision: get(f, casesIdx, "decision"),
+      decision_delta: get(f, casesIdx, "decision_delta"),
       visual_summary: get(f, casesIdx, "visual_summary"),
       asr_text: get(f, casesIdx, "asr_text"),
       ocr_text: get(f, casesIdx, "ocr_text"),
@@ -2301,6 +2302,23 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
     if (Array.isArray(v)) return v.map(String).map(function(s){return s.trim();}).filter(Boolean);
     return String(v).split(/[,;]\s*|\s{2,}/).map(function(s){return s.trim();}).filter(Boolean);
   }
+
+  // v0.18.34: log decision/policy-title transition on re-check (light, single Text field).
+  // precedentCase.{decision,policy_title} still hold the PRIOR values here (overwrite is below).
+  (function(){
+    function _titleSet(v){ return _splitMulti(v).map(function(x){return x.trim();}).filter(Boolean).sort(); }
+    var _prevDec = _normDecision(precedentCase.decision || "");
+    var _prevTitles = _titleSet(precedentCase.policy_title);
+    var _newDec = _normDecision(opts.decision);
+    var _newTitles = (opts.decision && opts.decision.toLowerCase() !== "pass")
+      ? _titleSet(opts.policyTitle || precedentCase.policy_title || "") : [];
+    if (_prevDec !== _newDec || JSON.stringify(_prevTitles) !== JSON.stringify(_newTitles)) {
+      var _line = "[" + new Date().toISOString().slice(0,10) + "] "
+        + _prevDec + "[" + _prevTitles.join(",") + "] \u2192 " + _newDec + "[" + _newTitles.join(",") + "]";
+      var _prevDelta = (precedentCase.decision_delta || "").trim();
+      setTextField("decision_delta", _prevDelta ? _prevDelta + "\n" + _line : _line);
+    }
+  })();
 
   setSmartField("decision", _normDecision(opts.decision));
   if (opts.decision && opts.decision.toLowerCase() !== "pass") {
