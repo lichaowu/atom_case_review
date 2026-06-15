@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.38";
+const PLUGIN_VERSION = "atom-mvp v0.18.39";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -3357,10 +3357,13 @@ function atomKeysReferencedByClaim(c) {
     const arr = c[prop] || [];
     for (const k of arr) acc.add(k);
   });
-  // modifiers_lift_dnf is array of { atom_key, lift }
+  // modifiers_lift_dnf is array-of-arrays (DNF groups of modifier keys),
+  // matching the parser (modifiers_lift_to_json) and the engine (dnfMatches).
+  // Defensive: also tolerate legacy array-of-{atom_key} rows.
   const dnf = c.modifiers_lift_dnf || [];
   for (const item of dnf) {
-    if (item && item.atom_key) acc.add(item.atom_key);
+    if (Array.isArray(item)) { for (const k of item) if (k) acc.add(k); }
+    else if (item && item.atom_key) acc.add(item.atom_key);
   }
   // exception_qualifiers: { atom_key: [...] } — keys are atom_keys
   const eq = c.exception_qualifiers || {};
@@ -5299,6 +5302,14 @@ function AtomTagger(props) {
         if (Array.isArray(grp)) grp.forEach(function(k){ relevantKeys.add(k); });
       });
       (c.exceptions_required || []).forEach(function(k){ relevantKeys.add(k); });
+      // v0.18.39: also harvest exception_qualifier_modifiers (eqm) and
+      // exception_qualifiers (eq). Some modifiers (e.g. modifier.relevant_to_video
+      // on NSA) are referenced ONLY via eqm and were otherwise hidden. Mirrors the
+      // canonical atomKeysReferencedByClaim() coverage so all four harvest paths agree.
+      var _eqm = c.exception_qualifier_modifiers || {};
+      for (var _k in _eqm) relevantKeys.add(_k);
+      var _eq = c.exception_qualifiers || {};
+      for (var _k2 in _eq) relevantKeys.add(_k2);
     }
     if (!relevantKeys.size) return corpus.atomsByDim;
     const scoped = {};
@@ -5429,6 +5440,13 @@ function AtomTagger(props) {
         if (Array.isArray(grp)) grp.forEach(function(k){ relevant.M.add(k); });
       });
       (c.exceptions_required||[]).forEach(function(k){ relevant.X.add(k); });
+      // v0.18.39: exception_qualifier_modifiers (eqm) keys are MODIFIERS; some
+      // (e.g. modifier.relevant_to_video) are referenced ONLY here, so without
+      // this harvest they were hidden from the M dimension. eq keys are exceptions.
+      var eqm = c.exception_qualifier_modifiers || {};
+      for (var ek in eqm) relevant.M.add(ek);
+      var eq = c.exception_qualifiers || {};
+      for (var ek2 in eq) relevant.X.add(ek2);
     }
     // Convert sets to sorted arrays (null means "show all" — no filtering)
     // v0.18.38: tally ONLY non-X dims. The X universe is always injected full
