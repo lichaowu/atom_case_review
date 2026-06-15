@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.37";
+const PLUGIN_VERSION = "atom-mvp v0.18.38";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -5431,18 +5431,23 @@ function AtomTagger(props) {
       (c.exceptions_required||[]).forEach(function(k){ relevant.X.add(k); });
     }
     // Convert sets to sorted arrays (null means "show all" — no filtering)
+    // v0.18.38: tally ONLY non-X dims. The X universe is always injected full
+    // (universal lift atoms), so counting it would make total always > 0 and
+    // suppress the \"no claim matched \u2192 return null \u2192 show all\" fallback that the
+    // OTHER dims (esp. M) rely on when the case's issue doesn't strictly equal any
+    // claim issue. Counting X here was the v0.18.37 regression that hid modifiers.
     var total = 0;
     var out = {};
     for (var di = 0; di < DIMENSIONS.length; di++) {
       var d = DIMENSIONS[di];
       if (d === "X") {
-        // v0.18.37: never issue-scope the exception dimension (see scopedAtomsByDim).
+        // never issue-scope the exception dimension (see scopedAtomsByDim).
         // Expose the full X universe so DimRow's relSet keeps every exception atom.
         out[d] = (corpus.atomsByDim && corpus.atomsByDim[d] || []).map(function(a){ return a.atom_key; });
       } else {
         out[d] = Array.from(relevant[d]).sort();
+        total += out[d].length;  // X excluded from the fallback tally
       }
-      total += out[d].length;
     }
     return total > 0 ? out : null;
   }, [activeCase, corpus.claims]);
