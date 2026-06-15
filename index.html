@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.35";
+const PLUGIN_VERSION = "atom-mvp v0.18.36";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -5287,6 +5287,18 @@ function AtomTagger(props) {
       for (const d of DIMENSIONS) {
         for (const k of (gates[d] || [])) relevantKeys.add(k);
       }
+      // v0.18.36: gates only carries C/S/P/R/E, so without harvesting modifier
+      // and exception keys the M and X dimensions were filtered to EMPTY whenever
+      // an issue scope was active (default). That hid modifiers like
+      // modifier.friendly_context from the tagger \u2014 not visible, searchable, or
+      // enable-able. Mirror relevantAtomKeysByDim's full harvest here.
+      (c.modifiers_required || []).forEach(function(k){ relevantKeys.add(k); });
+      (c.modifiers_excluded || []).forEach(function(k){ relevantKeys.add(k); });
+      (c.modifiers_lift_to_approve || []).forEach(function(k){ relevantKeys.add(k); });
+      (c.modifiers_lift_dnf || []).forEach(function(grp){
+        if (Array.isArray(grp)) grp.forEach(function(k){ relevantKeys.add(k); });
+      });
+      (c.exceptions_required || []).forEach(function(k){ relevantKeys.add(k); });
     }
     if (!relevantKeys.size) return corpus.atomsByDim;
     const scoped = {};
