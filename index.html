@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.34";
+const PLUGIN_VERSION = "atom-mvp v0.18.35";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -4940,6 +4940,34 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     };
   }, [tags, decision, policyTitle, corpus, verdictData, pendingCase, escalate]);
 
+  // v0.18.35: overwrite warning — on re-review, flag when the current
+  // decision/policy-title differs from the precedent's STORED values, so the
+  // reviewer knows they are overwriting a previous decision. Mirrors the diff
+  // logic persisted to decision_delta in __updateExistingRecord.
+  const overwriteDelta = React.useMemo(() => {
+    if (!isPrecedentReview) return null;
+    var prev = corpus && corpus.cases ? corpus.cases.find(function(c){ return c.record_id === precedentRid; }) : null;
+    if (!prev) return null;
+    function _norm(d){
+      if (!d) return "FLAG";
+      var t = String(d).trim().toUpperCase();
+      if (t === "FLAG" || t === "NOT_RECOMMEND" || t === "NOT_FOR_FEED" || t === "ESCALATE") return "FLAG";
+      if (t === "PASS" || t === "APPROVE") return "PASS";
+      return t;
+    }
+    function _set(v){
+      var arr = Array.isArray(v) ? v.slice() : (v ? String(v).split(/[,;]\s*|\s{2,}/) : []);
+      return arr.map(function(x){ return String(x).trim(); }).filter(Boolean).sort();
+    }
+    var prevDec = _norm(prev.decision || "");
+    var prevTitles = _set(prev.policy_title);
+    var newDec = _norm(decision);
+    var newTitles = (decision !== "pass") ? _set(policyTitle) : [];
+    var changed = (prevDec !== newDec) || (JSON.stringify(prevTitles) !== JSON.stringify(newTitles));
+    if (!changed) return null;
+    return { prevDec: prevDec, prevTitles: prevTitles, newDec: newDec, newTitles: newTitles };
+  }, [isPrecedentReview, corpus, precedentRid, decision, policyTitle]);
+
   return e("div", { className: "save-section", style: { marginTop: 16, padding: 12, border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--surface-soft)" } },
     e("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 8 } },
       isPrecedentReview ? "Update Precedent (re-review)" : "Confirm & Save to Precedents"),
@@ -5029,6 +5057,20 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         id: "escalate-cb", style: { margin: 0 } }),
       e("label", { htmlFor: "escalate-cb", style: { fontSize: 11, color: "var(--muted)", cursor: "pointer" } },
         "Escalate for alignment discussion (grey case / new trend)")
+    ),
+
+    // v0.18.35: overwrite warning banner (re-review only)
+    overwriteDelta && e("div", { style: {
+        marginBottom: 8, padding: "8px 10px", borderRadius: 6, fontSize: 11, lineHeight: 1.5,
+        background: "#fdeede", border: "1px solid #f0b78a"
+      } },
+      e("div", { style: { fontWeight: 600, marginBottom: 2, color: "#c2570f" } },
+        "\u26a0 Overwriting previous decision"),
+      e("div", { style: { color: "var(--body)", fontFamily: "var(--mono)" } },
+        overwriteDelta.prevDec + "[" + overwriteDelta.prevTitles.join(", ") + "]"
+        + " \u2192 " + overwriteDelta.newDec + "[" + overwriteDelta.newTitles.join(", ") + "]"),
+      e("div", { style: { marginTop: 2, color: "var(--muted)" } },
+        "Saving will replace the stored decision and log the change to decision_delta."),
     ),
 
     // Discrepancy banner — color-coded by type
