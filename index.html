@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.39";
+const PLUGIN_VERSION = "atom-mvp v0.18.40";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -2046,6 +2046,10 @@ async function saveConfirmedRecord(corpus, pendingCase, tags, opts) {
   if (opts.overrideTag) {
     setTextField("override_tag", opts.overrideTag);
   }
+  // v0.18.40: structured override fields (parallel to legacy override_tag).
+  if (opts.overrideCategory && opts.overrideCategory.length) setSmartField("override_category", opts.overrideCategory);
+  if (opts.decisionPath) setTextField("decision_path", opts.decisionPath);
+  if (opts.titleDiff && opts.titleDiff.length) setSmartField("title_diff", opts.titleDiff);
 
   // v0.18.30: consolidated 3-field defensibility writeback
   // SingleSelect: defensibility (HIGH/MEDIUM/LOW headline tier)
@@ -2353,6 +2357,10 @@ async function updateExistingRecord(corpus, precedentCase, tags, opts) {
   setSmartField("status", "Double Confirmed");
   if (opts.reviewedBy) { setSmartField("reviewed_by", opts.reviewedBy); }
   if (opts.overrideTag) { setTextField("override_tag", opts.overrideTag); }
+  // v0.18.40: structured override fields (parallel to legacy override_tag).
+  if (opts.overrideCategory && opts.overrideCategory.length) setSmartField("override_category", opts.overrideCategory);
+  if (opts.decisionPath) setTextField("decision_path", opts.decisionPath);
+  if (opts.titleDiff && opts.titleDiff.length) setSmartField("title_diff", opts.titleDiff);
 
   // v0.18.30: consolidated 3-field defensibility writeback
   // SingleSelect: defensibility (HIGH/MEDIUM/LOW headline tier)
@@ -4696,6 +4704,9 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           rationale: rationale,
           reviewedBy: analyst,
           overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
+          overrideCategory: (discrepancy.categories && discrepancy.categories.length) ? discrepancy.categories : (escalate ? ["escalate"] : []),
+          decisionPath: (discrepancy.decisionPath || []).join("; "),
+          titleDiff: discrepancy.titleDiff || [],
           defensibility: _defResult && _defResult.tier,
           defensibilityIndex: stabilityResult && stabilityResult.score,
           defensibilityDetail: _defDetail,
@@ -4722,6 +4733,9 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           rationale: rationale,
           analyst: analyst,
           overrideTag: discrepancy.tag || (escalate ? "[escalate] User escalated for alignment discussion" : ""),
+          overrideCategory: (discrepancy.categories && discrepancy.categories.length) ? discrepancy.categories : (escalate ? ["escalate"] : []),
+          decisionPath: (discrepancy.decisionPath || []).join("; "),
+          titleDiff: discrepancy.titleDiff || [],
           defensibility: _defResult2 && _defResult2.tier,
           defensibilityIndex: stabilityResult && stabilityResult.score,
           defensibilityDetail: _defDetail2,
@@ -4848,17 +4862,30 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     // Classification
     var type = null;
     var details = [];
+    // v0.18.40: structured parallels to the legacy free-text tag.
+    //   categories : MultiSelect of override types (co-occurrence preserved,
+    //                unlike the single `type` which Type 2 overwrites)
+    //   decisionPath: machine-parseable transitions (skill/engine/user)
+    //   titleDiff  : MultiSelect of "extra:<title>" / "missing:<title>"
+    var categories = [];
+    var decisionPath = [];
+    var titleDiff = [];
+    function _pushCat(c) { if (categories.indexOf(c) < 0) categories.push(c); }
 
     // Type 1: model_vs_human — skill says X, engine says Y (user changed atoms)
     if (skillDecision && engineDecision && skillDecision !== engineDecision) {
       type = "model_vs_human";
       details.push("Skill:" + skillDecision + " \u2192 Engine:" + engineDecision + " (atom edits changed outcome)");
+      _pushCat("model_vs_human");
+      decisionPath.push("skill:" + skillDecision + "\u2192engine:" + engineDecision);
     }
 
     // Type 2: rule_gap — engine says X but user manually picked Y in dropdown
     if (engineDecision && decision !== engineDecision) {
       type = "rule_gap";
       details.push("Engine:" + engineDecision + " \u2192 User:" + decision);
+      _pushCat("rule_gap");
+      decisionPath.push("engine:" + engineDecision + "\u2192user:" + decision);
     }
     // Also flag policy_title manual override (only for flag decisions)
     // v0.18.20: validate user-selected titles against engine-fired claims' policy titles.
@@ -4910,10 +4937,13 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
 
         if (_extra.length || _missing.length) {
           if (!type) type = "rule_gap";
+          _pushCat("rule_gap");
           var _diffParts = [];
           if (_missing.length) _diffParts.push("missing: " + _missing.join(", "));
           if (_extra.length) _diffParts.push("extra: " + _extra.join(", "));
           details.push("Policy title diff (" + _diffParts.join("; ") + ")");
+          _missing.forEach(function(t){ titleDiff.push("missing:" + t); });
+          _extra.forEach(function(t){ titleDiff.push("extra:" + t); });
         }
       }
     }
@@ -4923,6 +4953,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       type = "escalate";
       details.push("User escalated for alignment discussion");
     }
+    if (escalate) _pushCat("escalate");
 
     // Build tag string for persistence
     var tag = null;
@@ -4938,6 +4969,9 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       hasOverride: !!type,
       details: details,
       tag: tag,
+      categories: categories,
+      decisionPath: decisionPath,
+      titleDiff: titleDiff,
       engineDecision: engineDecision,
       skillDecision: skillDecision
     };
