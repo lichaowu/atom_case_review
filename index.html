@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.40";
+const PLUGIN_VERSION = "atom-mvp v0.18.41";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -474,9 +474,13 @@ const DIM_NAMES = {
     if (dnfMatches(claim.modifiers_lift_dnf || [], M)) {
       return { suppress: false, outcome: "APPROVE", lift: "modifier" };
     }
-    if (claim.exceptions_lift_to_approve && (claim.exceptions_required || []).length) {
+    if (claim.exceptions_lift_to_approve) {
       var allCase = allCaseAtoms(caseAtoms);
-      var exReq = claim.exceptions_required;
+      // v0.18.41: lift over exceptions_lift_atoms (the Bitable exceptions_lift_to_approve
+      // link). Fall back to exceptions_required for legacy/skill rows that conflated them.
+      var exReq = (claim.exceptions_lift_atoms && claim.exceptions_lift_atoms.length)
+                  ? claim.exceptions_lift_atoms
+                  : (claim.exceptions_required || []);
       for (var i = 0; i < exReq.length; i++) {
         var x = exReq[i];
         if (X.indexOf(x) < 0) continue;
@@ -730,7 +734,9 @@ const DIM_NAMES = {
           }
           if (topClaim.lift.indexOf("exception:") === 0) {
             var X = caseAtoms.X || [];
-            var exReq = claimDef.exceptions_required || [];
+            var exReq = (claimDef.exceptions_lift_atoms && claimDef.exceptions_lift_atoms.length)
+                        ? claimDef.exceptions_lift_atoms
+                        : (claimDef.exceptions_required || []);
             satisfiedGroups = 0;
             for (var xi = 0; xi < exReq.length; xi++) {
               if (X.indexOf(exReq[xi]) >= 0) satisfiedGroups++;
@@ -1577,7 +1583,14 @@ async function loadAtomCorpus() {
       modifiers_lift_to_approve: ridsToKeys(getLnk(f, claimsIdx, "modifiers_lift_to_approve")),
       modifiers_lift_dnf:  modsLiftJson || [],
       exceptions_required:        ridsToKeys(getLnk(f, claimsIdx, "exceptions_required")),
-      exceptions_lift_to_approve: get(f, claimsIdx, "exceptions_lift_to_approve") === "true"
+      // v0.18.41: exceptions_lift_to_approve is a LINK field (the X-dim atoms that
+      // lift the outcome to APPROVE), NOT a checkbox. The old boolean parse made the
+      // lift set always empty, so exception lifts (e.g. humor on HAT.011) never fired.
+      // Parse the linked atoms into exceptions_lift_atoms; derive the boolean from it
+      // (tolerating any legacy checkbox rows).
+      exceptions_lift_atoms:      ridsToKeys(getLnk(f, claimsIdx, "exceptions_lift_to_approve")),
+      exceptions_lift_to_approve: ridsToKeys(getLnk(f, claimsIdx, "exceptions_lift_to_approve")).length > 0
+                                  || get(f, claimsIdx, "exceptions_lift_to_approve") === "true"
                                   || readCell(f, claimsIdx, "exceptions_lift_to_approve") === true,
       exception_qualifiers:           exQualJson    || {},
       exception_qualifier_modifiers:  exQualModJson || {},
@@ -3361,7 +3374,7 @@ function atomKeysReferencedByClaim(c) {
     for (const k of arr) acc.add(k);
   }
   ["modifiers_required","modifiers_excluded","modifiers_lift_to_approve",
-   "exceptions_required"].forEach(prop => {
+   "exceptions_required","exceptions_lift_atoms"].forEach(prop => {
     const arr = c[prop] || [];
     for (const k of arr) acc.add(k);
   });
@@ -3566,6 +3579,7 @@ function buildAtomRulesBlock(corpus, policyArea, opts) {
     if (c.modifiers_lift_to_approve && c.modifiers_lift_to_approve.length) out.modifiers_lift_to_approve = c.modifiers_lift_to_approve;
     if (c.modifiers_lift_dnf && c.modifiers_lift_dnf.length) out.modifiers_lift_dnf = c.modifiers_lift_dnf;
     if (c.exceptions_required && c.exceptions_required.length) out.exceptions_required = c.exceptions_required;
+    if (c.exceptions_lift_atoms && c.exceptions_lift_atoms.length) out.exceptions_lift_atoms = c.exceptions_lift_atoms;
     if (c.exceptions_lift_to_approve) out.exceptions_lift_to_approve = true;
     if (c.exception_qualifiers && Object.keys(c.exception_qualifiers).length) out.exception_qualifiers = c.exception_qualifiers;
     if (c.exception_qualifier_modifiers && Object.keys(c.exception_qualifier_modifiers).length) out.exception_qualifier_modifiers = c.exception_qualifier_modifiers;
@@ -5336,6 +5350,7 @@ function AtomTagger(props) {
         if (Array.isArray(grp)) grp.forEach(function(k){ relevantKeys.add(k); });
       });
       (c.exceptions_required || []).forEach(function(k){ relevantKeys.add(k); });
+      (c.exceptions_lift_atoms || []).forEach(function(k){ relevantKeys.add(k); });
       // v0.18.39: also harvest exception_qualifier_modifiers (eqm) and
       // exception_qualifiers (eq). Some modifiers (e.g. modifier.relevant_to_video
       // on NSA) are referenced ONLY via eqm and were otherwise hidden. Mirrors the
@@ -5474,6 +5489,7 @@ function AtomTagger(props) {
         if (Array.isArray(grp)) grp.forEach(function(k){ relevant.M.add(k); });
       });
       (c.exceptions_required||[]).forEach(function(k){ relevant.X.add(k); });
+      (c.exceptions_lift_atoms||[]).forEach(function(k){ relevant.X.add(k); });
       // v0.18.39: exception_qualifier_modifiers (eqm) keys are MODIFIERS; some
       // (e.g. modifier.relevant_to_video) are referenced ONLY here, so without
       // this harvest they were hidden from the M dimension. eq keys are exceptions.
@@ -5988,6 +6004,7 @@ function LoaderPane(props) {
       if (c.modifiers_lift_to_approve && c.modifiers_lift_to_approve.length) o.modifiers_lift_to_approve = c.modifiers_lift_to_approve;
       if (c.modifiers_lift_dnf && c.modifiers_lift_dnf.length) o.modifiers_lift_dnf = c.modifiers_lift_dnf;
       if (c.exceptions_required && c.exceptions_required.length) o.exceptions_required = c.exceptions_required;
+      if (c.exceptions_lift_atoms && c.exceptions_lift_atoms.length) o.exceptions_lift_atoms = c.exceptions_lift_atoms;
       if (c.exceptions_lift_to_approve) o.exceptions_lift_to_approve = true;
       if (c.exception_qualifiers && Object.keys(c.exception_qualifiers).length) o.exception_qualifiers = c.exception_qualifiers;
       if (c.exception_qualifier_modifiers && Object.keys(c.exception_qualifier_modifiers).length) o.exception_qualifier_modifiers = c.exception_qualifier_modifiers;
