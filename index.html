@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.43";
+const PLUGIN_VERSION = "atom-mvp v0.18.44";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -3080,7 +3080,7 @@ function ImagesPane(props) {
 //     narrow down, or start typing to search across all atoms.
 //   - Chip label = atom_name (atom_key + serial_code in tooltip).
 function DimRow(props) {
-  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected, relevantKeys, qualifierHints, currentModifiers } = props;
+  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected, relevantKeys, qualifierHints, currentModifiers, allModifierAtoms } = props;
   const [filter, setFilter] = React.useState("");
   // Default to "show all" so the reviewer always sees the full atom set with
   // suggestions visually highlighted, instead of having to click through to
@@ -3226,7 +3226,10 @@ function DimRow(props) {
                 return e("span", { key: i },
                   i > 0 ? " OR " : "",
                   e("code", { style: { fontSize: 10, background: "#fff7ed", padding: "1px 4px", borderRadius: 3 } },
-                    grp.map(function(m) { return m.replace("modifier.", ""); }).join(" + ")
+                    grp.map(function(m) {
+                      var mAtom = (props.allModifierAtoms || []).find(function(a) { return a.atom_key === m; });
+                      return (mAtom && mAtom.atom_name) ? mAtom.atom_name : m.replace("modifier.", "").replace(/_/g, " ");
+                    }).join(" + ")
                   )
                 );
               })
@@ -5460,14 +5463,20 @@ function AtomTagger(props) {
     return _r;
   }, [tags, activeCase, corpus.claims, totalSelected]);
 
-  // Qualifier hints: aggregate exception_qualifiers from scoped claims.
+  // Qualifier hints: aggregate exception_qualifiers ONLY from claims that fired.
   // Maps exception atom_key -> array of {claim_id, modifiers: string[][]} (DNF).
-  // Used by DimRow(X) to badge gated exceptions and show missing-qualifier warnings.
+  // Scoped to gate_hits so warnings only appear for rules the engine actually triggered.
   const qualifierHints = React.useMemo(() => {
-    if (!corpus || !corpus.claims) return {};
+    if (!corpus || !corpus.claims || !engineResult || !engineResult.gate_hits) return {};
+    // Build set of fired claim IDs
+    var firedIds = new Set();
+    for (var fi = 0; fi < engineResult.gate_hits.length; fi++) {
+      firedIds.add(engineResult.gate_hits[fi].claim_id);
+    }
     var hints = {};
     for (var ci = 0; ci < corpus.claims.length; ci++) {
       var c = corpus.claims[ci];
+      if (!firedIds.has(c.claim_id)) continue;
       var eq = c.exception_qualifiers;
       if (!eq || typeof eq !== "object") continue;
       for (var xKey in eq) {
@@ -5479,7 +5488,7 @@ function AtomTagger(props) {
       }
     }
     return hints;
-  }, [corpus.claims]);
+  }, [corpus.claims, engineResult]);
 
   // Phase A: Structural Stability Score. Memoized on engineResult.
   const stabilityResult = React.useMemo(() => {
@@ -5852,6 +5861,7 @@ function AtomTagger(props) {
         onChange: setDim(d),
         qualifierHints: d === "X" ? qualifierHints : null,
         currentModifiers: d === "X" ? (tags.M || []) : null,
+        allModifierAtoms: d === "X" ? (scopedAtomsByDim.M || corpus.atomsByDim.M || []) : null,
       }))
     ),
 
@@ -5903,7 +5913,8 @@ function AtomTagger(props) {
                 for (var _ei = 0; _ei < _exLift.length; _ei++) {
                   var _ex = _exLift[_ei];
                   var _exTagged = _xSet.has(_ex);
-                  var _exLabel = _ex.replace("exception.", "");
+                  var _exObj = (corpus.atoms || []).find(function(xa) { return xa.atom_key === _ex; });
+                  var _exLabel = (_exObj && _exObj.atom_name) ? _exObj.atom_name : _ex.replace("exception.", "").replace(/_/g, " ");
                   var _qDnf = (_claim.exception_qualifiers && _claim.exception_qualifiers[_ex]) || [];
                   var _qSat = !_qDnf.length || _qDnf.some(function(g) { return g.every(function(m) { return _mSet.has(m); }); });
                   var _status = _exTagged && _qSat ? "satisfied" : (_exTagged && !_qSat ? "unsatisfied" : "available");
@@ -5955,7 +5966,7 @@ function AtomTagger(props) {
                   e("span", { className: "flow-lift-arrow" }, "lift\u2191"),
                   _liftPaths.slice(0, 5).map(function(lp, li) {
                     var _title = lp.status === "unsatisfied"
-                      ? lp.label + " tagged but needs qualifier: " + (lp.needs || []).map(function(g) { return g.map(function(m){return m.replace("modifier.","");}).join("+"); }).join(" | ")
+                      ? lp.label + " tagged but needs qualifier: " + (lp.needs || []).map(function(g) { return g.map(function(m){ var _ma = (corpus.atoms||[]).find(function(a){return a.atom_key===m;}); return (_ma&&_ma.atom_name)?_ma.atom_name:m.replace("modifier.","").replace(/_/g," "); }).join(" + "); }).join(" | ")
                       : lp.status === "satisfied"
                         ? lp.label + " \u2714 lifted to approve"
                         : lp.label + " (available \u2014 not tagged)";
