@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.44";
+const PLUGIN_VERSION = "atom-mvp v0.18.45";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -3080,7 +3080,7 @@ function ImagesPane(props) {
 //     narrow down, or start typing to search across all atoms.
 //   - Chip label = atom_name (atom_key + serial_code in tooltip).
 function DimRow(props) {
-  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected, relevantKeys, qualifierHints, currentModifiers, allModifierAtoms } = props;
+  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected, relevantKeys, qualifierHints, currentModifiers, allModifierAtoms, modifierLiftHints } = props;
   const [filter, setFilter] = React.useState("");
   // Default to "show all" so the reviewer always sees the full atom set with
   // suggestions visually highlighted, instead of having to click through to
@@ -3189,6 +3189,31 @@ function DimRow(props) {
             }, " \u2715"));
         })
       ),
+      // Modifier lift hints: when fired violations could be lifted by tagging certain modifiers
+      dim === "M" && modifierLiftHints && modifierLiftHints.length > 0 && (function() {
+        return e("div", { style: { margin: "6px 0", padding: "8px 12px", background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 6, fontSize: 11, lineHeight: 1.5 } },
+          e("div", { style: { fontWeight: 600, marginBottom: 4, color: "#1e40af" } }, "\u2139\ufe0f Modifier can lift violation to APPROVE"),
+          modifierLiftHints.map(function(hint) {
+            return e("div", { key: hint.claim_id, style: { marginBottom: 3 } },
+              hint.policy_title && e("strong", null, hint.policy_title),
+              hint.policy_title && " \u2014 ",
+              e("span", { style: { color: "#6b7280" } }, hint.outcome_base),
+              " lifts to APPROVE with: ",
+              hint.dnf.map(function(grp, i) {
+                return e("span", { key: i },
+                  i > 0 ? " OR " : "",
+                  e("code", { style: { fontSize: 10, background: "#dbeafe", padding: "1px 4px", borderRadius: 3 } },
+                    grp.map(function(m) {
+                      var mAtom = atoms.find(function(a) { return a.atom_key === m; });
+                      return (mAtom && mAtom.atom_name) ? mAtom.atom_name : m.replace("modifier.", "").replace(/_/g, " ");
+                    }).join(" + ")
+                  )
+                );
+              })
+            );
+          })
+        );
+      })(),
       // Qualifier warnings: when a gated exception is selected but qualifiers aren't met
       dim === "X" && qualifierHints && sel.size > 0 && (function() {
         var mSet = new Set(currentModifiers || []);
@@ -5490,6 +5515,36 @@ function AtomTagger(props) {
     return hints;
   }, [corpus.claims, engineResult]);
 
+  // Modifier lift hints: for fired enforcement claims, show which modifiers
+  // could lift the violation to APPROVE (via modifiers_lift_dnf).
+  // Maps to array of {claim_id, policy_title, dnf: string[][], outcome_base}
+  // Used by DimRow(M) to show "tagging these modifiers would lift this violation."
+  const modifierLiftHints = React.useMemo(() => {
+    if (!corpus || !corpus.claims || !engineResult || !engineResult.gate_hits) return [];
+    var hints = [];
+    var mSet = new Set(tags.M || []);
+    for (var fi = 0; fi < engineResult.gate_hits.length; fi++) {
+      var h = engineResult.gate_hits[fi];
+      var outNorm = String(h.outcome_after_lifts || "").toUpperCase().replace(/[\s\-]+/g, "_");
+      var isEnf = outNorm === "VIOLATION" || outNorm === "NOT_FOR_FEED" || outNorm === "NFF" || outNorm === "NOT_RECOMMEND";
+      if (!isEnf) continue;
+      var claim = corpus.claims.find(function(c) { return c.claim_id === h.claim_id; });
+      if (!claim || !claim.modifiers_lift_dnf || !claim.modifiers_lift_dnf.length) continue;
+      // Check if the lift is already satisfied
+      var alreadySat = claim.modifiers_lift_dnf.some(function(grp) {
+        return grp.every(function(m) { return mSet.has(m); });
+      });
+      if (alreadySat) continue;
+      hints.push({
+        claim_id: h.claim_id,
+        policy_title: (h.policy_titles && h.policy_titles[0]) || "",
+        outcome_base: h.outcome_base || outNorm,
+        dnf: claim.modifiers_lift_dnf
+      });
+    }
+    return hints;
+  }, [corpus.claims, engineResult, tags.M]);
+
   // Phase A: Structural Stability Score. Memoized on engineResult.
   const stabilityResult = React.useMemo(() => {
     if (!engineResult) return null;
@@ -5862,6 +5917,7 @@ function AtomTagger(props) {
         qualifierHints: d === "X" ? qualifierHints : null,
         currentModifiers: d === "X" ? (tags.M || []) : null,
         allModifierAtoms: d === "X" ? (scopedAtomsByDim.M || corpus.atomsByDim.M || []) : null,
+        modifierLiftHints: d === "M" ? modifierLiftHints : null,
       }))
     ),
 
