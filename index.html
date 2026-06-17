@@ -187,6 +187,32 @@
   .hit-id{font-family:var(--mono);font-weight:500;color:var(--ink);padding-top:1px}
   .hit-evidence{display:flex;flex-wrap:wrap;gap:3px}
   .ev-pill{display:inline-block;padding:1px 6px;border-radius:3px;font-family:var(--mono);font-size:10px;background:var(--surface-soft);color:var(--ink)}
+  .decision-flow{margin:6px 0;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px}
+  .flow-title{font-size:10px;font-weight:600;color:#475569;letter-spacing:.3px;margin-bottom:8px;font-family:var(--mono)}
+  .claim-flow{display:flex;flex-direction:column;gap:6px}
+  .flow-row{display:flex;align-items:center;gap:0;flex-wrap:wrap;padding:6px 8px;background:#fff;border-radius:6px;border:1px solid #f1f5f9;transition:box-shadow .15s}
+  .flow-row:hover{box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  .flow-row.enforcement{border-left:3px solid #ef4444}
+  .flow-row.lifted{border-left:3px solid #22c55e}
+  .flow-dim{display:inline-flex;align-items:center;gap:3px;margin-right:2px}
+  .flow-dim-label{font-size:8px;font-weight:700;color:#94a3b8;min-width:10px}
+  .flow-atom{font-size:9px;padding:2px 5px;border-radius:3px;background:#e0f2fe;color:#0c4a6e;font-weight:500;white-space:nowrap;max-width:130px;overflow:hidden;text-overflow:ellipsis}
+  .flow-atom.dim-S{background:#f0fdf4;color:#166534}
+  .flow-atom.dim-P{background:#fef3c7;color:#92400e}
+  .flow-atom.dim-R{background:#fce7f3;color:#9d174d}
+  .flow-arrow{font-size:10px;color:#cbd5e1;margin:0 3px}
+  .flow-outcome{font-size:9px;padding:2px 6px;border-radius:3px;font-weight:600;margin-left:4px}
+  .flow-outcome.violation{background:#fee2e2;color:#991b1b}
+  .flow-outcome.approve{background:#dcfce7;color:#166534}
+  .flow-outcome.nff{background:#fee2e2;color:#991b1b}
+  .flow-outcome.nr{background:#fef9c3;color:#854d0e}
+  .flow-lift-section{display:inline-flex;align-items:center;gap:4px;margin-left:6px;padding-left:6px;border-left:1px solid #e2e8f0}
+  .flow-lift-arrow{font-size:9px;color:#6b7280}
+  .lift-path{font-size:8px;padding:1px 4px;border-radius:2px;font-weight:500;cursor:help}
+  .lift-path.satisfied{background:#dcfce7;color:#166534;text-decoration:line-through}
+  .lift-path.unsatisfied{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
+  .lift-path.available{background:#f1f5f9;color:#64748b}
+  .flow-policy{font-size:9px;color:#6b7280;margin-left:auto;padding-left:8px;font-style:italic;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .prec-card{display:grid;grid-template-columns:200px 1fr;gap:12px;padding:10px 0;border-top:1px solid var(--hairline);font-size:12px}
   .prec-card:first-child{border-top:none}
   .prec-meta{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:11px}
@@ -364,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.42";
+const PLUGIN_VERSION = "atom-mvp v0.18.43";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -5855,43 +5881,95 @@ function AtomTagger(props) {
           }, "Defensibility: " + def.label),
           verdictData.final_policy_title && e("span", { className: "pill", style: { background: "#f3f4f6", color: "#374151", fontSize: 10, border: "1px solid #d1d5db" } }, verdictData.final_policy_title)
         ),
-        // Expandable detail: fired rules
-        _enfHits.length > 0 && e("details", { style: { marginTop: 4, marginBottom: 4, fontSize: 11, color: "var(--muted)" } },
-          e("summary", { style: { cursor: "pointer", userSelect: "none", fontFamily: "var(--mono)", fontSize: 10 }, "data-tip": "Expand to see individual claims fired by the rule engine, with their outcomes and policy titles" }, "Fired Rules Detail"),
-          e("div", { style: { marginTop: 4, padding: "6px 10px", background: "#f9fafb", borderRadius: 4, display: "flex", flexDirection: "column", gap: 3 } },
+        // Decision Flow: visual claim-chain showing gate atoms → outcome → lift paths
+        _enfHits.length > 0 && e("div", { className: "decision-flow" },
+          e("div", { className: "flow-title" }, "DECISION FLOW \u2014 " + _enfHits.length + " enforcement claim" + (_enfHits.length === 1 ? "" : "s")),
+          e("div", { className: "claim-flow" },
             _enfHits.map(function(h, idx) {
               var _outNorm = String(h.outcome_after_lifts || "").toUpperCase().replace(/[\s\-]+/g, "_");
               var _isEnf = _outNorm === "NOT_FOR_FEED" || _outNorm === "NFF" || _outNorm === "VIOLATION" || _outNorm === "NOT_RECOMMEND";
-              var _outcomeColor = _isEnf ? "#991b1b" : "#166534";
-              var _outcomeBg = _isEnf ? "#fee2e2" : "#dcfce7";
-              // Check if exceptions were tagged but didn't lift (qualifier miss)
-              var _liftMissInfo = null;
-              if (_isEnf && tags.X && tags.X.length > 0) {
-                var _claim = (corpus.claims || []).find(function(c) { return c.claim_id === h.claim_id; });
-                if (_claim && _claim.exception_qualifiers) {
-                  var _mSet = new Set(tags.M || []);
-                  var _misses = [];
-                  for (var _xi = 0; _xi < tags.X.length; _xi++) {
-                    var _xk = tags.X[_xi];
-                    var _dnf = _claim.exception_qualifiers[_xk];
-                    if (!_dnf || !Array.isArray(_dnf) || !_dnf.length) continue;
-                    var _sat = _dnf.some(function(g) { return g.every(function(m) { return _mSet.has(m); }); });
-                    if (!_sat) {
-                      _misses.push({ atom: _xk, needs: _dnf });
-                    }
-                  }
-                  if (_misses.length) _liftMissInfo = _misses;
+              var _isLifted = h.lift && !_isEnf;
+              var _outcomeClass = _isEnf ? (_outNorm === "VIOLATION" ? "violation" : (_outNorm === "NOT_RECOMMEND" ? "nr" : "nff")) : "approve";
+              // Get evidence (gate atoms that matched)
+              var ev = h.evidence || {};
+              // Get the source claim for lift info
+              var _claim = (corpus.claims || []).find(function(c) { return c.claim_id === h.claim_id; });
+              var _liftPaths = [];
+              if (_claim) {
+                var _mSet = new Set(tags.M || []);
+                var _xSet = new Set(tags.X || []);
+                // Exception lift paths
+                var _exLift = _claim.exceptions_lift_atoms || _claim.exceptions_required || [];
+                for (var _ei = 0; _ei < _exLift.length; _ei++) {
+                  var _ex = _exLift[_ei];
+                  var _exTagged = _xSet.has(_ex);
+                  var _exLabel = _ex.replace("exception.", "");
+                  var _qDnf = (_claim.exception_qualifiers && _claim.exception_qualifiers[_ex]) || [];
+                  var _qSat = !_qDnf.length || _qDnf.some(function(g) { return g.every(function(m) { return _mSet.has(m); }); });
+                  var _status = _exTagged && _qSat ? "satisfied" : (_exTagged && !_qSat ? "unsatisfied" : "available");
+                  _liftPaths.push({ label: _exLabel, status: _status, type: "X", needs: _qDnf });
+                }
+                // Modifier lift (from modifiers_lift_dnf)
+                var _mLift = _claim.modifiers_lift_dnf || [];
+                if (_mLift.length) {
+                  var _mSat = _mLift.some(function(g) { return g.every(function(m) { return _mSet.has(m); }); });
+                  _liftPaths.push({ label: "modifier-lift", status: _mSat ? "satisfied" : "available", type: "M", needs: _mLift });
                 }
               }
-              return e("div", { key: idx, style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "2px 0", borderBottom: "1px solid #f3f4f6" } },
-                e("span", { style: { fontFamily: "var(--mono)", fontSize: 10, color: "#6b7280", minWidth: 80 } }, h.claim_id || "?"),
-                e("span", { style: { fontSize: 10, padding: "1px 6px", borderRadius: 3, background: _outcomeBg, color: _outcomeColor, fontWeight: 600 } }, h.outcome_after_lifts || "?"),
-                h.policy_titles && h.policy_titles.length > 0 && h.policy_titles.map(function(pt, pi) {
-                  return e("span", { key: pi, style: { fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d", fontWeight: 500 } }, pt);
+              // Build flow dimension segments
+              var _dims = ["C", "S", "P", "R"];
+              var _dimColors = { C: "", S: "dim-S", P: "dim-P", R: "dim-R" };
+              var _flowDims = [];
+              for (var _di = 0; _di < _dims.length; _di++) {
+                var _d = _dims[_di];
+                var _atoms = ev[_d] || [];
+                if (!_atoms.length) continue;
+                _flowDims.push({ dim: _d, atoms: _atoms });
+              }
+              return e("div", { key: idx, className: "flow-row" + (_isEnf ? " enforcement" : " lifted"), title: h.claim_id },
+                // Gate path: C → S → P → R as colored atom pills
+                _flowDims.map(function(fd, fi) {
+                  return e(React.Fragment, { key: fd.dim },
+                    fi > 0 && e("span", { className: "flow-arrow" }, "\u2192"),
+                    e("span", { className: "flow-dim" },
+                      e("span", { className: "flow-dim-label" }, fd.dim),
+                      fd.atoms.slice(0, 2).map(function(ak, ai) {
+                        var _aObj = (corpus.atoms || []).find(function(x) { return x.atom_key === ak; });
+                        var _aLabel = (_aObj && _aObj.atom_name) ? _aObj.atom_name : ak.split(".").pop().replace(/_/g, " ");
+                        return e("span", { key: ai, className: "flow-atom " + (_dimColors[fd.dim] || ""), title: ak }, _aLabel);
+                      }),
+                      fd.atoms.length > 2 && e("span", { className: "flow-atom " + (_dimColors[fd.dim] || "") }, "+" + (fd.atoms.length - 2))
+                    )
+                  );
                 }),
-                _liftMissInfo && e("span", { style: { fontSize: 9, color: "#b45309", fontStyle: "italic", marginLeft: 4 }, title: _liftMissInfo.map(function(m) { return m.atom + " needs: " + m.needs.map(function(g){return g.join("+");}).join(" OR "); }).join("; ") },
-                  "\u26a0 " + _liftMissInfo.map(function(m) { return m.atom.replace("exception.","") + " needs qualifier"; }).join(", ")
-                )
+                // Arrow to outcome
+                _flowDims.length > 0 && e("span", { className: "flow-arrow" }, "\u2192"),
+                // Outcome badge
+                e("span", { className: "flow-outcome " + _outcomeClass },
+                  h.outcome_base !== h.outcome_after_lifts
+                    ? h.outcome_base + "\u2192" + h.outcome_after_lifts
+                    : h.outcome_after_lifts || "?"
+                ),
+                // Lift paths: show what could/did lift this claim
+                _liftPaths.length > 0 && _isEnf && e("span", { className: "flow-lift-section" },
+                  e("span", { className: "flow-lift-arrow" }, "lift\u2191"),
+                  _liftPaths.slice(0, 5).map(function(lp, li) {
+                    var _title = lp.status === "unsatisfied"
+                      ? lp.label + " tagged but needs qualifier: " + (lp.needs || []).map(function(g) { return g.map(function(m){return m.replace("modifier.","");}).join("+"); }).join(" | ")
+                      : lp.status === "satisfied"
+                        ? lp.label + " \u2714 lifted to approve"
+                        : lp.label + " (available \u2014 not tagged)";
+                    return e("span", { key: li, className: "lift-path " + lp.status, title: _title }, lp.label);
+                  }),
+                  _liftPaths.length > 5 && e("span", { className: "lift-path available" }, "+" + (_liftPaths.length - 5))
+                ),
+                // Lift paths for already-lifted claims
+                _liftPaths.length > 0 && _isLifted && e("span", { className: "flow-lift-section" },
+                  e("span", { className: "flow-lift-arrow" }, "\u2714"),
+                  e("span", { className: "lift-path satisfied" }, h.lift ? h.lift.replace("exception:","").replace("exception.","") : "lifted")
+                ),
+                // Policy title (right-aligned)
+                h.policy_titles && h.policy_titles.length > 0 && e("span", { className: "flow-policy", title: h.policy_titles.join(" / ") }, h.policy_titles[0])
               );
             })
           )
