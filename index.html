@@ -364,7 +364,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.41";
+const PLUGIN_VERSION = "atom-mvp v0.18.42";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -3054,7 +3054,7 @@ function ImagesPane(props) {
 //     narrow down, or start typing to search across all atoms.
 //   - Chip label = atom_name (atom_key + serial_code in tooltip).
 function DimRow(props) {
-  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected, relevantKeys } = props;
+  const { dim, atoms, selected, onChange, suggested, skillProposed, skillRejected, relevantKeys, qualifierHints, currentModifiers } = props;
   const [filter, setFilter] = React.useState("");
   // Default to "show all" so the reviewer always sees the full atom set with
   // suggestions visually highlighted, instead of having to click through to
@@ -3136,12 +3136,14 @@ function DimRow(props) {
           const a = atoms.find(x => x.atom_key === k);
           const label = (a && a.atom_name) ? a.atom_name : k;
           const isSkill = skillSet.has(k);
+          var _qGated = dim === "X" && qualifierHints && qualifierHints[k];
           return e("span", {
-            key: k, className: "chip selected" + (isSkill ? " skill-src" : " reviewer-src"),
+            key: k, className: "chip selected" + (isSkill ? " skill-src" : " reviewer-src") + (_qGated ? " q-gated" : ""),
             title: (isSkill ? "[skill-proposed] " : "[reviewer-added] ") +
-              (a ? (a.atom_key + (a.serial_code ? " · " + a.serial_code : "") + " — " + (a.description||"").slice(0,200)) : k),
+              (a ? (a.atom_key + (a.serial_code ? " · " + a.serial_code : "") + " — " + (a.description||"").slice(0,200)) : k) +
+              (_qGated ? " \u26a0 Requires qualifier modifier to lift" : ""),
             onClick: () => toggle(k)
-          }, label, " ✕");
+          }, label, _qGated ? " ⚠" : "", " ✕");
         }),
         // Skill-rejected atoms (struck-through; click ✗ to dismiss, double-click to override and add)
         ...(skillRejected || []).filter(r => !sel.has(r.atom_key) && !dismissedRej.has(r.atom_key)).map(r => {
@@ -3161,6 +3163,51 @@ function DimRow(props) {
             }, " \u2715"));
         })
       ),
+      // Qualifier warnings: when a gated exception is selected but qualifiers aren't met
+      dim === "X" && qualifierHints && sel.size > 0 && (function() {
+        var mSet = new Set(currentModifiers || []);
+        var warnings = [];
+        sel.forEach(function(k) {
+          var qh = qualifierHints[k];
+          if (!qh || !qh.length) return;
+          var satisfied = qh.some(function(entry) {
+            return entry.modifiers.some(function(andGroup) {
+              return andGroup.every(function(m) { return mSet.has(m); });
+            });
+          });
+          if (!satisfied) {
+            var allMods = [];
+            var seen = new Set();
+            qh.forEach(function(entry) {
+              entry.modifiers.forEach(function(andGroup) {
+                var key = andGroup.join("+");
+                if (!seen.has(key)) { seen.add(key); allMods.push(andGroup); }
+              });
+            });
+            var aObj = atoms.find(function(x) { return x.atom_key === k; });
+            var lbl = (aObj && aObj.atom_name) ? aObj.atom_name : k;
+            warnings.push({ key: k, label: lbl, alternatives: allMods });
+          }
+        });
+        if (!warnings.length) return null;
+        return e("div", { className: "qualifier-warnings", style: { margin: "6px 0", padding: "8px 12px", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, fontSize: 11, lineHeight: 1.5 } },
+          e("div", { style: { fontWeight: 600, marginBottom: 4, color: "#92400e" } }, "\u26a0\ufe0f Qualifier required for lift"),
+          warnings.map(function(w) {
+            return e("div", { key: w.key, style: { marginBottom: 3 } },
+              e("strong", null, w.label),
+              " lifts to APPROVE only with: ",
+              w.alternatives.map(function(grp, i) {
+                return e("span", { key: i },
+                  i > 0 ? " OR " : "",
+                  e("code", { style: { fontSize: 10, background: "#fff7ed", padding: "1px 4px", borderRadius: 3 } },
+                    grp.map(function(m) { return m.replace("modifier.", ""); }).join(" + ")
+                  )
+                );
+              })
+            );
+          })
+        );
+      })(),
       // Search input (typing here always searches the full set)
       e("input", {
         className: "filter",
@@ -5387,6 +5434,27 @@ function AtomTagger(props) {
     return _r;
   }, [tags, activeCase, corpus.claims, totalSelected]);
 
+  // Qualifier hints: aggregate exception_qualifiers from scoped claims.
+  // Maps exception atom_key -> array of {claim_id, modifiers: string[][]} (DNF).
+  // Used by DimRow(X) to badge gated exceptions and show missing-qualifier warnings.
+  const qualifierHints = React.useMemo(() => {
+    if (!corpus || !corpus.claims) return {};
+    var hints = {};
+    for (var ci = 0; ci < corpus.claims.length; ci++) {
+      var c = corpus.claims[ci];
+      var eq = c.exception_qualifiers;
+      if (!eq || typeof eq !== "object") continue;
+      for (var xKey in eq) {
+        if (!eq.hasOwnProperty(xKey)) continue;
+        var dnf = eq[xKey];
+        if (!Array.isArray(dnf) || !dnf.length) continue;
+        if (!hints[xKey]) hints[xKey] = [];
+        hints[xKey].push({ claim_id: c.claim_id, modifiers: dnf });
+      }
+    }
+    return hints;
+  }, [corpus.claims]);
+
   // Phase A: Structural Stability Score. Memoized on engineResult.
   const stabilityResult = React.useMemo(() => {
     if (!engineResult) return null;
@@ -5756,6 +5824,8 @@ function AtomTagger(props) {
         skillRejected: skillRejected.filter(r => (r.dim || "") === d),
         relevantKeys: relevantAtomKeysByDim ? (relevantAtomKeysByDim[d] || []) : null,
         onChange: setDim(d),
+        qualifierHints: d === "X" ? qualifierHints : null,
+        currentModifiers: d === "X" ? (tags.M || []) : null,
       }))
     ),
 
@@ -5794,12 +5864,34 @@ function AtomTagger(props) {
               var _isEnf = _outNorm === "NOT_FOR_FEED" || _outNorm === "NFF" || _outNorm === "VIOLATION" || _outNorm === "NOT_RECOMMEND";
               var _outcomeColor = _isEnf ? "#991b1b" : "#166534";
               var _outcomeBg = _isEnf ? "#fee2e2" : "#dcfce7";
+              // Check if exceptions were tagged but didn't lift (qualifier miss)
+              var _liftMissInfo = null;
+              if (_isEnf && tags.X && tags.X.length > 0) {
+                var _claim = (corpus.claims || []).find(function(c) { return c.claim_id === h.claim_id; });
+                if (_claim && _claim.exception_qualifiers) {
+                  var _mSet = new Set(tags.M || []);
+                  var _misses = [];
+                  for (var _xi = 0; _xi < tags.X.length; _xi++) {
+                    var _xk = tags.X[_xi];
+                    var _dnf = _claim.exception_qualifiers[_xk];
+                    if (!_dnf || !Array.isArray(_dnf) || !_dnf.length) continue;
+                    var _sat = _dnf.some(function(g) { return g.every(function(m) { return _mSet.has(m); }); });
+                    if (!_sat) {
+                      _misses.push({ atom: _xk, needs: _dnf });
+                    }
+                  }
+                  if (_misses.length) _liftMissInfo = _misses;
+                }
+              }
               return e("div", { key: idx, style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "2px 0", borderBottom: "1px solid #f3f4f6" } },
                 e("span", { style: { fontFamily: "var(--mono)", fontSize: 10, color: "#6b7280", minWidth: 80 } }, h.claim_id || "?"),
                 e("span", { style: { fontSize: 10, padding: "1px 6px", borderRadius: 3, background: _outcomeBg, color: _outcomeColor, fontWeight: 600 } }, h.outcome_after_lifts || "?"),
                 h.policy_titles && h.policy_titles.length > 0 && h.policy_titles.map(function(pt, pi) {
                   return e("span", { key: pi, style: { fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d", fontWeight: 500 } }, pt);
-                })
+                }),
+                _liftMissInfo && e("span", { style: { fontSize: 9, color: "#b45309", fontStyle: "italic", marginLeft: 4 }, title: _liftMissInfo.map(function(m) { return m.atom + " needs: " + m.needs.map(function(g){return g.join("+");}).join(" OR "); }).join("; ") },
+                  "\u26a0 " + _liftMissInfo.map(function(m) { return m.atom.replace("exception.","") + " needs qualifier"; }).join(", ")
+                )
               );
             })
           )
