@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.46";
+const PLUGIN_VERSION = "atom-mvp v0.18.47";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1571,6 +1571,7 @@ async function loadAtomCorpus() {
       description: get(f, atomsIdx, "description"),
       audit_rule: get(f, atomsIdx, "audit_rule"),
       serial_code: get(f, atomsIdx, "serial_code"),
+      issues: getArr(f, atomsIdx, "issue"),
       tax_version: get(f, atomsIdx, "tax_version"),
     };
   }).filter(a => a.atom_key);
@@ -5418,9 +5419,12 @@ function AtomTagger(props) {
   const setDim = (dim) => (next) => setTags(prev => Object.assign({}, prev, { [dim]: next }));
   const totalSelected = DIMENSIONS.reduce((s,d) => s + (tags[d]||[]).length, 0);
 
-  // Issue-scoped atom candidates: restrict the atom universe to atoms referenced
-  // by claims in the SELECTED issue scope (v0.18.33: union over scopeIssues, so a
-  // reviewer can tag atoms across several policy areas for one cross-issue case).
+  // Issue-scoped atom candidates: use the Atoms table's own `issues` multi-select
+  // field to determine visibility (v0.18.42). Previous approach derived visibility
+  // solely from claims gate references, which missed atoms not explicitly linked in
+  // claim gates (e.g. subject.adult/youth/infant_toddler on NSA — only subject.no_human
+  // was linked). Now: an atom is in scope if its `issues` field contains ANY of the
+  // resolved policy areas. X (exceptions) remain universal (never scoped).
   const scopedAtomsByDim = React.useMemo(() => {
     // Resolve the set of policy areas in scope from the selected issues.
     const areas = new Set();
@@ -5428,52 +5432,29 @@ function AtomTagger(props) {
       const pa = resolvePolicyArea(scopeIssues[i]);
       if (pa) areas.add(pa);
     }
-    if (!areas.size || !corpus.claims || !corpus.claims.length) return corpus.atomsByDim;
-    // Collect all atom_keys referenced by claims matching ANY scoped policy area.
-    const relevantKeys = new Set();
-    for (const c of corpus.claims) {
-      let inScope = false;
-      areas.forEach(function(pa) { if (matchesPolicyArea(c.issue, pa)) inScope = true; });
-      if (!inScope) continue;
-      const gates = c.gates || {};
-      for (const d of DIMENSIONS) {
-        for (const k of (gates[d] || [])) relevantKeys.add(k);
-      }
-      // v0.18.36: gates only carries C/S/P/R/E, so without harvesting modifier
-      // and exception keys the M and X dimensions were filtered to EMPTY whenever
-      // an issue scope was active (default). That hid modifiers like
-      // modifier.friendly_context from the tagger \u2014 not visible, searchable, or
-      // enable-able. Mirror relevantAtomKeysByDim's full harvest here.
-      (c.modifiers_required || []).forEach(function(k){ relevantKeys.add(k); });
-      (c.modifiers_excluded || []).forEach(function(k){ relevantKeys.add(k); });
-      (c.modifiers_lift_to_approve || []).forEach(function(k){ relevantKeys.add(k); });
-      (c.modifiers_lift_dnf || []).forEach(function(grp){
-        if (Array.isArray(grp)) grp.forEach(function(k){ relevantKeys.add(k); });
-      });
-      (c.exceptions_required || []).forEach(function(k){ relevantKeys.add(k); });
-      (c.exceptions_lift_atoms || []).forEach(function(k){ relevantKeys.add(k); });
-      // v0.18.39: also harvest exception_qualifier_modifiers (eqm) and
-      // exception_qualifiers (eq). Some modifiers (e.g. modifier.relevant_to_video
-      // on NSA) are referenced ONLY via eqm and were otherwise hidden. Mirrors the
-      // canonical atomKeysReferencedByClaim() coverage so all four harvest paths agree.
-      var _eqm = c.exception_qualifier_modifiers || {};
-      for (var _k in _eqm) relevantKeys.add(_k);
-      var _eq = c.exception_qualifiers || {};
-      for (var _k2 in _eq) relevantKeys.add(_k2);
-    }
-    if (!relevantKeys.size) return corpus.atomsByDim;
+    if (!areas.size) return corpus.atomsByDim;
+    // Filter atoms by their own issue field (multi-select, e.g. ["NSA","HRA"]).
+    // An atom is in scope if ANY of its issues matches ANY of the active areas.
     const scoped = {};
     for (const d of DIMENSIONS) {
-      // v0.18.37: X (exceptions) are universal lift atoms referenced by claims via
-      // exception-level (EL1\u2013EL6) groupings, not reliably via per-claim
-      // exceptions_required links \u2014 and they are shared across all issues. Never
-      // issue-scope-filter X, or every exception atom disappears from the tagger.
-      scoped[d] = (d === "X")
-        ? (corpus.atomsByDim[d] || [])
-        : (corpus.atomsByDim[d] || []).filter(a => relevantKeys.has(a.atom_key));
+      if (d === "X") {
+        // X (exceptions) are universal lift atoms shared across all issues — never filter.
+        scoped[d] = corpus.atomsByDim[d] || [];
+      } else {
+        scoped[d] = (corpus.atomsByDim[d] || []).filter(function(a) {
+          var atomIssues = a.issues || [];
+          if (!atomIssues.length) return false; // atom has no issue tag → exclude
+          for (var i = 0; i < atomIssues.length; i++) {
+            var found = false;
+            areas.forEach(function(pa) { if (matchesPolicyArea(atomIssues[i], pa)) found = true; });
+            if (found) return true;
+          }
+          return false;
+        });
+      }
     }
     return scoped;
-  }, [scopeIssues, corpus.claims, corpus.atomsByDim]);
+  }, [scopeIssues, corpus.atomsByDim]);
 
   // Phase 3: live engine evaluation. Memoized on (tags, policy_title, claims).
   // Engine evaluates ALL claims without policy_title filter so the user sees
@@ -5912,7 +5893,10 @@ function AtomTagger(props) {
         suggested: (suggestedByDim && suggestedByDim[d]) || [],
         skillProposed: (skillProposed[d] || []),
         skillRejected: skillRejected.filter(r => (r.dim || "") === d),
-        relevantKeys: relevantAtomKeysByDim ? (relevantAtomKeysByDim[d] || []) : null,
+        // v0.18.42: relevantKeys secondary filter disabled — scopedAtomsByDim now
+        // uses the atom-level issue field for authoritative scope. Passing null
+        // avoids DimRow hiding atoms not referenced in claims gates (e.g. subject atoms).
+        relevantKeys: null,
         onChange: setDim(d),
         qualifierHints: d === "X" ? qualifierHints : null,
         currentModifiers: d === "X" ? (tags.M || []) : null,
