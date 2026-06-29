@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.48";
+const PLUGIN_VERSION = "atom-mvp v0.18.49";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -5000,6 +5000,8 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     var categories = [];
     var decisionPath = [];
     var titleDiff = [];
+    // v0.18.49: per-title missing-atom hints (populated for _extra titles below)
+    var missingAtomHints = [];
     function _pushCat(c) { if (categories.indexOf(c) < 0) categories.push(c); }
 
     // Type 1: model_vs_human — skill says X, engine says Y (user changed atoms)
@@ -5075,6 +5077,75 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
           _missing.forEach(function(t){ titleDiff.push("missing:" + t); });
           _extra.forEach(function(t){ titleDiff.push("extra:" + t); });
         }
+
+        // v0.18.49: missing-atom hint. For each user-tagged title the engine did
+        // NOT fire (_extra), find that title's closest-to-firing non-approve claim
+        // and report exactly which gate atoms are absent — so the reviewer sees what
+        // to add to make the engine actually fire the rule (vs. a silent manual override).
+        if (_extra.length) {
+          var _nameByKey = {};
+          if (corpus && corpus.atoms) {
+            for (var _ai = 0; _ai < corpus.atoms.length; _ai++) {
+              var _aRec = corpus.atoms[_ai];
+              if (_aRec && _aRec.atom_key) _nameByKey[_aRec.atom_key] = _aRec.atom_name || _aRec.atom_key;
+            }
+          }
+          // local gate-intersect mirroring engine.gateIntersects (*.unspecified subsumption)
+          var _gint = function(need, got) {
+            if (!need || !need.length) return true;   // no gate = satisfied
+            if (!got || !got.length) return false;
+            var gs = {}; for (var _i = 0; _i < got.length; _i++) gs[got[_i]] = 1;
+            for (var _i2 = 0; _i2 < need.length; _i2++) {
+              var _n = need[_i2];
+              if (gs[_n]) return true;
+              var _suf = ".unspecified";
+              if (_n.length > _suf.length && _n.slice(_n.length - _suf.length) === _suf) {
+                var _pfx = _n.slice(0, _n.length - _suf.length + 1);
+                for (var _j = 0; _j < got.length; _j++) {
+                  if (got[_j].indexOf(_pfx) === 0 && got[_j] !== _n) return true;
+                }
+              }
+            }
+            return false;
+          };
+          var _GATE5 = ["C", "S", "P", "R", "E"];
+          var _enfClaimSev = { "NOT_FOR_FEED": 1, "NFF": 1, "VIOLATION": 1, "NOT_RECOMMEND": 1 };
+          var _mkCands = function(keys) {
+            return (keys || []).map(function(k) { return { key: k, name: _nameByKey[k] || k }; });
+          };
+          for (var _xi = 0; _xi < _extra.length; _xi++) {
+            var _xt = _extra[_xi];
+            var _best = null;  // claim for this title with the fewest missing gate dims
+            for (var _ci2 = 0; _ci2 < _scopedClaims.length; _ci2++) {
+              var _c2 = _scopedClaims[_ci2];
+              var _co = String(_c2.outcome || "").toUpperCase().replace(/[\s\-]+/g, "_");
+              if (!_enfClaimSev[_co]) continue;                  // only non-approve claims
+              var _ct2 = _c2.policy_titles || [];
+              if (_ct2.indexOf(_xt) < 0) continue;               // only this title's claims
+              var _g2 = _c2.gates || {};
+              var _miss = [];
+              for (var _gi2 = 0; _gi2 < _GATE5.length; _gi2++) {
+                var _d2 = _GATE5[_gi2];
+                var _need = _g2[_d2] || [];
+                if (!_need.length) continue;
+                if (_gint(_need, tags[_d2] || [])) continue;     // gate already satisfied
+                _miss.push({ dim: _d2, candidates: _mkCands(_need) });
+              }
+              // honor inverted-allowlist titles that also need an exception-context atom
+              if (_c2.requires_exception_context) {
+                var _xreq = _c2.exceptions_required || [];
+                if (_xreq.length && !_gint(_xreq, tags.X || [])) {
+                  _miss.push({ dim: "X", candidates: _mkCands(_xreq) });
+                }
+              }
+              if (!_miss.length) continue;                       // already fireable on gates
+              if (!_best || _miss.length < _best.missing.length) {
+                _best = { title: _xt, claim_id: _c2.claim_id || "", missing: _miss };
+              }
+            }
+            if (_best) missingAtomHints.push(_best);
+          }
+        }
       }
     }
 
@@ -5102,6 +5173,7 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
       categories: categories,
       decisionPath: decisionPath,
       titleDiff: titleDiff,
+      missingAtomHints: missingAtomHints,
       engineDecision: engineDecision,
       skillDecision: skillDecision
     };
@@ -5258,6 +5330,29 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         discrepancy.details.join(" · ")),
       e("div", { style: { marginTop: 2, color: "var(--muted)" } },
         "Will be tagged as [" + discrepancy.type + "] for analysis")
+    ),
+
+    // v0.18.49: missing-atom hint — when the reviewer tags a policy title the engine
+    // did NOT fire, show exactly which gate atoms must be added to trigger that
+    // title's non-approve claim, instead of silently recording a manual override.
+    discrepancy.missingAtomHints && discrepancy.missingAtomHints.length > 0 && e("div", { style: {
+        marginBottom: 8, padding: "8px 10px", borderRadius: 6, fontSize: 11, lineHeight: 1.5,
+        background: "#eef4fd", border: "1px solid #a8c4f0"
+      } },
+      e("div", { style: { fontWeight: 600, marginBottom: 4, color: "#2563EB" } },
+        "\u2139 Missing atoms to fire " + (discrepancy.missingAtomHints.length > 1 ? "the tagged titles" : "the tagged title")),
+      discrepancy.missingAtomHints.map(function(h, hi) {
+        return e("div", { key: hi, style: { marginBottom: hi < discrepancy.missingAtomHints.length - 1 ? 6 : 0 } },
+          e("div", { style: { color: "var(--body-strong)", fontWeight: 500 } },
+            h.title + (h.claim_id ? "  (closest claim: " + h.claim_id + ")" : "")),
+          e("div", { style: { color: "var(--body)" } },
+            h.missing.map(function(m) {
+              return m.dim + ": " + m.candidates.map(function(c) { return c.name; }).join(" / ");
+            }).join("  \u00b7  ")),
+          e("div", { style: { marginTop: 1, color: "var(--muted)", fontSize: 10 } },
+            "Add one atom from each dimension above to make the engine fire this title.")
+        );
+      })
     ),
 
     e("div", { className: "row", style: { gap: 8, alignItems: "center" } },
