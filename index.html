@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.49";
+const PLUGIN_VERSION = "atom-mvp v0.18.50";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -6059,7 +6059,14 @@ function AtomTagger(props) {
           def && e("span", {
             "data-tip": def.reason,
             style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 10px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: dc.bg, border: "1px solid " + dc.border, color: dc.text, cursor: "help" }
-          }, "Defensibility: " + def.label),
+          },
+            "Defensibility: " + def.label,
+            def.reason && e("span", { style: { fontWeight: 400, opacity: 0.85 } }, " \u00b7 " + def.reason)
+          ),
+          def && stabilityResult && stabilityResult.score != null && e("span", {
+            "data-tip": "Defensibility Index (DI): engine-side SSS composite, 0-1. DI is a downgrade-only tripwire \u2014 it does NOT set the tier (content ambiguity does), so DI and the tier need not correlate.",
+            style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, fontFamily: "var(--mono)", background: "#f3f4f6", border: "1px solid #d1d5db", color: "#374151", cursor: "help" }
+          }, "DI " + (Math.round(stabilityResult.score * 100) / 100).toFixed(2)),
           verdictData.final_policy_title && e("span", { className: "pill", style: { background: "#f3f4f6", color: "#374151", fontSize: 10, border: "1px solid #d1d5db" } }, verdictData.final_policy_title)
         ),
         // Decision Flow: visual claim-chain showing gate atoms → outcome → lift paths
