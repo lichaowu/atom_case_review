@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.50";
+const PLUGIN_VERSION = "atom-mvp v0.18.51";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1054,14 +1054,22 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
   var hardStructural = ruleBroken || (fragile && !ruleStable);
   var softStructural = ruleShaky || fragile;
   function rank(t) { return t === "HIGH" ? 2 : (t === "MEDIUM" ? 1 : 0); }
+  // v0.18.51 (§4.3): when the SSS tripwire pulls the tier DOWN, the merge_reason must
+  // name BOTH the content axis it overrode and the structural cause, so a reviewer reading
+  // "LOW" next to a clean ambiguity L1 understands SSS — not content — drove the downgrade.
+  var _ambLbl = ambigClass ? ("Ambiguity " + ambigClass)
+              : (precSupport ? ("Precedent support " + precSupport) : "Content tier");
 
   if (hardStructural && rank(tier) > 0) {
     tier = "LOW";
-    reason = ruleBroken ? "Decision rule stability L3 (fragile structure)"
-                        : "Structurally fragile (overrides content tier)";
+    reason = _ambLbl + " but capped to LOW by "
+           + (ruleBroken ? "fragile decision structure (SSS L3 tripwire)"
+                         : "structural fragility (1-flip, SSS tripwire)");
   } else if (softStructural && rank(tier) > 1) {
     tier = "MEDIUM";
-    reason = "Structural concern (shaky or 1-flip fragile)";
+    reason = _ambLbl + " but capped to MEDIUM by "
+           + (ruleShaky ? "shaky decision stability (SSS L2 tripwire)"
+                        : "1-flip structural fragility (SSS tripwire)");
   }
 
   return { tier: tier, label: tier.charAt(0) + tier.slice(1).toLowerCase(), reason: reason };
