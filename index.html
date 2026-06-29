@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.47";
+const PLUGIN_VERSION = "atom-mvp v0.18.48";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1023,8 +1023,22 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
   var ambigClass = ambiguityAssessment && ambiguityAssessment.classification;
   var precSupport = ambiguityAssessment && ambiguityAssessment.precedent_support;
 
-  // No ambiguity data yet -> cannot grade.
-  if (!ambiguityAssessment) return null;
+  // No graded signal at all (neither content ambiguity nor a computed stability
+  // band) -> genuinely cannot grade; leave tier blank.
+  if (!ambiguityAssessment && !band) return null;
+
+  // v0.18.30 regression fix: stability band was computed but the skill verdict
+  // carried no ambiguity_assessment. Previously this returned null, so a fully
+  // computed precedent (band + index + detail blob all present) was silently
+  // written with a BLANK tier. Derive the headline tier from the band instead,
+  // applying the same Pillar-A structural tripwire (fragile can only pull down).
+  if (!ambiguityAssessment) {
+    var bandTier = ruleBroken ? "LOW" : (ruleShaky ? "MEDIUM" : "HIGH");
+    var bandReason = "Derived from stability band " + band + " (no content ambiguity assessed)";
+    if ((fragile && !ruleStable) && bandTier !== "LOW") { bandTier = "LOW"; bandReason = "Structurally fragile (overrides band tier)"; }
+    else if (fragile && bandTier === "HIGH") { bandTier = "MEDIUM"; bandReason = "Structural concern (1-flip fragile)"; }
+    return { tier: bandTier, label: bandTier.charAt(0) + bandTier.slice(1).toLowerCase(), reason: bandReason };
+  }
 
   // Headline tier from content ambiguity.
   var tier, reason;
