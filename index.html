@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.53";
+const PLUGIN_VERSION = "atom-mvp v0.18.55";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1019,6 +1019,55 @@ const DIM_NAMES = {
     };
   }
 
+  // v0.18.55: Decide whether a non_realistic_routes_to hint is DECISION-RELEVANT.
+  // Per product spec the pill must fire ONLY when BOTH hold:
+  //   (1) a currently-tagged realism atom is low-confidence (present in the
+  //       skill's weakest_atoms set) — i.e. it could plausibly flip, AND
+  //   (2) flipping that atom to a realism value the routed-to title gates on
+  //       would newly fire a claim under that title (it is not firing today).
+  // If either can't be established from available data, return false -> hide it.
+  function nonRealisticRoutingActionable(caseAtoms, claims, routingTarget, opts) {
+    opts = opts || {};
+    var evaluate = root.AtomEngine && root.AtomEngine.evaluate;
+    if (!evaluate || !routingTarget || !claims || !claims.length) return false;
+    var weakest = opts.weakest_atoms || [];
+    if (!weakest.length) return false;               // no confidence signal -> can't tell
+    var R = (caseAtoms && caseAtoms.R) || [];
+    if (!R.length) return false;                     // no realism atom to flip
+    var targetR = {};
+    for (var i = 0; i < claims.length; i++) {
+      var pt = claims[i].policy_titles || [];
+      if (pt.indexOf(routingTarget) < 0) continue;
+      var g = (claims[i].gates || {}).R || [];
+      for (var j = 0; j < g.length; j++) targetR[g[j]] = true;
+    }
+    var nonRealKeys = Object.keys(targetR);
+    if (!nonRealKeys.length) return false;           // routed-to rule isn't realism-gated -> can't tell
+    function firesTarget(atoms) {
+      var r = evaluate(atoms, claims, {});
+      var hits = r.gate_hits || [];
+      for (var k = 0; k < hits.length; k++) {
+        var p = hits[k].policy_titles || [];
+        if (p.indexOf(routingTarget) >= 0) return true;
+      }
+      return false;
+    }
+    if (firesTarget(caseAtoms)) return false;        // already firing -> not a "would-flip" case
+    for (var ri = 0; ri < R.length; ri++) {
+      if (weakest.indexOf(R[ri]) < 0) continue;      // atom must be contestable
+      for (var ni = 0; ni < nonRealKeys.length; ni++) {
+        if (R[ri] === nonRealKeys[ni]) continue;
+        var mut = cloneAtoms(caseAtoms);
+        var idx = mut.R.indexOf(R[ri]);
+        if (idx >= 0) mut.R.splice(idx, 1);
+        if (mut.R.indexOf(nonRealKeys[ni]) < 0) mut.R.push(nonRealKeys[ni]);
+        if (firesTarget(mut)) return true;           // flip triggers the routed-to rule
+      }
+    }
+    return false;
+  }
+
+  root.nonRealisticRoutingActionable = nonRealisticRoutingActionable;
   root.computeCounterfactual = computeCounterfactual;
 })(window);
 </script>
@@ -1058,54 +1107,46 @@ function computeDefensibility(stabilityResult, counterfactualResult, ambiguityAs
   // applying the same Pillar-A structural tripwire (fragile can only pull down).
   if (!ambiguityAssessment) {
     var bandTier = ruleBroken ? "LOW" : (ruleShaky ? "MEDIUM" : "HIGH");
-    var bandReason = "Derived from stability band " + band + " (no content ambiguity assessed)";
-    if ((fragile && !ruleStable) && bandTier !== "LOW") { bandTier = "LOW"; bandReason = "Structurally fragile (overrides band tier)"; }
-    else if (fragile && bandTier === "HIGH") { bandTier = "MEDIUM"; bandReason = "Structural concern (1-flip fragile)"; }
+    var bandReason = "Derived from stability band " + band + " (no content ambiguity)";
+    if (fragile && bandTier !== "LOW") {
+      bandTier = (bandTier === "HIGH") ? "MEDIUM" : "LOW";
+      bandReason = bandReason + " + evidence-grounded fragility (load-bearing atom weakly supported) → capped " + bandTier;
+    }
     return { tier: bandTier, label: bandTier.charAt(0) + bandTier.slice(1).toLowerCase(), reason: bandReason };
   }
 
   // Headline tier from content ambiguity.
   var tier, reason;
-  if (ambigClass === "L3") { tier = "LOW"; reason = "Content ambiguity L3 (genuinely contested)"; }
-  else if (ambigClass === "L2") { tier = "MEDIUM"; reason = "Moderate content ambiguity"; }
-  else if (ambigClass === "L1") { tier = "HIGH"; reason = "Clear content (ambiguity L1)"; }
+  if (ambigClass === "L3") { tier = "LOW"; reason = "Content ambiguity L3"; }
+  else if (ambigClass === "L2") { tier = "MEDIUM"; reason = "Content ambiguity L2"; }
+  else if (ambigClass === "L1") { tier = "HIGH"; reason = "Content ambiguity L1"; }
   else if (precSupport === "none" || precSupport === "partial") { tier = "MEDIUM"; reason = "Limited precedent support"; }
   else { tier = "HIGH"; reason = "All signals favorable"; }
 
-  // Pillar A precondition: structural tripwire can only pull DOWN.
-  //   hard break  (L3 band, or genuinely fragile w/o stable rules) -> cap at LOW
-  //   soft concern(L2 band / single-flip fragile)                  -> cap at MEDIUM
-  var hardStructural = ruleBroken || (fragile && !ruleStable);
-  var softStructural = ruleShaky || fragile;
+  // v0.18.54 (evidence-grounded fragility): the tier IS the content-ambiguity axis.
+  // The ONLY structural downgrade is evidence-grounded fragility — a load-bearing atom
+  // (one whose removal flips the verdict) that is itself weakly supported by the input.
+  // This is gated upstream in computeCounterfactual: structurally_fragile is true only
+  // when the flip atom is in weakest_atoms. The old DI/band tripwire (ruleBroken/ruleShaky)
+  // NO LONGER downgrades: min_flips_to_inverse is a constant (=1) for conjunctive atom
+  // rules, so band-derived "fragility" carried no signal and mislabeled clear content as
+  // LOW. Fragility now pulls the tier down at most ONE step.
   function rank(t) { return t === "HIGH" ? 2 : (t === "MEDIUM" ? 1 : 0); }
-  // v0.18.51 (§4.3): when the SSS tripwire pulls the tier DOWN, the merge_reason must
-  // name BOTH the content axis it overrode and the structural cause, so a reviewer reading
-  // "LOW" next to a clean ambiguity L1 understands SSS — not content — drove the downgrade.
-  var _ambLbl = ambigClass ? ("Ambiguity " + ambigClass)
-              : (precSupport ? ("Precedent support " + precSupport) : "Content tier");
-
-  if (hardStructural && rank(tier) > 0) {
-    tier = "LOW";
-    reason = _ambLbl + " but capped to LOW by "
-           + (ruleBroken ? "fragile decision structure (SSS L3 tripwire)"
-                         : "structural fragility (1-flip, SSS tripwire)");
-  } else if (softStructural && rank(tier) > 1) {
-    tier = "MEDIUM";
-    reason = _ambLbl + " but capped to MEDIUM by "
-           + (ruleShaky ? "shaky decision stability (SSS L2 tripwire)"
-                        : "1-flip structural fragility (SSS tripwire)");
+  if (fragile && rank(tier) > 0) {
+    tier = (rank(tier) === 2) ? "MEDIUM" : "LOW";
+    reason = reason + " + evidence-grounded fragility (load-bearing atom weakly supported) → capped " + tier;
   }
 
   return { tier: tier, label: tier.charAt(0) + tier.slice(1).toLowerCase(), reason: reason };
 }
 
-// v0.18.30: build the consolidated defensibility_detail JSON blob (schema defensibility-detail/v1).
+// v0.18.54: build the consolidated defensibility_detail JSON blob (schema defensibility-detail/v2).
 // Holds everything the 3-field model retired into one column: band, components,
 // counterfactual, ambiguity. defensibility (tier) + defensibility_index (DI) are the
 // two promoted top-level fields; this captures the rest.
 window.__buildDefensibilityDetail = function (stabilityResult, counterfactualResult, defResult, ambiguityAssessment) {
   var detail = {
-    schema: "defensibility-detail/v1",
+    schema: "defensibility-detail/v2",
     defensibility_index: stabilityResult ? stabilityResult.score : null,
     band: stabilityResult ? stabilityResult.band : null,
     structurally_fragile: !!(counterfactualResult && counterfactualResult.structurally_fragile),
@@ -2592,7 +2633,11 @@ function VerdictPane(props) {
   const { verdict, gate_hits, suppressed, routing, applied_claim_chain, lifts_applied } = result;
   const top = gate_hits[0] || null;
   const rest = gate_hits.slice(1, 5);
-  const hasRouting = routing && (routing.non_realistic_routes_to || routing.cross_title_redirect);
+  // v0.18.55: non_realistic_routes_to is a static per-claim hint and is NOT
+  // surfaced in pure-engine mode — here there is no atom-confidence signal, so
+  // we cannot tell whether the route is decision-relevant. Per spec: if we
+  // can't tell, don't show it. cross_title_redirect is unaffected.
+  const hasRouting = routing && routing.cross_title_redirect;
 
   return e("div", { className: "verdict-card" },
     e("div", { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }},
@@ -2605,8 +2650,6 @@ function VerdictPane(props) {
       )
     ),
     hasRouting && e("div", { style: { marginTop: 8 }},
-      routing.non_realistic_routes_to && e("span", { className: "routing-pill" },
-        "→ non-realistic routes to: ", routing.non_realistic_routes_to),
       routing.cross_title_redirect && e("span", { className: "routing-pill" },
         "→ cross-title redirect: ", routing.cross_title_redirect)
     ),
@@ -5726,6 +5769,21 @@ function AtomTagger(props) {
     });
   }, [engineResult, tags, corpus.claims, activeCase, verdictData]);
 
+  // v0.18.55: gate the non-realistic routing pill on genuine decision-relevance
+  // (a low-confidence realism atom whose flip would newly trigger the routed-to
+  // title). Same policy-area scoping as the counterfactual pass above.
+  const nrRoutingActionable = React.useMemo(() => {
+    if (!engineResult || !engineResult.routing || !engineResult.routing.non_realistic_routes_to) return false;
+    if (!window.nonRealisticRoutingActionable) return false;
+    var allClaims = corpus.claims || [];
+    var pArea = activeCase && activeCase.issue ? resolvePolicyArea(activeCase.issue) : null;
+    var scopedClaims = pArea
+      ? allClaims.filter(function(c) { return matchesPolicyArea(c.issue, pArea); })
+      : allClaims;
+    var _wa = verdictData && verdictData.ambiguity_assessment && verdictData.ambiguity_assessment.weakest_atoms || [];
+    return window.nonRealisticRoutingActionable(tags, scopedClaims, engineResult.routing.non_realistic_routes_to, { weakest_atoms: _wa });
+  }, [engineResult, tags, corpus.claims, activeCase, verdictData]);
+
   // Phase 4: hybrid retriever. Runs when a case is picked; uses pendingCase text +
   // current atom selection to find similar precedents in corpus.cases.
   // Merge user-selected tags with APV draft atoms for richer atom-Jaccard retrieval.
@@ -6251,7 +6309,7 @@ function AtomTagger(props) {
           )
         ),
         // Non-realistic routing notice
-        _nrRouting && e("div", { style: { marginTop: 4, marginBottom: 4, padding: "4px 10px", background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 4, fontSize: 10, color: "#5b21b6" } },
+        _nrRouting && nrRoutingActionable && e("div", { style: { marginTop: 4, marginBottom: 4, padding: "4px 10px", background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 4, fontSize: 10, color: "#5b21b6" } },
           "\u2192 Non-realistic content routes to: ",
           e("strong", null, _nrRouting)
         ),
