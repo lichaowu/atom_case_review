@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.52";
+const PLUGIN_VERSION = "atom-mvp v0.18.53";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -6553,11 +6553,19 @@ function App() {
   const [tags, setTags] = React.useState({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] });
   const [verdictData, setVerdictData] = React.useState(null);
 
-  // Reset tags + verdict when case changes; pre-fill from APV if available
+  // Reset tags + verdict when case changes; pre-fill from APV if available.
+  // We must seed verdictData HERE, not only via the ReasonedVerdictPane mount
+  // effect: the pane is keyed per record, so its mount seed runs in the SAME
+  // commit as this case-change effect, and passive effects fire child->parent.
+  // A plain setVerdictData(null) here would therefore clobber the pane's seed,
+  // leaving App-level verdictData null so Confirm & Save cannot preload the
+  // rationale. Seeding the APV snapshot at this level makes the two writes
+  // agree (same shape) regardless of effect order.
   React.useEffect(() => {
-    setVerdictData(null);
-    if (!pendingRid) { setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] }); return; }
+    if (!pendingRid) { setVerdictData(null); setTags({ C:[], S:[], P:[], R:[], E:[], M:[], X:[] }); return; }
     var pc = state.corpus && state.corpus.pending && state.corpus.pending.find(function(p) { return p.record_id === pendingRid; });
+    setVerdictData((reviewMode !== "precedent" && pc && pc.apv_verdict)
+      ? Object.assign({}, pc.apv_verdict, { __apv_pregen: true }) : null);
     if (pc && pc.apv_draft_atoms) {
       var total = 0;
       for (var i = 0; i < DIMENSIONS.length; i++) total += (pc.apv_draft_atoms[DIMENSIONS[i]] || []).length;
