@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.51";
+const PLUGIN_VERSION = "atom-mvp v0.18.52";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -407,6 +407,30 @@ function safeParseAtoms(s) {
     }
     return out;
   } catch (_) { return EMPTY; }
+}
+
+// APV pre-generated verdict parser — reads apv_verdict_json (full atom-verdict
+// object). Tolerant: returns the parsed object on success, null otherwise.
+function safeParseVerdict(s) {
+  if (!s || typeof s !== "string") return null;
+  try {
+    var o = JSON.parse(s);
+    return (o && typeof o === "object" && !Array.isArray(o)) ? o : null;
+  } catch (_) { return null; }
+}
+
+// subfeature: typed live-feature entries, each with free-form user text.
+// Stored as a JSON array in a Text column: [{"type":"PinMessage","content":"..."}, ...].
+// type ∈ {PinMessage, Sticker, AboutMe, ...} (extensible); content is free-form.
+function safeParseSubfeature(str) {
+  if (!str || typeof str !== "string") return [];
+  try {
+    var a = JSON.parse(str);
+    if (!Array.isArray(a)) return [];
+    return a
+      .filter(function (o) { return o && typeof o === "object" && typeof o.type === "string" && o.type; })
+      .map(function (o) { return { type: o.type, content: typeof o.content === "string" ? o.content : "" }; });
+  } catch (_) { return []; }
 }
 
 const DIM_NAMES = {
@@ -1715,6 +1739,8 @@ async function loadAtomCorpus() {
   const HAS_USER_BIO = !!(pendingIdx.byName["user_bio"] || casesIdx.byName["user_bio"]);
   const HAS_CASE_URL = !!(pendingIdx.byName["case_url"] || casesIdx.byName["case_url"]);
   const HAS_COMMENT = !!(pendingIdx.byName["comment"]);
+  const HAS_SUBFEATURE = !!(pendingIdx.byName["subfeature"]);
+  const HAS_APV_VERDICT = !!(pendingIdx.byName["apv_verdict_json"]);
 
   const cases = caseRecs.map(r => {
     const f = r.fields || {};
@@ -1767,10 +1793,12 @@ async function loadAtomCorpus() {
       user_bio: HAS_USER_BIO ? get(f, pendingIdx, "user_bio") : null,
       case_url: HAS_CASE_URL ? cellUrl(readCell(f, pendingIdx, "case_url")) : null,
       comment: HAS_COMMENT ? get(f, pendingIdx, "comment") : null,
+      subfeature: HAS_SUBFEATURE ? safeParseSubfeature(get(f, pendingIdx, "subfeature")) : null,
       images: getImages(f, pendingIdx),
       pending_table_id: pendingTbl ? (pendingTbl.id || pendingTbl.tableId || null) : null,
       atoms: { C:[], S:[], P:[], R:[], E:[], M:[], X:[] },
       apv_draft_atoms: safeParseAtoms(get(f, pendingIdx, "apv_draft_atoms")),
+      apv_verdict: HAS_APV_VERDICT ? safeParseVerdict(get(f, pendingIdx, "apv_verdict_json")) : null,
       status: get(f, pendingIdx, "status"),
     };
   }).filter(p => p.source_video_id);
@@ -3782,6 +3810,7 @@ function buildPayload(pendingCase, tags, engineResult, precedentsResult, corpus)
     caption_text:           pendingCase.caption_text || "",
     case_url:               pendingCase.case_url || "",
     comment:                pendingCase.comment || undefined,
+    subfeature:             (Array.isArray(pendingCase.subfeature) && pendingCase.subfeature.length) ? pendingCase.subfeature : undefined,
     images_attached_count:  imgSummary.count,
     images_note:            imgSummary.note,
     // Reviewer's draft tags (may be empty). Specialist may revise.
@@ -4226,7 +4255,7 @@ function _splitReason(raw) {
 //   • Watch-outs / next_step / suppressed claims (collapsible)
 //   • Engine alignment delta + tagged reasoning sections (collapsible)
 function ReasonedVerdictPane(props) {
-  const { engineSimulation, atomsByDim, onVerdictParsed, onVerdictCleared, precedentsResult, imageMeta } = props || {};
+  const { engineSimulation, atomsByDim, onVerdictParsed, onVerdictCleared, precedentsResult, imageMeta, prefillVerdict } = props || {};
   const [raw, setRaw]         = React.useState("");
   const [parsed, setParsed]   = React.useState(null);
   const [check, setCheck]     = React.useState({ ok: true, errors: [], warnings: [] });
@@ -4319,6 +4348,22 @@ function ReasonedVerdictPane(props) {
     if (onVerdictCleared) onVerdictCleared();
   };
 
+  // ---- Auto-seed from APV pre-generated verdict (apv_verdict_json) ----
+  // The pane is keyed per record, so it remounts on case change and this fires
+  // once with a fresh (empty) textarea. We only auto-seed when the reviewer has
+  // NOT started pasting; any manual paste/edit/clear takes over from here on.
+  // The seeded object is tagged __apv_pregen so the "AI pre-generated" badge
+  // (here + in Confirm & Save rationale) can distinguish it from a live paste.
+  React.useEffect(() => {
+    if (!prefillVerdict || (raw && raw.trim())) return;
+    var seeded = Object.assign({}, prefillVerdict, { __apv_pregen: true });
+    var c = validateAtomVerdict(seeded);
+    setParsed(seeded);
+    setCheck(c);
+    setEditing(false);
+    if (c.ok && onVerdictParsed) onVerdictParsed(seeded);
+  }, [prefillVerdict]);
+
   // ---- Derived view-model -----
   const verdict    = parsed && parsed.verdict;
   const grey       = parsed && parsed.grey;
@@ -4396,11 +4441,19 @@ function ReasonedVerdictPane(props) {
     // ---- Head: title + clear/edit buttons ----
     e("div", { className: "reasoned-head" },
       e("div", null,
-        e("div", { className: "reasoned-title" }, "Reasoned verdict"),
+        e("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+          e("div", { className: "reasoned-title" }, "Reasoned verdict"),
+          parsed && parsed.__apv_pregen && e("span", {
+            title: "Loaded from the case's pre-generated apv_verdict_json snapshot. Paste a new reply to override.",
+            style: { display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#eef2ff", border: "1px solid #c7d2fe", color: "#4338ca", letterSpacing: "0.01em" }
+          }, "AI pre-generated")
+        ),
         e("div", { className: "reasoned-sub" },
           editing
             ? "Paste Mira's ```json verdict reply below. Parser + schema check run live as you type."
-            : "Parsed and rendered. Edit paste to re-evaluate.")
+            : (parsed && parsed.__apv_pregen
+                ? "Pre-generated verdict loaded automatically. Edit paste to override."
+                : "Parsed and rendered. Edit paste to re-evaluate."))
       ),
       e("div", { style: { display: "flex", gap: 6 } },
         !editing && parsed && e("button", { className: "btn-ghost", onClick: () => setEditing(true),
@@ -5259,7 +5312,12 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
     decision === "flag" && !titleOptions.length && e("span", { style: { fontSize: 10, color: "var(--muted)", marginBottom: 8, display: "block" } }, "No policy titles available for this issue scope"),
 
     e("div", { style: { marginBottom: 8 } },
-      e("label", { style: { fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 2 } }, "Rationale (optional):"),
+      e("label", { style: { fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6, marginBottom: 2 } },
+        "Rationale (optional):",
+        verdictData && verdictData.__apv_pregen && verdictData.rationale_for_precedent && e("span", {
+          title: "This rationale was pre-generated by AI. Review and edit before saving.",
+          style: { display: "inline-flex", alignItems: "center", padding: "1px 7px", borderRadius: 4, fontSize: 9, fontWeight: 600, background: "#eef2ff", border: "1px solid #c7d2fe", color: "#4338ca" }
+        }, "AI pre-generated")),
       e("textarea", {
         value: rationale,
         onChange: (ev) => setRationale(ev.target.value),
@@ -5960,7 +6018,8 @@ function AtomTagger(props) {
       onVerdictParsed: onVerdictParsed,
       onVerdictCleared: onVerdictCleared,
       precedentsResult: precedentsResult,
-      imageMeta: corpus.image_meta
+      imageMeta: corpus.image_meta,
+      prefillVerdict: (reviewMode !== "precedent" && activeCase && activeCase.apv_verdict) ? activeCase.apv_verdict : null
     }),
 
     activeCase && e("div", { className: "tag-card" },
