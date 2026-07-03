@@ -390,7 +390,7 @@ window.ATOM_CONSOLE_CONFIG = {
   casesTableNames:   ["Precedents"],
   pendingTableNames: ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.55";
+const PLUGIN_VERSION = "atom-mvp v0.18.56";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -5471,8 +5471,22 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
         disabled: saving || !hasAtoms,
         style: { fontSize: 12, padding: "4px 12px" }
       }, saving ? "Saving…" : (isPrecedentReview ? "Update Precedent" : "Confirm & Save")),
-      !hasAtoms && e("span", { style: { fontSize: 11, color: "var(--error)" } }, "Tag at least 1 atom first"),
-      saved && e("span", { style: { fontSize: 11, color: saved.ok ? "var(--success)" : "var(--error)" } }, saved.msg)
+      !hasAtoms && e("span", { style: { fontSize: 11, color: "var(--error)" } }, "Tag at least 1 atom first")
+    ),
+    saved && e("div", {
+      role: "status",
+      "aria-live": "polite",
+      style: {
+        marginTop: 8, padding: "8px 12px", borderRadius: 6,
+        fontSize: 12, fontWeight: 500, lineHeight: 1.4,
+        display: "flex", alignItems: "flex-start", gap: 6,
+        background: saved.ok ? "#F0FDF4" : "#FEF2F2",
+        border: "1px solid " + (saved.ok ? "#BBF7D0" : "#FECACA"),
+        color: saved.ok ? "var(--success)" : "var(--error)"
+      }
+    },
+      e("span", { style: { fontWeight: 700, flex: "0 0 auto" } }, saved.ok ? "✓" : "⚠"),
+      e("span", null, saved.msg)
     )
   );
 }
