@@ -5736,7 +5736,9 @@ function AtomTagger(props) {
   const issueOptions = React.useMemo(() => {
     const src = reviewMode === "precedent" ? corpus.cases : corpus.pending;
     const s = new Set();
-    for (const p of src) { if (p.issue) s.add(p.issue); }
+    // Split multi-issue cases (e.g. "EA HRA") into distinct atomic issues
+    // so the filter lists each policy area once, not every co-occurrence.
+    for (const p of src) { for (const iss of _splitIssues(p.issue)) s.add(iss); }
     return Array.from(s).sort();
   }, [corpus.cases, corpus.pending, reviewMode]);
 
@@ -5767,7 +5769,7 @@ function AtomTagger(props) {
     const q = caseFilter.trim().toLowerCase();
     return corpus.pending.filter(p => {
       if (titleFilter) { const _t = Array.isArray(p.policy_title) ? p.policy_title : [p.policy_title || ""]; if (!_t.includes(titleFilter)) return false; }
-      if (issueFilter && (p.issue || "") !== issueFilter) return false;
+      if (issueFilter && _splitIssues(p.issue).indexOf(issueFilter) < 0) return false;
       if (statusFilter && (p.status === "Reviewed" ? "Policy Reviewed" : (p.status || "")) !== statusFilter) return false;
       if (!q) return true;
       const _pt = Array.isArray(p.policy_title) ? p.policy_title.join(" ") : (p.policy_title || "");
@@ -5788,7 +5790,7 @@ function AtomTagger(props) {
     const q = caseFilter.trim().toLowerCase();
     return corpus.cases.filter(c => {
       if (titleFilter) { const _t = Array.isArray(c.policy_title) ? c.policy_title : [c.policy_title || ""]; if (!_t.includes(titleFilter)) return false; }
-      if (issueFilter && (c.issue || "") !== issueFilter) return false;
+      if (issueFilter && _splitIssues(c.issue).indexOf(issueFilter) < 0) return false;
       if (statusFilter && (c.status === "Reviewed" ? "Policy Reviewed" : (c.status || "")) !== statusFilter) return false;
       if (decisionFilter && (c.decision || "").toUpperCase() !== decisionFilter) return false;
       if (!q) return true;
@@ -5820,7 +5822,7 @@ function AtomTagger(props) {
   function _splitIssues(v) {
     if (v == null || v === "") return [];
     if (Array.isArray(v)) return v.map(String).map(function(x){return x.trim();}).filter(Boolean);
-    return String(v).split(/[,;]\s*|\s{2,}/).map(function(x){return x.trim();}).filter(Boolean);
+    return String(v).split(/[\s,;]+/).map(function(x){return x.trim();}).filter(Boolean);
   }
   // Re-seed scope when the active case changes: default = the case's own issue(s).
   React.useEffect(function() {
