@@ -385,12 +385,13 @@
 // CONFIG — atom-only.
 // =============================================================================
 window.ATOM_CONSOLE_CONFIG = {
-  atomsTableNames:   ["ATLAS Atoms"],
-  claimsTableNames:  ["ATLAS Atom Rules"],
-  casesTableNames:   ["Precedents"],
-  pendingTableNames: ["Pending Cases"],
+  atomsTableNames:     ["ATLAS Atoms"],
+  claimsTableNames:    ["ATLAS Atom Rules"],
+  moleculesTableNames: ["ATLAS Molecules"],
+  casesTableNames:     ["Precedents"],
+  pendingTableNames:   ["Pending Cases"],
 };
-const PLUGIN_VERSION = "atom-mvp v0.18.56";
+const PLUGIN_VERSION = "atom-mvp v0.19.0";
 const DIMENSIONS = ["C","S","P","R","E","M","X"];
 // APV (Atom Pre-Vision) draft parser — reads apv_draft_atoms JSON field
 function safeParseAtoms(s) {
@@ -1628,18 +1629,21 @@ async function loadAtomCorpus() {
 
   const atomsTbl   = await findTableByNames(base, CFG.atomsTableNames);
   const claimsTbl  = await findTableByNames(base, CFG.claimsTableNames);
+  const moleculesTbl = await findTableByNamesOptional(base, CFG.moleculesTableNames);
   const casesTbl   = await findTableByNamesOptional(base, CFG.casesTableNames);
   const pendingTbl = await findTableByNamesOptional(base, CFG.pendingTableNames);
 
-  const [atomsIdx, claimsIdx, casesIdx, pendingIdx] = await Promise.all([
+  const [atomsIdx, claimsIdx, moleculesIdx, casesIdx, pendingIdx] = await Promise.all([
     buildFieldIndex(atomsTbl),
     buildFieldIndex(claimsTbl),
+    moleculesTbl ? buildFieldIndex(moleculesTbl) : Promise.resolve(null),
     casesTbl   ? buildFieldIndex(casesTbl)   : Promise.resolve(null),
     pendingTbl ? buildFieldIndex(pendingTbl) : Promise.resolve(null),
   ]);
-  const [atomRecs, claimRecs, caseRecs, pendingRecs] = await Promise.all([
+  const [atomRecs, claimRecs, moleculeRecs, caseRecs, pendingRecs] = await Promise.all([
     loadAllRecords(atomsTbl),
     loadAllRecords(claimsTbl),
+    moleculesTbl ? loadAllRecords(moleculesTbl) : Promise.resolve([]),
     casesTbl   ? loadAllRecords(casesTbl)   : Promise.resolve([]),
     pendingTbl ? loadAllRecords(pendingTbl) : Promise.resolve([]),
   ]);
@@ -2012,8 +2016,94 @@ async function loadAtomCorpus() {
     return p;
   }
 
+  // ===========================================================================
+  // MOLECULES (v0.19.0) — the ATLAS Molecules table links ONLY to claims (no
+  // direct atom link). A molecule is a named grouping of claims; its "atom
+  // combination" is DERIVED from its member claims' gate/modifier atoms.
+  //   - member_claim_ids : claim_ids linked to this molecule
+  //   - atom_union        : all atom_keys referenced across member claims (per dim)
+  //   - atom_spine        : atoms present in >=60% of member claims (the shared
+  //                         "signature"; may be small or empty by design)
+  // Empirically (224 molecules / 8412 claims) strict intersection is usually
+  // empty, so we surface the union (for scope) + prevalence spine (for hints),
+  // never a single canonical atom set.
+  // ===========================================================================
+  const SPINE_PREVALENCE = 0.6;
+  // claim_id -> parsed claim (for atom harvest)
+  const _claimById = {};
+  for (const _c of claims) { if (_c.claim_id) _claimById[_c.claim_id] = _c; }
+  // Harvest the atom_keys a single claim references, grouped by dimension.
+  function _claimAtomsByDim(c) {
+    const g = c.gates || {};
+    return {
+      C: (g.C || []).slice(), S: (g.S || []).slice(), P: (g.P || []).slice(),
+      R: (g.R || []).slice(), E: (g.E || []).slice(),
+      M: (c.modifiers_required || []).slice(),
+      X: (c.exceptions_required || []).slice(),
+    };
+  }
+  const molecules = moleculeRecs.map(r => {
+    const f = r.fields || {};
+    // claims link resolves to claim record_ids; map those to claim_ids via claims corpus
+    const claimRids = getLnk(f, moleculesIdx, "claims");
+    const _claimIdByRid = {};
+    for (const _c of claims) { if (_c.record_id) _claimIdByRid[_c.record_id] = _c.claim_id; }
+    // molecule_id text field also carries member claim slugs on the claim side;
+    // prefer the resolved link rids, fall back to nothing.
+    const memberClaimIds = claimRids.map(rid => _claimIdByRid[rid]).filter(Boolean);
+    // Derive atom union + prevalence spine across member claims.
+    const union = { C:new Set(), S:new Set(), P:new Set(), R:new Set(), E:new Set(), M:new Set(), X:new Set() };
+    const counts = {}; // atom_key -> #member claims referencing it (any dim)
+    let nWithAtoms = 0;
+    for (const cid of memberClaimIds) {
+      const c = _claimById[cid];
+      if (!c) continue;
+      const abd = _claimAtomsByDim(c);
+      const seenThisClaim = new Set();
+      let any = false;
+      for (const d of DIMENSIONS) {
+        for (const k of abd[d]) {
+          union[d].add(k); any = true;
+          if (!seenThisClaim.has(k)) { seenThisClaim.add(k); counts[k] = (counts[k]||0) + 1; }
+        }
+      }
+      if (any) nWithAtoms++;
+    }
+    const atomUnion = {}; for (const d of DIMENSIONS) atomUnion[d] = Array.from(union[d]).sort();
+    // Spine: atoms present in >= SPINE_PREVALENCE of atom-bearing member claims.
+    const spineKeys = new Set();
+    if (nWithAtoms > 0) {
+      for (const k in counts) { if (counts[k] / nWithAtoms >= SPINE_PREVALENCE) spineKeys.add(k); }
+    }
+    const atomSpine = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+    const _dimOf = {}; for (const a of atoms) _dimOf[a.atom_key] = (a.dimension||"").charAt(0).toUpperCase();
+    for (const k of spineKeys) { const d = _dimOf[k]; if (atomSpine[d]) atomSpine[d].push(k); }
+    for (const d of DIMENSIONS) atomSpine[d].sort();
+    let vertical = get(f, moleculesIdx, "vertical");
+    if (Array.isArray(readCell(f, moleculesIdx, "vertical"))) {
+      const _va = getArr(f, moleculesIdx, "vertical"); vertical = _va[0] || vertical;
+    }
+    return {
+      record_id: r.recordId || r.record_id,
+      molecule_id: get(f, moleculesIdx, "molecule_id"),
+      name: get(f, moleculesIdx, "name"),
+      vertical: vertical,
+      vertical_keys: get(f, moleculesIdx, "vertical_keys"),
+      spans_levels: getArr(f, moleculesIdx, "spans_levels"),
+      classification_rule: get(f, moleculesIdx, "classification_rule"),
+      source_titles: get(f, moleculesIdx, "source_titles"),
+      member_claim_ids: memberClaimIds,
+      claim_count: memberClaimIds.length,
+      atom_union: atomUnion,
+      atom_spine: atomSpine,
+    };
+  }).filter(m => m.molecule_id);
+  molecules.sort((a,b) => (a.name||a.molecule_id||"").localeCompare(b.name||b.molecule_id||""));
+  const moleculesById = {};
+  for (const m of molecules) moleculesById[m.molecule_id] = m;
+
   return {
-    atoms, atomsByDim, claims, cases, pending,
+    atoms, atomsByDim, claims, cases, pending, molecules, moleculesById,
     _tables: { casesTbl, pendingTbl },
     _fieldIdx: { casesIdx, pendingIdx, atomsIdx },
     _featureFlags: { ID_FIELD, HAS_USER_NICKNAME, HAS_USER_BIO },
@@ -5491,6 +5581,103 @@ function ConfirmSaveSection({ corpus, pendingCase, tags, verdictData, engineResu
   );
 }
 
+// ---- MoleculePanel: molecule lens (v0.19.0) --------------------------------
+// The ATLAS Molecules table groups CLAIMS (not atoms). A molecule is displayed
+// as an "atom combination" derived from its member claims: atom_union (full set)
+// + atom_spine (atoms in >=60% of member claims, the shared signature).
+// Clicking a molecule chip narrows the AtomTagger to that molecule's atom_union
+// and surfaces its spine atoms as suggestions (Option A — scope lens, NOT an
+// auto-applied tag, because a molecule's claims share no single canonical tuple).
+function MoleculePanel(props) {
+  const { molecules, active, onToggle, onClear, corpus } = props;
+  const [open, setOpen] = React.useState(false);
+  const [filter, setFilter] = React.useState("");
+  const [expanded, setExpanded] = React.useState("");
+  const list = molecules || [];
+  const activeSet = new Set(active || []);
+  const f = filter.trim().toLowerCase();
+  const shown = f
+    ? list.filter(m => (m.name||"").toLowerCase().includes(f) ||
+                       (m.molecule_id||"").toLowerCase().includes(f) ||
+                       (m.classification_rule||"").toLowerCase().includes(f))
+    : list;
+  // atom_key -> display name lookup (for expanded atom chips)
+  const nameOf = {};
+  for (const a of (corpus && corpus.atoms || [])) nameOf[a.atom_key] = a.atom_name || a.atom_key;
+  function spineCount(m) {
+    let n = 0; for (const d of DIMENSIONS) n += (m.atom_spine[d]||[]).length; return n;
+  }
+  function unionCount(m) {
+    let n = 0; for (const d of DIMENSIONS) n += (m.atom_union[d]||[]).length; return n;
+  }
+  const header = e("div", {
+    style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--hairline)" },
+    onClick: () => setOpen(!open)
+  },
+    e("span", { style: { fontSize: 11, fontWeight: 600, color: "var(--body)" } },
+      (open ? "▾ " : "▸ ") + "Molecules"),
+    e("span", { style: { fontSize: 11, color: "var(--muted)" } },
+      list.length + " in scope" + (activeSet.size ? " · " + activeSet.size + " active (lens on)" : "")),
+    activeSet.size > 0 && e("button", {
+      className: "ghost", style: { padding: "2px 6px", fontSize: 10, marginLeft: "auto" },
+      onClick: (ev) => { ev.stopPropagation(); onClear(); }
+    }, "clear lens")
+  );
+  if (!open) return e("div", null, header);
+  return e("div", null,
+    header,
+    activeSet.size > 0 && e("div", {
+      style: { margin: "6px 0", padding: "6px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, fontSize: 11, color: "#1e40af", lineHeight: 1.5 }
+    }, "Tagger narrowed to " + activeSet.size + " molecule" + (activeSet.size>1?"s":"") +
+       ": showing only their atoms; spine atoms highlighted as suggestions. You still confirm each atom."),
+    e("input", {
+      type: "text", value: filter, placeholder: "filter molecules…",
+      onChange: (ev) => setFilter(ev.target.value),
+      style: { width: "100%", boxSizing: "border-box", margin: "6px 0", padding: "4px 8px", fontSize: 12, border: "1px solid var(--hairline)", borderRadius: 4 }
+    }),
+    e("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflow: "auto" } },
+      shown.length === 0 && e("div", { style: { fontSize: 11, color: "var(--muted)", padding: "4px 0" } }, "no molecules match"),
+      ...shown.map(function(m) {
+        const on = activeSet.has(m.molecule_id);
+        const isExp = expanded === m.molecule_id;
+        return e("div", { key: m.molecule_id, style: { border: "1px solid " + (on ? "#4a90d9" : "var(--hairline)"), borderRadius: 6, background: on ? "#e8f0fa" : "var(--surface-card)" } },
+          e("div", { style: { display: "flex", alignItems: "center", gap: 6, padding: "6px 8px" } },
+            e("span", {
+              onClick: () => onToggle(m.molecule_id),
+              title: (on ? "Remove lens" : "Apply lens: narrow tagger to this molecule's atoms"),
+              style: { cursor: "pointer", flex: 1, fontSize: 12, fontWeight: on ? 600 : 500, color: on ? "#2a6cb8" : "var(--body)" }
+            }, (on ? "✓ " : "") + (m.name || m.molecule_id)),
+            e("span", { style: { fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" } },
+              m.claim_count + " claims · " + unionCount(m) + " atoms" + (spineCount(m) ? " · spine " + spineCount(m) : "")),
+            (m.spans_levels && m.spans_levels.length) ? e("span", { style: { fontSize: 9, color: "#6b7280", border: "1px solid var(--hairline)", borderRadius: 8, padding: "1px 5px" } }, (m.spans_levels||[]).join("/")) : null,
+            e("button", { className: "ghost", style: { padding: "2px 6px", fontSize: 10 },
+              onClick: (ev) => { ev.stopPropagation(); setExpanded(isExp ? "" : m.molecule_id); } }, isExp ? "hide" : "atoms")
+          ),
+          isExp && e("div", { style: { padding: "0 8px 8px", fontSize: 11 } },
+            m.classification_rule && e("div", { style: { color: "var(--muted)", marginBottom: 6, fontStyle: "italic" } }, m.classification_rule),
+            ...DIMENSIONS.filter(d => (m.atom_union[d]||[]).length).map(function(d) {
+              const spine = new Set(m.atom_spine[d] || []);
+              return e("div", { key: d, style: { margin: "3px 0" } },
+                e("span", { style: { display: "inline-block", width: 16, fontWeight: 700, color: "var(--muted)" } }, d),
+                (m.atom_union[d]||[]).map(function(k) {
+                  const isSpine = spine.has(k);
+                  return e("span", {
+                    key: k,
+                    title: k + (isSpine ? "  (spine — in ≥60% of member claims)" : ""),
+                    style: { display: "inline-block", margin: "2px 3px", padding: "1px 6px", borderRadius: 8, fontSize: 10,
+                             background: isSpine ? "#fef9c3" : "var(--surface)", border: "1px solid " + (isSpine ? "#fde047" : "var(--hairline)"),
+                             color: "var(--body)", fontWeight: isSpine ? 600 : 400 }
+                  }, (nameOf[k] || k) + (isSpine ? " ★" : ""));
+                })
+              );
+            })
+          )
+        );
+      })
+    )
+  );
+}
+
 function AtomTagger(props) {
   const { corpus, tags, setTags, verdictData, pendingRid, setPendingRid,
           precedentRid, setPrecedentRid, reviewMode, setReviewMode,
@@ -5505,6 +5692,13 @@ function AtomTagger(props) {
   // active case's own issue(s); reviewer can add sibling issues to tag a case
   // that violates several policy areas at once.
   const [scopeIssues, setScopeIssues] = React.useState([]);
+  // v0.19.0: molecule scope. When one or more molecules are selected, the atom
+  // universe narrows to those molecules' atom_union and their prevalence-spine
+  // atoms are surfaced as suggestions. Reviewer still confirms atoms (Option A —
+  // molecule = scope/precedent lens, NOT an auto-applied atom set, because a
+  // molecule's claims share no clean canonical atom tuple).
+  const [activeMolecules, setActiveMolecules] = React.useState([]);
+  // Reset molecule selection when the active case changes (below, keyed on case id).
 
   // Clear filters when switching review mode (top-level tab)
   React.useEffect(() => {
@@ -5631,6 +5825,7 @@ function AtomTagger(props) {
   // Re-seed scope when the active case changes: default = the case's own issue(s).
   React.useEffect(function() {
     setScopeIssues(activeCase ? _splitIssues(activeCase.issue) : []);
+    setActiveMolecules([]);  // v0.19.0: clear molecule lens on case switch
   }, [activeCase && activeCase.record_id]);
   // All distinct issues available in the rule corpus (for the scope chip picker).
   const allCorpusIssues = React.useMemo(function() {
@@ -5687,6 +5882,81 @@ function AtomTagger(props) {
     }
     return scoped;
   }, [scopeIssues, corpus.atomsByDim]);
+
+  // v0.19.0: molecules relevant to the active issue scope. A molecule is in scope
+  // if its vertical resolves to any active policy area (falls back to all when no
+  // scope). Sorted by claim_count desc so the meatiest molecules surface first.
+  const scopedMolecules = React.useMemo(() => {
+    const all = corpus.molecules || [];
+    const areas = new Set();
+    for (let i = 0; i < (scopeIssues || []).length; i++) {
+      const pa = resolvePolicyArea(scopeIssues[i]);
+      if (pa) areas.add(pa);
+    }
+    let list = all;
+    if (areas.size) {
+      list = all.filter(function(m) {
+        const mv = m.vertical || m.vertical_keys || "";
+        const parts = String(mv).split(/[,\s]+/).filter(Boolean);
+        for (let i = 0; i < parts.length; i++) {
+          let matched = false;
+          areas.forEach(function(pa) { if (matchesPolicyArea(parts[i], pa)) matched = true; });
+          if (matched) return true;
+        }
+        return false;
+      });
+    }
+    return list.slice().sort(function(a,b){ return (b.claim_count||0) - (a.claim_count||0); });
+  }, [corpus.molecules, scopeIssues]);
+
+  // v0.19.0: union of atom_keys (per dim) contributed by the selected molecules.
+  // null when no molecule selected (→ no molecule-level narrowing).
+  const moleculeUnionByDim = React.useMemo(() => {
+    if (!activeMolecules || !activeMolecules.length) return null;
+    const out = { C:new Set(), S:new Set(), P:new Set(), R:new Set(), E:new Set(), M:new Set(), X:new Set() };
+    for (const mid of activeMolecules) {
+      const m = corpus.moleculesById && corpus.moleculesById[mid];
+      if (!m) continue;
+      for (const d of DIMENSIONS) (m.atom_union[d] || []).forEach(function(k){ out[d].add(k); });
+    }
+    const res = {}; for (const d of DIMENSIONS) res[d] = out[d];
+    return res;
+  }, [activeMolecules, corpus.moleculesById]);
+
+  // v0.19.0: prevalence-spine atom_keys (per dim) across selected molecules —
+  // surfaced as suggestions in each DimRow (highlighted, not auto-selected).
+  const moleculeSpineByDim = React.useMemo(() => {
+    const out = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+    if (!activeMolecules || !activeMolecules.length) return out;
+    const seen = { C:new Set(), S:new Set(), P:new Set(), R:new Set(), E:new Set(), M:new Set(), X:new Set() };
+    for (const mid of activeMolecules) {
+      const m = corpus.moleculesById && corpus.moleculesById[mid];
+      if (!m) continue;
+      for (const d of DIMENSIONS) {
+        for (const k of (m.atom_spine[d] || [])) { if (!seen[d].has(k)) { seen[d].add(k); out[d].push(k); } }
+      }
+    }
+    return out;
+  }, [activeMolecules, corpus.moleculesById]);
+
+  // v0.19.0: atoms shown in the tagger, narrowed to the molecule union when a
+  // molecule lens is active. X (exceptions) stay universal (never narrowed).
+  const displayAtomsByDim = React.useMemo(() => {
+    if (!moleculeUnionByDim) return scopedAtomsByDim;
+    const out = {};
+    for (const d of DIMENSIONS) {
+      if (d === "X") { out[d] = scopedAtomsByDim[d] || []; continue; }
+      const uni = moleculeUnionByDim[d];
+      const base = scopedAtomsByDim[d] || [];
+      out[d] = uni && uni.size ? base.filter(function(a){ return uni.has(a.atom_key); }) : base;
+    }
+    return out;
+  }, [scopedAtomsByDim, moleculeUnionByDim]);
+
+  // v0.19.0: merge molecule spine into precedent-derived suggestions.
+  // NOTE: combinedSuggestedByDim is declared later (after suggestedByDim) to
+  // avoid a temporal-dead-zone reference on suggestedByDim's dependency.
+
 
   // Phase 3: live engine evaluation. Memoized on (tags, policy_title, claims).
   // Engine evaluates ALL claims without policy_title filter so the user sees
@@ -5849,6 +6119,19 @@ function AtomTagger(props) {
     }
     return out;
   }, [precedentsResult]);
+
+  // v0.19.0: merge molecule prevalence-spine into precedent-derived suggestions.
+  // Declared here (after suggestedByDim) to avoid a temporal-dead-zone reference.
+  const combinedSuggestedByDim = React.useMemo(() => {
+    const out = { C:[], S:[], P:[], R:[], E:[], M:[], X:[] };
+    for (const d of DIMENSIONS) {
+      const s = new Set();
+      (suggestedByDim && suggestedByDim[d] || []).forEach(function(k){ s.add(k); });
+      (moleculeSpineByDim && moleculeSpineByDim[d] || []).forEach(function(k){ s.add(k); });
+      out[d] = Array.from(s);
+    }
+    return out;
+  }, [suggestedByDim, moleculeSpineByDim]);
 
   // Issue/policy-scoped atom filter: only show atoms referenced by claims for the active issue.
   // Collects all atom_keys from gates + modifiers + exceptions of matching claims.
@@ -6133,12 +6416,25 @@ function AtomTagger(props) {
         }),
         scopeIssues.length > 1 && e("span", { style: { fontSize: 10, color: "var(--muted)", marginLeft: 4 } }, "cross-issue \u2014 " + scopeIssues.length + " areas")
       ),
+      // v0.19.0: Molecule lens \u2014 display molecules (atom combinations) for the
+      // active scope and let the reviewer narrow the tagger to one/more molecules.
+      activeCase && e(MoleculePanel, {
+        molecules: scopedMolecules,
+        active: activeMolecules,
+        onToggle: function(mid) {
+          setActiveMolecules(function(prev) {
+            return prev.indexOf(mid) >= 0 ? prev.filter(function(x){ return x !== mid; }) : prev.concat([mid]);
+          });
+        },
+        onClear: function() { setActiveMolecules([]); },
+        corpus: corpus,
+      }),
       ...DIMENSIONS.map(d => e(DimRow, {
         key: d,
         dim: d,
-        atoms: scopedAtomsByDim[d] || [],
+        atoms: displayAtomsByDim[d] || [],
         selected: tags[d] || [],
-        suggested: (suggestedByDim && suggestedByDim[d]) || [],
+        suggested: (combinedSuggestedByDim && combinedSuggestedByDim[d]) || [],
         skillProposed: (skillProposed[d] || []),
         skillRejected: skillRejected.filter(r => (r.dim || "") === d),
         // v0.18.42: relevantKeys secondary filter disabled — scopedAtomsByDim now
