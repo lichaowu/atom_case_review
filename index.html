@@ -3344,7 +3344,11 @@ function DimRow(props) {
       e("div", { className: "selected-strip" },
         ...Array.from(sel).map(k => {
           const a = atoms.find(x => x.atom_key === k);
-          const label = (a && a.atom_name) ? a.atom_name : k;
+          // v0.19.2: fall back to the full-corpus name map so a selected atom
+          // that was filtered out of `atoms` (e.g. by molecule narrowing) still
+          // shows its user-facing name, never the raw dotted key.
+          const label = (a && a.atom_name) ? a.atom_name
+            : ((props.nameByKey && props.nameByKey[k]) ? props.nameByKey[k] : k);
           const isSkill = skillSet.has(k);
           var _qGated = dim === "X" && qualifierHints && qualifierHints[k];
           return e("span", {
@@ -6447,6 +6451,9 @@ function AtomTagger(props) {
         // uses the atom-level issue field for authoritative scope. Passing null
         // avoids DimRow hiding atoms not referenced in claims gates (e.g. subject atoms).
         relevantKeys: null,
+        // v0.19.2: full-corpus name map so selected atoms outside the
+        // molecule-narrowed set still resolve to their name, not the raw key.
+        nameByKey: (corpus._nameByKey || (corpus._nameByKey = (function(){ var _m={}; var _as=(corpus.atoms||[]); for (var _i=0;_i<_as.length;_i++){ _m[_as[_i].atom_key]=_as[_i].atom_name||_as[_i].atom_key; } return _m; })())),
         onChange: setDim(d),
         qualifierHints: d === "X" ? qualifierHints : null,
         currentModifiers: d === "X" ? (tags.M || []) : null,
