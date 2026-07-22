@@ -5596,6 +5596,10 @@ function MoleculePanel(props) {
   const list = molecules || [];
   const activeSet = new Set(active || []);
   const f = filter.trim().toLowerCase();
+  // v0.19.1: search bar is always visible; typing a query (or focusing it)
+  // auto-expands the panel so the molecule list is discoverable without
+  // first hunting for the collapsed header.
+  const isOpen = open || f.length > 0;
   const shown = f
     ? list.filter(m => (m.name||"").toLowerCase().includes(f) ||
                        (m.molecule_id||"").toLowerCase().includes(f) ||
@@ -5614,8 +5618,8 @@ function MoleculePanel(props) {
     style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--hairline)" },
     onClick: () => setOpen(!open)
   },
-    e("span", { style: { fontSize: 11, fontWeight: 600, color: "var(--body)" } },
-      (open ? "▾ " : "▸ ") + "Molecules"),
+    e("span", { style: { fontSize: 12, fontWeight: 700, color: "var(--ink)" } },
+      (isOpen ? "▾ " : "▸ ") + "Molecules"),
     e("span", { style: { fontSize: 11, color: "var(--muted)" } },
       list.length + " in scope" + (activeSet.size ? " · " + activeSet.size + " active (lens on)" : "")),
     activeSet.size > 0 && e("button", {
@@ -5623,19 +5627,19 @@ function MoleculePanel(props) {
       onClick: (ev) => { ev.stopPropagation(); onClear(); }
     }, "clear lens")
   );
-  if (!open) return e("div", null, header);
   return e("div", null,
     header,
-    activeSet.size > 0 && e("div", {
+    e("input", {
+      type: "text", value: filter, placeholder: "search molecules…",
+      onChange: (ev) => setFilter(ev.target.value),
+      onFocus: () => setOpen(true),
+      style: { width: "100%", boxSizing: "border-box", margin: "6px 0", padding: "4px 8px", fontSize: 12, border: "1px solid var(--hairline)", borderRadius: 4 }
+    }),
+    isOpen && activeSet.size > 0 && e("div", {
       style: { margin: "6px 0", padding: "6px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, fontSize: 11, color: "#1e40af", lineHeight: 1.5 }
     }, "Tagger narrowed to " + activeSet.size + " molecule" + (activeSet.size>1?"s":"") +
        ": showing only their atoms; spine atoms highlighted as suggestions. You still confirm each atom."),
-    e("input", {
-      type: "text", value: filter, placeholder: "filter molecules…",
-      onChange: (ev) => setFilter(ev.target.value),
-      style: { width: "100%", boxSizing: "border-box", margin: "6px 0", padding: "4px 8px", fontSize: 12, border: "1px solid var(--hairline)", borderRadius: 4 }
-    }),
-    e("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflow: "auto" } },
+    isOpen && e("div", { style: { display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflow: "auto" } },
       shown.length === 0 && e("div", { style: { fontSize: 11, color: "var(--muted)", padding: "4px 0" } }, "no molecules match"),
       ...shown.map(function(m) {
         const on = activeSet.has(m.molecule_id);
