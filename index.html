@@ -3362,7 +3362,10 @@ function DimRow(props) {
         // Skill-rejected atoms (struck-through; click ✗ to dismiss, double-click to override and add)
         ...(skillRejected || []).filter(r => !sel.has(r.atom_key) && !dismissedRej.has(r.atom_key)).map(r => {
           const a = atoms.find(x => x.atom_key === r.atom_key);
-          const label = (a && a.atom_name) ? a.atom_name : r.atom_key;
+          // v0.19.3: same full-corpus name fallback as selected chips, so a
+          // rejected atom outside the molecule-narrowed set shows its name.
+          const label = (a && a.atom_name) ? a.atom_name
+            : ((props.nameByKey && props.nameByKey[r.atom_key]) ? props.nameByKey[r.atom_key] : r.atom_key);
           return e("span", {
             key: "rej-" + r.atom_key,
             className: "chip rejected-by-skill",
